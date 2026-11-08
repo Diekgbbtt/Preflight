@@ -1,0 +1,9 @@
+{
+  "name": "@prompt-preflight/hook",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "esbuild src/hook.ts --bundle --platform=node --target=node18 --format=cjs --outfile=dist/hook.js"
+  },
+  "devDependencies": { "@prompt-preflight/core": "*" }
+}

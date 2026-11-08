@@ -1,0 +1,42 @@
+# Reviewed prompts. should_clarify: the tool should stop or ask before sending.
+# expected_rules: rule ids that must appear. Add a line for every wrong result you find.
+{"id":"v-01","prompt":"Improve the app","should_clarify":true,"expected_level":"vague","expected_rules":["vague-verb","broad-scope","no-done"]}
+{"id":"v-02","prompt":"fix it","should_clarify":true,"expected_level":"vague","expected_rules":["unclear-reference","too-short"]}
+{"id":"v-03","prompt":"fix the auth bug","should_clarify":true,"expected_rules":["vague-verb"]}
+{"id":"v-04","prompt":"Make the website faster","should_clarify":true,"expected_level":"vague","expected_rules":["subjective","broad-scope"]}
+{"id":"v-05","prompt":"Create a todo app","should_clarify":true,"expected_rules":["no-done","no-target"]}
+{"id":"v-06","prompt":"Update the README","should_clarify":true}
+{"id":"v-07","prompt":"Clean up the code","should_clarify":true,"expected_level":"vague"}
+{"id":"v-08","prompt":"Deploy to production","should_clarify":true,"expected_rules":["risky"]}
+{"id":"v-09","prompt":"Refactor everything to be more modern","should_clarify":true,"expected_rules":["broad-scope"]}
+{"id":"v-10","prompt":"make this work","should_clarify":true,"expected_rules":["unclear-reference"]}
+{"id":"v-11","prompt":"Fix the flaky tests","should_clarify":true}
+{"id":"v-12","prompt":"Generate more tests","should_clarify":true}
+{"id":"v-13","prompt":"Optimize the database","should_clarify":true}
+{"id":"v-14","prompt":"Add a login page","should_clarify":true,"expected_rules":["no-done"]}
+{"id":"v-15","prompt":"Help me with my project","should_clarify":true,"expected_level":"vague"}
+{"id":"v-16","prompt":"Implement caching","should_clarify":true}
+{"id":"v-17","prompt":"Integrate analytics","should_clarify":true}
+{"id":"v-18","prompt":"The checkout is broken","should_clarify":true,"expected_rules":["no-expected"]}
+{"id":"v-19","prompt":"Add tests for [module name] so that coverage is above 80%","should_clarify":true,"expected_rules":["placeholder"]}
+{"id":"v-20","prompt":"Use this key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123 to call the API in src/client.ts and return the result","should_clarify":true,"expected_rules":["secret"]}
+{"id":"v-21","prompt":"Run the migration on prod and drop table users_old","should_clarify":true,"expected_rules":["risky"]}
+{"id":"c-01","prompt":"Add a dark mode toggle to the settings page so that the chosen theme persists in localStorage.","should_clarify":false,"expected_level":"clear"}
+{"id":"c-02","prompt":"Refactor UserService into two classes, one for auth and one for profile data. Keep the public API unchanged and make sure all tests in user.test.ts pass.","should_clarify":false,"expected_level":"clear"}
+{"id":"c-03","prompt":"Why does npm test fail with a TypeError in src/utils/date.ts?","should_clarify":false,"expected_level":"clear"}
+{"id":"c-04","prompt":"Add pagination to the /api/users endpoint with 20 items per page, and add a test that checks page 2 returns users 21-40.","should_clarify":false,"expected_level":"clear"}
+{"id":"c-05","prompt":"Rename getUser to fetchUser everywhere","should_clarify":false,"expected_level":"clear"}
+{"id":"c-06","prompt":"Write unit tests for the parseDate function covering leap years and invalid input.","should_clarify":false,"expected_level":"clear"}
+{"id":"c-07","prompt":"In src/components/Header.tsx, hide the search bar on screens narrower than 600px. Don't change the desktop layout.","should_clarify":false,"expected_level":"clear"}
+{"id":"c-08","prompt":"Fix the null check in src/auth/jwt.ts line 42: expired tokens should return 401 instead of crashing.","should_clarify":false,"expected_level":"clear"}
+{"id":"c-09","prompt":"Explain what the useCart hook does and where it is used.","should_clarify":false}
+{"id":"c-10","prompt":"Change the button label \"Sign in\" to \"Log in\" on the login page.","should_clarify":false,"expected_level":"clear"}
+{"id":"c-11","prompt":"Remove the unused lodash dependency from package.json and make sure npm run build still passes.","should_clarify":false,"expected_level":"clear"}
+{"id":"c-12","prompt":"Write a script scripts/export.py that reads data/orders.csv and outputs total revenue per month as JSON.","should_clarify":false,"expected_level":"clear"}
+{"id":"c-13","prompt":"Our Next.js app shows a hydration warning on /dashboard. Find the cause in pages/dashboard.tsx and fix it so the warning no longer appears in the console.","should_clarify":false}
+{"id":"t-01","prompt":"commit","should_clarify":false,"expected_level":"trivial"}
+{"id":"t-02","prompt":"run the tests","should_clarify":false,"expected_level":"trivial"}
+{"id":"t-03","prompt":"yes","should_clarify":false,"expected_level":"trivial"}
+{"id":"s-01","prompt":"[preflight:skip] fix it","should_clarify":false}
+{"id":"s-02","prompt":"[preflight:skip] password=hunter22secret","should_clarify":true,"expected_rules":["secret"]}
+{"id":"v-22","prompt":"Please improve the app and fix it so it is faster. Also check src/missing.ts","should_clarify":true,"expected_level":"vague","expected_rules":["vague-verb","unclear-reference","multi-task"],"note":"found in UI test: scored 80 because the missing file counted as a target"}
