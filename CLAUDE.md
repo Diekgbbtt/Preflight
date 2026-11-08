@@ -19,4 +19,4 @@ npm run typecheck && npm test && npm run build
 
 ## Work tracking
 
-Open tasks are GitHub issues in tolipp/prompt-preflight.
+Open tasks are GitHub issues in Diekgbbtt/Preflight.

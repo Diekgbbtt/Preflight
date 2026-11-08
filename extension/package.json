@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "publisher": "prompt-preflight",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/tolipp/prompt-preflight" },
+  "repository": { "type": "git", "url": "https://github.com/Diekgbbtt/Preflight" },
   "engines": { "vscode": "^1.90.0" },
   "categories": ["Other", "Machine Learning"],
   "main": "./dist/extension.js",
