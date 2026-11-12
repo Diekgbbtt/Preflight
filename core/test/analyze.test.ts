@@ -43,3 +43,16 @@ describe("findPathRefs", () => {
     expect(refs).not.toContain("and/or");
   });
 });
+
+describe("pill labels", () => {
+  it("gives every finding a short label", () => {
+    const a = analyze("Please improve it, make it better and clean up everything [file]");
+    expect(a.findings.length).toBeGreaterThan(0);
+    for (const f of a.findings) expect(f.short, f.rule).toBeTruthy();
+  });
+
+  it("names the vague verb", () => {
+    const f = analyze("Improve the app's performance.").findings.find((f) => f.rule === "vague-verb")!;
+    expect(f.short).toBe("Improve what?");
+  });
+});

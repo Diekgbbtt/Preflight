@@ -21,6 +21,8 @@ export interface Finding {
   category: Category;
   severity: Severity;
   message: string;
+  /** Two-to-four word question for the inline pill, e.g. "Improve what?". */
+  short?: string;
   range?: Range;
 }
 

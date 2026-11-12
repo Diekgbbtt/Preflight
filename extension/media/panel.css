@@ -1,113 +1,255 @@
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("fonts/instrument-sans-latin-wght-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("fonts/instrument-sans-latin-ext-wght-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* Colour carries meaning: blue = Preflight's feedback, green = the user's words, orange-red = weak / ready to send.
+   *-ink is the same hue darkened for small text, so it passes 4.5:1. Neutrals come from the VS Code theme. */
+:root {
+  --tool: #185FA5;  --tool-ink: #0C447C;  --tool-fill: #B5D4F4;
+  --user: #3B6D11;  --user-ink: #27500A;  --user-fill: #C0DD97;
+  --model: #D85A30; --model-ink: #B5461E; --model-fill: #F5C4B3;
+  --send: #D85A30;  --send-ink: #FFFFFF;
+
+  --bg: var(--vscode-sideBar-background, #F5F5F7);
+  --card: var(--vscode-editor-background, #FFFFFF);
+  --text: var(--vscode-editor-foreground, #1D1D1F);
+  --text-2: var(--vscode-descriptionForeground, #6E6E73);
+  --inactive: color-mix(in srgb, var(--text) 16%, var(--card));
+  --edge: transparent;
+  --shadow: 0 12px 32px rgba(0, 0, 0, .08), 0 2px 6px rgba(0, 0, 0, .04);
+
+  --font: "Instrument Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --ui-size: var(--vscode-font-size, 13px);
+  --prompt-size: calc(var(--ui-size) * 1.5);
+  --ease: cubic-bezier(.2, .7, .2, 1); /* the teaser's curve */
+}
+body.vscode-dark,
+body.vscode-high-contrast:not(.vscode-high-contrast-light) {
+  --tool: #85B7EB;  --tool-ink: #B5D4F4;  --tool-fill: #0C447C;
+  --user: #97C459;  --user-ink: #C0DD97;  --user-fill: #27500A;
+  --model: #F0997B; --model-ink: #F0997B; --model-fill: #712B13;
+  --edge: color-mix(in srgb, var(--text) 10%, transparent);
+  --shadow: 0 12px 32px rgba(0, 0, 0, .35);
+}
+body.vscode-high-contrast,
+body.vscode-high-contrast-light { --edge: var(--vscode-contrastBorder, currentColor); --shadow: none; }
+
+* { box-sizing: border-box; }
 body {
-  padding: 8px 12px 24px;
-  font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size);
-  color: var(--vscode-foreground);
+  margin: 0;
+  padding: 12px 12px 24px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--ui-size);
+}
+button { font: inherit; }
+:focus-visible { outline: 2px solid var(--vscode-focusBorder, var(--tool)); outline-offset: 2px; }
+code { font-family: var(--vscode-editor-font-family); font-size: .92em; }
+
+/* card */
+.card {
+  background: var(--card);
+  border: 1px solid var(--edge);
+  border-radius: 32px;
+  box-shadow: var(--shadow);
+  padding: 22px 22px 18px;
 }
 
-h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin: 16px 0 6px; opacity: .8; }
-h4 { font-size: 12px; margin: 12px 0 4px; }
-ul { margin: 0; padding-left: 18px; }
-li { margin: 4px 0; line-height: 1.4; }
-code { font-family: var(--vscode-editor-font-family); background: var(--vscode-textCodeBlock-background); padding: 0 3px; border-radius: 3px; }
-.muted { opacity: .75; }
-.tag { text-transform: none; font-weight: normal; opacity: .6; }
-
-/* score */
-.score { display: flex; align-items: center; gap: 8px; }
-.bar { flex: 1; height: 6px; border-radius: 3px; background: var(--vscode-input-background); overflow: hidden; }
-.fill { height: 100%; width: 0; transition: width .2s; background: var(--vscode-descriptionForeground); }
-.fill.vague { background: var(--vscode-editorError-foreground, #f14c4c); }
-.fill.needs-work { background: var(--vscode-editorWarning-foreground, #cca700); }
-.fill.clear, .fill.trivial { background: var(--vscode-testing-iconPassed, #73c991); }
-.level { font-size: 12px; white-space: nowrap; }
-.dims { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; min-height: 4px; }
-.dim { font-size: 11px; padding: 1px 6px; border-radius: 8px; border: 1px solid currentColor; }
-.dim.ok { color: var(--vscode-testing-iconPassed, #73c991); }
-.dim.mid { color: var(--vscode-editorWarning-foreground, #cca700); }
-.dim.bad { color: var(--vscode-editorError-foreground, #f14c4c); }
-
-/* editor: transparent textarea over a highlight layer with identical text metrics */
-.editor {
-  position: relative;
-  margin: 10px 0 8px;
-  background: var(--vscode-input-background);
-  border: 1px solid var(--vscode-input-border, transparent);
-  border-radius: 2px;
-}
-.editor:focus-within { border-color: var(--vscode-focusBorder); }
+/* editor: transparent textarea over a layer that draws the text, so words can be coloured.
+   Keep the text metrics of textarea and .backdrop identical or highlights drift. */
+.editor { position: relative; }
 textarea, .backdrop {
-  box-sizing: border-box;
   width: 100%;
   margin: 0;
-  padding: 8px;
+  padding: 0;
   border: 0;
-  font-family: var(--vscode-editor-font-family);
-  font-size: 13px;
-  line-height: 1.5;
+  font-family: var(--font);
+  font-size: var(--prompt-size);
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: -.01em;
   white-space: pre-wrap;
   overflow-wrap: break-word;
   word-break: normal;
-  letter-spacing: normal;
   tab-size: 4;
 }
 textarea {
   position: relative;
   z-index: 1;
   display: block;
-  min-height: 160px;
+  min-height: calc(var(--prompt-size) * 1.4 * 3);
   resize: none;
   overflow: hidden;
   background: transparent;
-  color: var(--vscode-input-foreground);
-  caret-color: var(--vscode-input-foreground);
+  color: transparent;
+  caret-color: var(--text);
   outline: none;
 }
-textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
-.backdrop { position: absolute; inset: 0; overflow: hidden; color: transparent; pointer-events: none; }
-mark { color: transparent; background: none; border-radius: 2px; }
-mark.error { background: color-mix(in srgb, var(--vscode-editorError-foreground, #f14c4c) 35%, transparent); }
-mark.warning { text-decoration: underline wavy var(--vscode-editorWarning-foreground, #cca700); text-underline-offset: 3px; }
-mark.info { text-decoration: underline dotted var(--vscode-editorInfo-foreground, #3794ff); text-underline-offset: 3px; }
-mark.ai { text-decoration: underline dashed var(--vscode-charts-purple, #b180d7); text-underline-offset: 3px; }
+textarea::placeholder { color: var(--text-2); font-weight: 400; }
+textarea::selection { background: color-mix(in srgb, var(--tool) 28%, transparent); color: transparent; }
+.backdrop { position: absolute; inset: 0; overflow: hidden; color: var(--text); pointer-events: none; }
+.backdrop .u, .backdrop .u-soft {
+  text-decoration-line: underline;
+  text-decoration-color: var(--tool);
+  text-decoration-thickness: 3px;
+  text-underline-offset: 6px;
+  text-decoration-skip-ink: none;
+}
+.backdrop .u-soft { text-decoration-style: dotted; }
+.backdrop .added { color: var(--user); }
+/* only marks that are new after a pause animate; marks that follow the text while typing stay still */
+.backdrop .fresh.u, .backdrop .fresh.u-soft { animation: ink .7s var(--ease) both; }
+.backdrop .fresh.added { animation: tint .8s var(--ease) both; }
 
-/* buttons */
-.actions { display: flex; gap: 6px; flex-wrap: wrap; }
-button {
-  font-family: inherit;
-  font-size: 12px;
-  padding: 4px 10px;
-  border: 1px solid var(--vscode-button-border, transparent);
-  border-radius: 2px;
-  color: var(--vscode-button-foreground);
-  background: var(--vscode-button-background);
+/* rows that open and close by animating their height instead of jumping */
+.collapse { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows .7s var(--ease), opacity .5s var(--ease); }
+.collapse.open { grid-template-rows: 1fr; opacity: 1; }
+.collapse > * { min-height: 0; overflow: hidden; }
+
+/* pills: Preflight's gaps (blue) and the user's action (green) */
+.pills { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 3px 3px; margin: 0 -3px; }
+.pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 14px;
+  border: 0;
+  border-radius: 999px;
+  font-size: calc(var(--ui-size) * 1.05);
+  font-weight: 600;
+  line-height: 1.25;
+  text-align: left;
+}
+.pill.tool { background: var(--tool-fill); color: var(--tool-ink); }
+.pill.user { background: var(--user-fill); color: var(--user-ink); }
+button.pill { cursor: pointer; transition: filter .2s, opacity .2s; }
+button.pill:hover:not(:disabled) { filter: brightness(.96); }
+button.pill:disabled { opacity: .55; cursor: default; }
+.pill[aria-busy="true"] { animation: breathe 1.4s ease-in-out infinite; }
+.enter { animation: rise .6s var(--ease) both; }
+.pill.leave { opacity: 0; transform: scale(.94); transition: opacity .25s var(--ease), transform .25s var(--ease); pointer-events: none; }
+
+/* "Ask me" grows out of the footer instead of popping in (as in the teaser) */
+.pill.ask {
+  max-width: 0;
+  padding: 4px 0;
+  margin-left: -14px;
+  overflow: hidden;
+  white-space: nowrap;
+  opacity: 0;
+  transform: scale(.9);
+  pointer-events: none;
+  transition: max-width .5s var(--ease), padding .5s var(--ease), margin .5s var(--ease), opacity .5s var(--ease), transform .5s var(--ease);
+}
+.pill.ask.show { max-width: 12em; padding: 4px 14px; margin-left: 0; opacity: 1; transform: none; pointer-events: auto; }
+
+/* question cards: question in blue, the user's answer in green */
+.questions { padding: 18px 2px 2px; margin: 0 -2px; }
+.qgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.qcard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--inactive);
+  border-radius: 14px;
+  cursor: text;
+}
+.qcard:focus-within { border-color: var(--tool); }
+.qcard .q { color: var(--tool); font-weight: 600; line-height: 1.3; }
+.qcard .hint { color: var(--text-2); font-size: .92em; line-height: 1.35; }
+.qcard input {
+  width: 100%;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--user);
+  font: 500 calc(var(--ui-size) * 1.2) / 1.35 var(--font);
+  outline: none;
+}
+.qcard input::placeholder { color: var(--text-2); font-weight: 400; }
+.qactions { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.link {
+  padding: 4px 2px;
+  border: 0;
+  background: none;
+  color: var(--text-2);
+  font-weight: 600;
   cursor: pointer;
 }
-button:hover { background: var(--vscode-button-hoverBackground); }
-button:disabled { opacity: .5; cursor: default; }
-button.secondary { color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); }
-button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
-button.warn { outline: 1px solid var(--vscode-editorWarning-foreground, #cca700); outline-offset: 1px; }
-#send { flex: 1; }
+.link:hover { color: var(--text); }
 
-/* lists */
-#findings ul { list-style: none; padding: 0; }
-.finding { display: flex; gap: 6px; align-items: baseline; }
-.dot { flex: none; width: 7px; height: 7px; border-radius: 50%; transform: translateY(-1px); }
-.finding.error .dot { background: var(--vscode-editorError-foreground, #f14c4c); }
-.finding.warning .dot { background: var(--vscode-editorWarning-foreground, #cca700); }
-.finding.info .dot { background: var(--vscode-editorInfo-foreground, #3794ff); }
-.clickable { cursor: pointer; }
-.clickable:hover { color: var(--vscode-textLink-activeForeground); }
-.issue { list-style: none; margin-left: -18px; padding: 4px 0 4px 8px; border-left: 2px solid var(--vscode-charts-purple, #b180d7); }
-.stale { opacity: .5; }
-.improved {
-  white-space: pre-wrap;
-  font-family: var(--vscode-editor-font-family);
-  font-size: 12px;
-  padding: 8px;
-  background: var(--vscode-textCodeBlock-background);
-  border-radius: 2px;
+/* footer: strength meter, label, Ask me, send */
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin-top: 18px;
 }
-.usage { font-size: 11px; opacity: .6; margin-top: 8px; }
-.error-text { color: var(--vscode-errorForeground); }
+.meter { display: flex; gap: 6px; flex: 1 1 150px; }
+.meter i { flex: 1; height: 5px; border-radius: 3px; background: var(--inactive); transition: background-color .7s var(--ease); }
+.meter.weak i.on { background: var(--model); }
+.meter.strong i.on { background: var(--user); }
+.meter i:nth-child(2) { transition-delay: .06s; }
+.meter i:nth-child(3) { transition-delay: .12s; }
+.meter i:nth-child(4) { transition-delay: .18s; }
+/* the label keeps its width when empty, so the meter does not jump when it appears */
+.level {
+  min-width: 7.5em;
+  font-weight: 600;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(5px);
+  transition: opacity .6s var(--ease), transform .6s var(--ease), color .6s var(--ease);
+}
+.level.show { opacity: 1; transform: none; }
+.level.weak { color: var(--model-ink); }
+.level.strong { color: var(--user-ink); }
+.send {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin-left: auto;
+  border: 0;
+  border-radius: 50%;
+  background: var(--inactive);
+  color: var(--text-2); /* the idle button still sends, so its arrow needs 3:1 */
+  cursor: pointer;
+  transition: background-color .6s var(--ease), transform .2s var(--ease);
+}
+.send:active:not(:disabled) { transform: scale(.94); }
+.send:disabled { cursor: default; opacity: .6; }
+.send.ready { background: var(--send); color: var(--send-ink); animation: pulse 1.8s var(--ease) 3; }
+
+.status { margin: 12px 2px 0; color: var(--text-2); line-height: 1.4; }
+.status:empty { display: none; }
+.status.error { color: var(--vscode-errorForeground, var(--model-ink)); }
+
+@keyframes rise { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+@keyframes ink { from { text-decoration-color: transparent; } }
+@keyframes tint { from { color: var(--text); } }
+@keyframes breathe { 50% { opacity: .55; } }
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 var(--model-fill); }
+  100% { box-shadow: 0 0 0 12px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

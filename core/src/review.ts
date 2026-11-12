@@ -22,6 +22,8 @@ export interface ReviewIssue {
   /** Exact words from the prompt the issue is about, if any. */
   quote?: string;
   range?: Range;
+  /** Short question to the user for the inline pill, e.g. "Which page?". */
+  question?: string;
   problem: string;
   suggestion: string;
 }
@@ -48,16 +50,15 @@ ${RUBRIC}
 
 Find what is missing or ambiguous that would make the agent guess. Only flag real gaps; a short prompt can be complete.
 Reply with JSON only, no prose, in this shape:
-{"verdict":"ready"|"needs-work","issues":[{"quote":"exact words from the prompt or empty","problem":"max 15 words","suggestion":"max 20 words"}],"questions":["max 3 short questions to the user"]}
+{"verdict":"ready"|"needs-work","issues":[{"quote":"exact words from the prompt or empty","question":"what to ask the user, max 6 words, e.g. Which page?","problem":"max 15 words","suggestion":"max 20 words"}],"questions":[]}
 At most 3 issues.`;
 
-const DEEP_SYSTEM = `You coach a student on how to write prompts for an AI coding agent. You do not do the task.
+const DEEP_SYSTEM = `You help a user finish a prompt for an AI coding agent before they send it. You do not do the task.
 ${RUBRIC}
 
-Review the prompt. For each issue, explain briefly why it matters to the agent, so the user learns.
-Then write an improved version of the prompt. Never invent facts the user did not give: put unknown details in square brackets as placeholders, e.g. [which page?] or [expected result]. Keep the user's intent and wording where possible.
+Ask the questions whose answers would let the agent do the task in one go, without guessing. Be specific to this prompt and project: name the files, behaviours or choices you are asking about. Do not ask about anything the prompt already answers. Each question is one sentence of at most 15 words that the user can answer in a few words. Ask nothing if the prompt is complete.
 Reply with JSON only, no prose, in this shape:
-{"verdict":"ready"|"needs-work","issues":[{"quote":"exact words from the prompt or empty","problem":"what is missing and why it matters","suggestion":"how to fix it"}],"questions":["max 3 questions to the user"],"improvedPrompt":"..."}`;
+{"verdict":"ready"|"needs-work","issues":[{"quote":"exact words from the prompt or empty","problem":"what is missing and why it matters","suggestion":"how to fix it"}],"questions":["up to 4 questions to the user, most important first"]}`;
 
 export interface ReviewContext {
   analysis?: Analysis;
@@ -99,12 +100,13 @@ export function parseReview(prompt: string, mode: ReviewMode, res: ModelResponse
       return {
         quote,
         range: at >= 0 ? { start: at, end: at + quote!.length } : undefined,
+        question: typeof i.question === "string" && i.question.trim() ? i.question.trim() : undefined,
         problem: String(i.problem ?? ""),
         suggestion: String(i.suggestion ?? ""),
       };
     })
     .filter((i) => i.problem);
-  const questions = (Array.isArray(raw.questions) ? raw.questions : []).map(String).slice(0, 3);
+  const questions = (Array.isArray(raw.questions) ? raw.questions : []).map(String).slice(0, mode === "deep" ? 4 : 3);
   return {
     mode,
     verdict: raw.verdict === "ready" ? "ready" : "needs-work",
@@ -113,6 +115,36 @@ export function parseReview(prompt: string, mode: ReviewMode, res: ModelResponse
     improvedPrompt: typeof raw.improvedPrompt === "string" ? raw.improvedPrompt : undefined,
     usage: { inputTokens: res.inputTokens, outputTokens: res.outputTokens, costUsd: res.costUsd },
   };
+}
+
+export interface Answer {
+  question: string;
+  answer: string;
+}
+
+const MERGE_SYSTEM = `You edit a prompt that a user is about to send to an AI coding agent. You do not do the task.
+The user answered clarifying questions about the prompt. Rewrite the prompt so it includes their answers.
+Keep the user's words and voice; change only the parts the answers make precise. Add no facts beyond the prompt and the answers. Keep it about as short as the original.
+Reply with the rewritten prompt only: no quotes, no labels, no commentary.`;
+
+export function buildMergeRequest(prompt: string, answers: Answer[], model: string): ModelRequest {
+  const qa = answers.map((a) => `Q: ${a.question}\nA: ${a.answer}`).join("\n\n");
+  return { system: MERGE_SYSTEM, user: `<prompt>\n${prompt}\n</prompt>\n\n<answers>\n${qa}\n</answers>`, model };
+}
+
+/** Rewrite the prompt with the user's answers. Only called on the user's request. */
+export async function mergeAnswers(
+  prompt: string,
+  answers: Answer[],
+  run: ModelRunner,
+  model: string,
+  signal?: AbortSignal,
+): Promise<{ text: string; usage: Review["usage"] }> {
+  const res = await run(buildMergeRequest(prompt, answers, model), signal);
+  const fenced = res.text.match(/```[a-z]*\s*([\s\S]*?)```/);
+  const text = (fenced ? fenced[1] : res.text).trim().replace(/^<prompt>\s*|\s*<\/prompt>$/g, "");
+  if (!text) throw new Error("The rewrite came back empty. Try again.");
+  return { text, usage: { inputTokens: res.inputTokens, outputTokens: res.outputTokens, costUsd: res.costUsd } };
 }
 
 export async function review(

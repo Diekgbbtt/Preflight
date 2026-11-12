@@ -23,6 +23,7 @@ export function activate(context: vscode.ExtensionContext): void {
       await vscode.commands.executeCommand(`${PromptPanel.viewId}.focus`);
       panel.setText(text);
     }),
+    vscode.commands.registerCommand("promptPreflight.copy", () => panel.copy()),
     vscode.commands.registerCommand("promptPreflight.openStudyLog", async () => {
       try {
         await vscode.window.showTextDocument(log.uri);

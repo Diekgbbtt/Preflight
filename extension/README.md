@@ -4,10 +4,11 @@ Feedback on prompts for coding agents before you send them.
 
 Write your prompt in the **Prompt Preflight** panel (activity bar, or `Cmd/Ctrl+Alt+P`):
 
-- **While typing:** rule checks highlight missing targets, vague verbs, unclear references, placeholders and secrets, and score the prompt (Target, Action, Scope, Done when).
-- **When you pause:** a small model (Haiku) looks for gaps the rules missed.
-- **On request:** *Detailed feedback* explains each issue and suggests an improved prompt, with unknown details left as `[placeholders]`.
-- **Send:** starts Claude Code in a terminal with your prompt, or copies it.
+- **While typing:** nothing moves except your text.
+- **When you pause:** rule checks and a small model (Haiku) underline vague words in blue and show short questions under the prompt ("Improve what?", "Which page?"), and the strength meter fills in (Weak prompt, Getting there, Strong prompt). Click a question to answer it.
+- **On request:** *Ask me* has Sonnet ask up to four detailed questions about the prompt.
+- **Your answers:** choose *Add to prompt* and they are written into the prompt, shown in green. `Cmd/Ctrl+Z` undoes it.
+- **Send:** the round button (or `Cmd/Ctrl+Enter`) starts Claude Code in a terminal with your prompt, or copies it. It turns orange once the prompt is strong. *Copy Prompt* is in the panel's title bar.
 
 Model checks run through the Claude Code CLI with your own login (`claude -p`). No API key needed.
 

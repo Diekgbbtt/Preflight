@@ -5,43 +5,135 @@
   "version": "0.1.0",
   "publisher": "prompt-preflight",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/Diekgbbtt/Preflight" },
-  "engines": { "vscode": "^1.90.0" },
-  "categories": ["Other", "Machine Learning"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Diekgbbtt/Preflight"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other",
+    "Machine Learning"
+  ],
   "main": "./dist/extension.js",
   "activationEvents": [],
   "contributes": {
     "viewsContainers": {
-      "activitybar": [{ "id": "promptPreflight", "title": "Prompt Preflight", "icon": "media/icon.svg" }]
+      "activitybar": [
+        {
+          "id": "promptPreflight",
+          "title": "Prompt Preflight",
+          "icon": "media/icon.svg"
+        }
+      ]
     },
     "views": {
-      "promptPreflight": [{ "type": "webview", "id": "promptPreflight.panel", "name": "Prompt" }]
+      "promptPreflight": [
+        {
+          "type": "webview",
+          "id": "promptPreflight.panel",
+          "name": "Prompt"
+        }
+      ]
     },
     "commands": [
-      { "command": "promptPreflight.focus", "title": "Open", "category": "Prompt Preflight" },
-      { "command": "promptPreflight.checkSelection", "title": "Check Selected Text", "category": "Prompt Preflight" },
-      { "command": "promptPreflight.openStudyLog", "title": "Open Study Log", "category": "Prompt Preflight" }
+      {
+        "command": "promptPreflight.focus",
+        "title": "Open",
+        "category": "Prompt Preflight"
+      },
+      {
+        "command": "promptPreflight.checkSelection",
+        "title": "Check Selected Text",
+        "category": "Prompt Preflight"
+      },
+      {
+        "command": "promptPreflight.openStudyLog",
+        "title": "Open Study Log",
+        "category": "Prompt Preflight"
+      },
+      {
+        "command": "promptPreflight.copy",
+        "title": "Copy Prompt",
+        "category": "Prompt Preflight",
+        "icon": "$(copy)"
+      }
     ],
     "menus": {
-      "editor/context": [{ "command": "promptPreflight.checkSelection", "when": "editorHasSelection", "group": "9_cutcopypaste" }]
+      "view/title": [
+        {
+          "command": "promptPreflight.copy",
+          "when": "view == promptPreflight.panel",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "promptPreflight.checkSelection",
+          "when": "editorHasSelection",
+          "group": "9_cutcopypaste"
+        }
+      ]
     },
     "keybindings": [
-      { "command": "promptPreflight.focus", "key": "ctrl+alt+p", "mac": "cmd+alt+p" }
+      {
+        "command": "promptPreflight.focus",
+        "key": "ctrl+alt+p",
+        "mac": "cmd+alt+p"
+      }
     ],
     "configuration": {
       "title": "Prompt Preflight",
       "properties": {
-        "promptPreflight.claudePath": { "type": "string", "default": "claude", "description": "Path to the Claude Code CLI." },
-        "promptPreflight.quickModel": { "type": "string", "default": "haiku", "description": "Model for the quick check when you pause typing." },
-        "promptPreflight.deepModel": { "type": "string", "default": "sonnet", "description": "Model for detailed feedback." },
-        "promptPreflight.quickReviewOnPause": { "type": "boolean", "default": true, "description": "Run the quick model check when you stop typing. Uses your Claude account." },
-        "promptPreflight.pauseMs": { "type": "number", "default": 1500, "minimum": 500, "description": "Milliseconds without typing before the quick check runs." },
-        "promptPreflight.sendTo": {
-          "type": "string", "enum": ["terminal", "clipboard"], "default": "terminal",
-          "enumDescriptions": ["Start Claude Code in a new terminal with the prompt.", "Copy the prompt, e.g. to paste into the Claude Code chat panel."]
+        "promptPreflight.claudePath": {
+          "type": "string",
+          "default": "claude",
+          "description": "Path to the Claude Code CLI."
         },
-        "promptPreflight.studyLog.enabled": { "type": "boolean", "default": false, "description": "Log prompts, scores, timings and Preflight token use to a local file for the user study." },
-        "promptPreflight.studyLog.participantId": { "type": "string", "default": "", "description": "Participant ID written to the study log." }
+        "promptPreflight.quickModel": {
+          "type": "string",
+          "default": "haiku",
+          "description": "Model for the quick check when you pause typing."
+        },
+        "promptPreflight.deepModel": {
+          "type": "string",
+          "default": "sonnet",
+          "description": "Model for detailed feedback."
+        },
+        "promptPreflight.quickReviewOnPause": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run the quick model check when you stop typing. Uses your Claude account."
+        },
+        "promptPreflight.pauseMs": {
+          "type": "number",
+          "default": 1500,
+          "minimum": 500,
+          "description": "Milliseconds without typing before the panel updates its feedback and the quick check runs."
+        },
+        "promptPreflight.sendTo": {
+          "type": "string",
+          "enum": [
+            "terminal",
+            "clipboard"
+          ],
+          "default": "terminal",
+          "enumDescriptions": [
+            "Start Claude Code in a new terminal with the prompt.",
+            "Copy the prompt, e.g. to paste into the Claude Code chat panel."
+          ]
+        },
+        "promptPreflight.studyLog.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Log prompts, scores, timings and Preflight token use to a local file for the user study."
+        },
+        "promptPreflight.studyLog.participantId": {
+          "type": "string",
+          "default": "",
+          "description": "Participant ID written to the study log."
+        }
       }
     }
   },
@@ -53,6 +145,9 @@
   "devDependencies": {
     "@prompt-preflight/core": "*",
     "@types/vscode": "~1.90.0",
-    "@vscode/vsce": "^3.2.0"
+    "@vscode/vsce": "^4.1.0"
+  },
+  "dependencies": {
+    "vitest": "4.1.12"
   }
 }

@@ -52,6 +52,7 @@ export function analyze(prompt: string, ctx: WorkspaceContext = {}): Analysis {
         category: "privacy",
         severity: "error",
         message: "This looks like a secret or password. Remove it before sending.",
+        short: "Remove this secret",
         range: m,
       });
     }
@@ -80,6 +81,7 @@ export function analyze(prompt: string, ctx: WorkspaceContext = {}): Analysis {
       category: "target",
       severity: "warning",
       message: `"${p.text}" was not found in this workspace. Check the name or path.`,
+      short: "File not found",
       range: p,
     });
   }
@@ -111,6 +113,7 @@ export function analyze(prompt: string, ctx: WorkspaceContext = {}): Analysis {
       // with a concrete target and action, a vague verb is only a hint
       severity: target === 25 && action === 25 ? "info" : "warning",
       message: `"${v.text}" can mean many things. Say what exactly should change.`,
+      short: /^make\b/i.test(v.text) ? "How exactly?" : `${v.text[0].toUpperCase()}${v.text.slice(1).toLowerCase()} what?`,
       range: v,
     });
   }
@@ -130,6 +133,7 @@ export function analyze(prompt: string, ctx: WorkspaceContext = {}): Analysis {
         category: "scope",
         severity: "warning",
         message: `"${b.text}" is very broad. Narrow it to one area, or list the places that should change.`,
+        short: "Which part?",
         range: b,
       });
     }
@@ -147,6 +151,7 @@ export function analyze(prompt: string, ctx: WorkspaceContext = {}): Analysis {
       category: "scope",
       severity: "info",
       message: "Several tasks in one prompt. Agents do better with one task at a time, or a numbered plan.",
+      short: "One task at a time?",
     });
   }
 
@@ -169,6 +174,7 @@ export function analyze(prompt: string, ctx: WorkspaceContext = {}): Analysis {
         category: "clarity",
         severity: "warning",
         message: `What does "${p.text}" refer to? The agent can't see what you are looking at.`,
+        short: `What is "${p.text}"?`,
         range: p,
       });
     }
@@ -182,6 +188,7 @@ export function analyze(prompt: string, ctx: WorkspaceContext = {}): Analysis {
       category: "clarity",
       severity: "info",
       message: `"${s.text}" is subjective. How would you measure or recognise it?`,
+      short: "Measured how?",
       range: s,
     });
   }
@@ -194,6 +201,7 @@ export function analyze(prompt: string, ctx: WorkspaceContext = {}): Analysis {
       category: "clarity",
       severity: "warning",
       message: "Fill in this placeholder before sending.",
+      short: "Fill this in",
       range,
     });
   }
@@ -204,6 +212,7 @@ export function analyze(prompt: string, ctx: WorkspaceContext = {}): Analysis {
       category: "clarity",
       severity: "warning",
       message: "Very short prompt. The agent will have to guess most of the details.",
+      short: "Say more?",
     });
   }
 
@@ -215,23 +224,24 @@ export function analyze(prompt: string, ctx: WorkspaceContext = {}): Analysis {
       category: "risk",
       severity: "warning",
       message: `"${r.text}" is risky work. Ask for a plan first and say what must not change.`,
+      short: "Plan first?",
       range: r,
     });
   }
 
   // --- summary findings for missing dimensions (no range)
   if (target === 5) {
-    findings.push({ rule: "no-target", category: "target", severity: "warning", message: "No file, function or part of the app is named." });
+    findings.push({ rule: "no-target", category: "target", severity: "warning", message: "No file, function or part of the app is named.", short: "Where?" });
   } else if (target === 15) {
-    findings.push({ rule: "weak-target", category: "target", severity: "info", message: "Name the exact file, function or component if you know it." });
+    findings.push({ rule: "weak-target", category: "target", severity: "info", message: "Name the exact file, function or component if you know it.", short: "Which file?" });
   }
   if (action === 5) {
-    findings.push({ rule: "no-action", category: "action", severity: "warning", message: "No clear action. Start with a verb like add, remove, rename or explain." });
+    findings.push({ rule: "no-action", category: "action", severity: "warning", message: "No clear action. Start with a verb like add, remove, rename or explain.", short: "What change?" });
   }
   if (done === 5) {
-    findings.push({ rule: "no-done", category: "done", severity: "warning", message: "No success criteria. How will you know the task is done?" });
+    findings.push({ rule: "no-done", category: "done", severity: "warning", message: "No success criteria. How will you know the task is done?", short: "Done when?" });
   } else if (done === 15) {
-    findings.push({ rule: "no-expected", category: "done", severity: "info", message: "You describe what's wrong, but not what should happen instead." });
+    findings.push({ rule: "no-expected", category: "done", severity: "info", message: "You describe what's wrong, but not what should happen instead.", short: "What should happen?" });
   }
 
   const dimensions: Dimensions = { target, action, scope, done };

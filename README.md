@@ -9,8 +9,8 @@ Vague prompts make agents guess, loop and spend tokens. Preflight checks the pro
 | Tier | When | What | Cost |
 |---|---|---|---|
 | 1. Rules | every keystroke | `core/src/analyze.ts`: highlights, score, questions | free |
-| 2. Small model | typing pauses (1.5 s) | Haiku looks for gaps the rules missed | ~$0.0004 |
-| 3. Detailed feedback | on request | Sonnet explains each issue, suggests an improved prompt with `[placeholders]` | ~$0.02 |
+| 2. Small model | typing pauses (1.5 s) | Haiku flags gaps the rules missed, as short clickable questions | ~$0.0004 |
+| 3. Ask me | on request | Sonnet asks up to four detailed questions; Haiku writes the user's answers into the prompt when they choose *Add to prompt* | ~$0.02 |
 | 4. Send | button / Cmd+Enter | Claude Code starts in a terminal with the prompt | agent tokens |
 
 Tiers 2 and 3 run through `claude -p` with the user's own Claude login: no API key, no tools, no project settings.
@@ -67,4 +67,4 @@ Add `[preflight:skip]` to a prompt to send it as is. On any error the hook lets 
 
 ## User study
 
-Enable `promptPreflight.studyLog.enabled` and set `promptPreflight.studyLog.participantId`. Each send appends one line to `study-log.jsonl` (command *Prompt Preflight: Open Study Log*): prompt, first and final score, draft time, rules hit, reviews used, whether the improved prompt was used, and Preflight's own tokens and cost. The agent's tokens are in Claude Code's session transcripts (`~/.claude/projects/`), not yet merged into the log.
+Enable `promptPreflight.studyLog.enabled` and set `promptPreflight.studyLog.participantId`. Each send appends one line to `study-log.jsonl` (command *Prompt Preflight: Open Study Log*): prompt, first and final score, draft time, rules hit, reviews used, whether answers were added to the prompt (`mergedAnswers`), and Preflight's own tokens and cost. The agent's tokens are in Claude Code's session transcripts (`~/.claude/projects/`), not yet merged into the log.
