@@ -1,21 +1,38 @@
 import { describe, expect, it } from "vitest";
-import { analyze, extractJson, mergeAnswers, parseCliOutput, review, type ModelRunner } from "../src";
+import { analyze, buildReviewRequest, extractJson, mergeAnswers, parseCliOutput, parseReview, review, type ModelRunner } from "../src";
 
 describe("review", () => {
-  it("parses fenced JSON and maps quotes to ranges", async () => {
+  it("parses fenced JSON into gap-like objects", async () => {
     const prompt = "Improve the app";
     const run: ModelRunner = async () => ({
-      text: '```json\n{"verdict":"needs-work","issues":[{"quote":"the app","question":"Which page?","problem":"Too broad","suggestion":"Name a page"}],"questions":["Which page?"],"improvedPrompt":"Improve [which page?]"}\n```',
+      text: '```json\n{"gaps":[{"category":"target","priority":"important","quote":"the app","question":"Which page?","reason":"The agent cannot tell which page.","suggestion":"the dashboard"},{"question":"","reason":"dropped: no question"}]}\n```',
       inputTokens: 100,
       outputTokens: 20,
       costUsd: 0.001,
     });
     const r = await review(prompt, "deep", run, "sonnet", { analysis: analyze(prompt) });
-    expect(r.verdict).toBe("needs-work");
-    expect(r.issues[0].range).toEqual({ start: 8, end: 15 });
-    expect(r.issues[0].question).toBe("Which page?");
-    expect(r.improvedPrompt).toContain("[which page?]");
+    expect(r.gaps).toEqual([
+      { category: "target", priority: "important", quote: "the app", question: "Which page?", reason: "The agent cannot tell which page.", suggestion: "the dashboard" },
+    ]);
+    expect(r).not.toHaveProperty("improvedPrompt");
     expect(r.usage.costUsd).toBe(0.001);
+  });
+
+  it("caps quick reviews at three gaps and tolerates missing fields", () => {
+    const res = (gaps: unknown) => ({ text: JSON.stringify({ gaps }), inputTokens: 0, outputTokens: 0, costUsd: 0 });
+    const many = Array.from({ length: 6 }, (_, i) => ({ question: `Q${i}?` }));
+    expect(parseReview("quick", res(many)).gaps.length).toBe(3);
+    expect(parseReview("deep", res(many)).gaps.length).toBe(4);
+    expect(parseReview("quick", res(many)).gaps[0]).toMatchObject({ question: "Q0?", reason: "", quote: undefined });
+    expect(parseReview("quick", res("nope")).gaps).toEqual([]);
+  });
+
+  it("asks both models for gaps, not an improved prompt", () => {
+    for (const mode of ["quick", "deep"] as const) {
+      const req = buildReviewRequest("Improve the app", mode, "m");
+      expect(req.system).toContain('"gaps"');
+      expect(req.system).not.toContain("improvedPrompt");
+    }
   });
 
   it("throws on replies without JSON", () => {

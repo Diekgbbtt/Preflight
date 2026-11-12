@@ -1,4 +1,5 @@
-import type { Analysis, Range } from "./types";
+import type { ModelGap } from "./gaps";
+import type { Analysis } from "./types";
 
 export type ReviewMode = "quick" | "deep";
 
@@ -18,23 +19,10 @@ export interface ModelResponse {
 /** Anything that can answer a prompt: the claude CLI, an API client, a test stub. */
 export type ModelRunner = (req: ModelRequest, signal?: AbortSignal) => Promise<ModelResponse>;
 
-export interface ReviewIssue {
-  /** Exact words from the prompt the issue is about, if any. */
-  quote?: string;
-  range?: Range;
-  /** Short question to the user for the inline pill, e.g. "Which page?". */
-  question?: string;
-  problem: string;
-  suggestion: string;
-}
-
 export interface Review {
   mode: ReviewMode;
-  verdict: "ready" | "needs-work";
-  issues: ReviewIssue[];
-  questions: string[];
-  /** Deep mode only. Unknown details are left as [placeholders]. */
-  improvedPrompt?: string;
+  /** Unchecked model output; turn into Gap[] with modelGaps(). */
+  gaps: ModelGap[];
   usage: { inputTokens: number; outputTokens: number; costUsd: number };
 }
 
@@ -45,20 +33,27 @@ const RUBRIC = `A good prompt for a coding agent states:
 4. Done: expected behaviour or a test that shows the task is finished.
 5. Context the agent cannot guess: error messages, constraints, libraries to use or avoid.`;
 
+const GAP_SHAPE = `{"gaps":[{"category":"target"|"action"|"scope"|"done"|"clarity"|"risk"|"privacy","priority":"important"|"advisory"|"blocking","quote":"exact words from the prompt the gap is about, or empty","question":"what to ask the user, max 6 words, e.g. Which page?","reason":"why the agent needs this, one sentence, max 15 words","suggestion":"words the user could add, or empty"}]}`;
+
+const PRIORITIES = `Priority: "important" when the agent would have to guess, "advisory" when it is only nice to have. Use "blocking" only for secrets or passwords in the prompt.`;
+
 const QUICK_SYSTEM = `You review prompts that a user is about to send to an AI coding agent. You do not do the task.
 ${RUBRIC}
 
-Find what is missing or ambiguous that would make the agent guess. Only flag real gaps; a short prompt can be complete.
+Find what is missing or ambiguous that would make the agent guess. Only flag real gaps; a short prompt can be complete, and an empty list is fine.
+${PRIORITIES}
 Reply with JSON only, no prose, in this shape:
-{"verdict":"ready"|"needs-work","issues":[{"quote":"exact words from the prompt or empty","question":"what to ask the user, max 6 words, e.g. Which page?","problem":"max 15 words","suggestion":"max 20 words"}],"questions":[]}
-At most 3 issues.`;
+${GAP_SHAPE}
+At most 3 gaps.`;
 
 const DEEP_SYSTEM = `You help a user finish a prompt for an AI coding agent before they send it. You do not do the task.
 ${RUBRIC}
 
-Ask the questions whose answers would let the agent do the task in one go, without guessing. Be specific to this prompt and project: name the files, behaviours or choices you are asking about. Do not ask about anything the prompt already answers. Each question is one sentence of at most 15 words that the user can answer in a few words. Ask nothing if the prompt is complete.
+List the questions whose answers would let the agent do the task in one go, without guessing. Be specific to this prompt and project: name the files, behaviours or choices you are asking about, and explain in the reason why the agent needs the answer. Do not ask about anything the prompt already answers. The user should be able to answer each question in a few words. Return an empty list if the prompt is complete.
+${PRIORITIES}
 Reply with JSON only, no prose, in this shape:
-{"verdict":"ready"|"needs-work","issues":[{"quote":"exact words from the prompt or empty","problem":"what is missing and why it matters","suggestion":"how to fix it"}],"questions":["up to 4 questions to the user, most important first"]}`;
+${GAP_SHAPE}
+At most 4 gaps, most important first.`;
 
 export interface ReviewContext {
   analysis?: Analysis;
@@ -90,31 +85,24 @@ export function extractJson(text: string): unknown {
   return JSON.parse(body.slice(start, end + 1));
 }
 
-export function parseReview(prompt: string, mode: ReviewMode, res: ModelResponse): Review {
+const text = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+
+/** Check the model's reply shape. Values are validated later, in modelGaps(). */
+export function parseReview(mode: ReviewMode, res: ModelResponse): Review {
   const raw = extractJson(res.text) as Record<string, unknown>;
-  const issues: ReviewIssue[] = (Array.isArray(raw.issues) ? raw.issues : [])
-    .filter((i): i is Record<string, unknown> => !!i && typeof i === "object")
-    .map((i) => {
-      const quote = typeof i.quote === "string" && i.quote.trim() ? i.quote.trim() : undefined;
-      const at = quote ? prompt.indexOf(quote) : -1;
-      return {
-        quote,
-        range: at >= 0 ? { start: at, end: at + quote!.length } : undefined,
-        question: typeof i.question === "string" && i.question.trim() ? i.question.trim() : undefined,
-        problem: String(i.problem ?? ""),
-        suggestion: String(i.suggestion ?? ""),
-      };
-    })
-    .filter((i) => i.problem);
-  const questions = (Array.isArray(raw.questions) ? raw.questions : []).map(String).slice(0, mode === "deep" ? 4 : 3);
-  return {
-    mode,
-    verdict: raw.verdict === "ready" ? "ready" : "needs-work",
-    issues,
-    questions,
-    improvedPrompt: typeof raw.improvedPrompt === "string" ? raw.improvedPrompt : undefined,
-    usage: { inputTokens: res.inputTokens, outputTokens: res.outputTokens, costUsd: res.costUsd },
-  };
+  const gaps: ModelGap[] = (Array.isArray(raw.gaps) ? raw.gaps : [])
+    .filter((g): g is Record<string, unknown> => !!g && typeof g === "object")
+    .map((g) => ({
+      category: text(g.category),
+      priority: text(g.priority),
+      quote: text(g.quote),
+      question: text(g.question) ?? "",
+      reason: text(g.reason) ?? "",
+      suggestion: text(g.suggestion),
+    }))
+    .filter((g) => g.question)
+    .slice(0, mode === "deep" ? 4 : 3);
+  return { mode, gaps, usage: { inputTokens: res.inputTokens, outputTokens: res.outputTokens, costUsd: res.costUsd } };
 }
 
 export interface Answer {
@@ -156,5 +144,5 @@ export async function review(
   signal?: AbortSignal,
 ): Promise<Review> {
   const res = await run(buildReviewRequest(prompt, mode, model, ctx), signal);
-  return parseReview(prompt, mode, res);
+  return parseReview(mode, res);
 }
