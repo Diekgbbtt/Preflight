@@ -15,6 +15,8 @@
   const levelEl = $("level");
   const ask = /** @type {HTMLButtonElement} */ ($("ask"));
   const send = /** @type {HTMLButtonElement} */ ($("send"));
+  const copy = /** @type {HTMLButtonElement} */ ($("copy"));
+  /** @type {ReturnType<typeof setTimeout> | undefined} */ let copiedTimer;
   const statusEl = $("status");
 
   const MAC = /Mac/.test(navigator.platform);
@@ -264,6 +266,7 @@
     ask.title = asking ? "Stop asking" : "Get detailed questions about your prompt";
 
     send.disabled = !ta.value.trim();
+    copy.disabled = !ta.value.trim();
     send.classList.toggle("ready", !!m && m.segments === 4);
     send.setAttribute("aria-label", sendLabel);
     send.title = `${sendLabel} (${MOD}${ENTER})`;
@@ -335,6 +338,7 @@
     }
   });
   send.onclick = () => vscode.postMessage({ type: "send" });
+  copy.onclick = () => vscode.postMessage({ type: "copy", text: ta.value });
   ask.onclick = () => {
     if (!asking) setStatus("");
     vscode.postMessage({ type: asking ? "cancel" : "deepReview" });
@@ -391,6 +395,16 @@
         setStatus(m.error, true);
         break;
       }
+      case "copied":
+        copy.classList.add("done");
+        copy.setAttribute("aria-label", "Copied");
+        setStatus("Copied. Your next edit starts a new prompt.");
+        clearTimeout(copiedTimer);
+        copiedTimer = setTimeout(() => {
+          copy.classList.remove("done");
+          copy.setAttribute("aria-label", "Copy prompt");
+        }, 1400);
+        break;
       case "sent":
         asking = merging = false;
         closeCards();

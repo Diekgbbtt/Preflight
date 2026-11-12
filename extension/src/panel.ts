@@ -30,6 +30,7 @@ type FromWebview =
   | { type: "cancel" }
   | { type: "dismiss"; id: string }
   | { type: "answer"; answers: { id: string; text: string }[] }
+  | { type: "copy"; text: string }
   | { type: "send" };
 
 /** Per-draft numbers for the study log; reset after each send. */
@@ -127,9 +128,13 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     this.onInput(text);
   }
 
-  async copy(): Promise<void> {
-    await vscode.env.clipboard.writeText(this.text);
-    void vscode.window.showInformationMessage("Prompt copied.");
+  /** Copy the prompt and end the session. From the title bar (with a notification) or the panel's own button. */
+  async copy(text = this.text, fromPanel = false): Promise<void> {
+    if (!text.trim()) return;
+    await vscode.env.clipboard.writeText(text);
+    this.endSession("copy");
+    this.post({ type: "copied" });
+    if (!fromPanel) void vscode.window.showInformationMessage("Prompt copied.");
   }
 
   private post(msg: unknown): void {
@@ -170,6 +175,9 @@ export class PromptPanel implements vscode.WebviewViewProvider {
         break;
       case "answer":
         await this.merge(m.answers);
+        break;
+      case "copy":
+        await this.copy(m.text, true);
         break;
       case "send":
         await this.send();
@@ -410,9 +418,15 @@ export class PromptPanel implements vscode.WebviewViewProvider {
       <div class="meter" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
       <span id="level" class="level" aria-live="polite"></span>
       <button id="ask" class="pill tool ask" tabindex="-1" aria-hidden="true">Ask me</button>
+      <div class="actions">
+      <button id="copy" class="copy" aria-label="Copy prompt" title="Copy prompt" disabled>
+        <svg class="i-copy" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <svg class="i-done" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M3.5 8.5 6.5 11.5 12.5 4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
       <button id="send" class="send" aria-label="Send to Claude Code" disabled>
         <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M8 13V3.5M3.5 8 8 3.5 12.5 8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
+      </div>
     </div>
     <p id="status" class="status" role="status"></p>
   </main>

@@ -221,13 +221,33 @@ button.pill:disabled { opacity: .55; cursor: default; }
 .level.show { opacity: 1; transform: none; }
 .level.weak, .level.blocked { color: var(--model-ink); }
 .level.strong { color: var(--user-ink); }
+.actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.copy {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--inactive);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: color .3s var(--ease), border-color .3s var(--ease);
+}
+.copy svg { grid-area: 1 / 1; transition: opacity .3s var(--ease), transform .3s var(--ease); }
+.copy .i-done { opacity: 0; transform: scale(.6); }
+.copy.done { color: var(--user); border-color: var(--user); }
+.copy.done .i-copy { opacity: 0; transform: scale(.6); }
+.copy.done .i-done { opacity: 1; transform: none; }
+.copy:hover:not(:disabled) { color: var(--text); }
+.copy:disabled { cursor: default; opacity: .5; }
 .send {
   flex: none;
   display: grid;
   place-items: center;
   width: 40px;
   height: 40px;
-  margin-left: auto;
   border: 0;
   border-radius: 50%;
   background: var(--inactive);
