@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import * as vscode from "vscode";
 import {
   addedRanges,
@@ -6,8 +7,13 @@ import {
   combineGaps,
   mergeAnswers,
   modelGaps,
+  newSession,
+  recordRevision,
   review,
   ruleGaps,
+  sessionChange,
+  type PromptSession,
+  type SessionEnd,
   type Analysis,
   type Gap,
   type Review,
@@ -84,7 +90,11 @@ export class PromptPanel implements vscode.WebviewViewProvider {
   private models: Record<ReviewMode, Gap[]> = { quick: [], deep: [] };
   /** Revision the last quick review was started for, so it runs once per text. */
   private quickRevision = -1;
-  /** Dismissed gaps for the rest of the session. */
+  /** The prompt being worked on, from first keystroke to send, copy, clear or replace. */
+  private session?: PromptSession;
+  /** Text a merge is about to produce, so its revision is recorded as "merge". */
+  private pendingMerge?: string;
+  /** Dismissed gaps (id + span text) for the current session. */
   private dismissed = new Set<string>();
   /** The prompt before the first merge in this draft; text added since is shown as the user's. */
   private base?: string;
@@ -198,6 +208,16 @@ export class PromptPanel implements vscode.WebviewViewProvider {
   // Tier 1: rules on every change. Tier 2: small model when typing pauses.
   private onInput(text: string): void {
     if (text !== this.text) {
+      const merged = text === this.pendingMerge;
+      let change = sessionChange(this.session, this.text, text);
+      // a merge rewrites the user's own prompt; it never counts as replacing it
+      if (merged && change.end === "replace") change = { start: false };
+      if (change.end) this.endSession(change.end); // before the state moves on, so the summary sees the old prompt
+      if (change.start) this.startSession();
+      if (this.session && !this.session.endedBy && text.trim()) {
+        recordRevision(this.session, text, merged ? "merge" : "typed", Date.now());
+      }
+      this.pendingMerge = undefined;
       this.revision++;
       this.text = text;
       // model gaps belong to the old text; stop work that would produce more of them
@@ -256,6 +276,20 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     }
   }
 
+  private startSession(): void {
+    this.session = newSession(randomUUID(), Date.now());
+    // nothing carries over from the previous prompt
+    this.dismissed.clear();
+    this.base = undefined;
+  }
+
+  private endSession(by: SessionEnd): void {
+    const s = this.session;
+    if (!s || s.endedBy) return;
+    s.endedBy = by;
+    s.endedAt = Date.now();
+  }
+
   private dismiss(id: string): void {
     const g = this.gaps().find((x) => x.id === id);
     if (!g) return;
@@ -289,6 +323,7 @@ export class PromptPanel implements vscode.WebviewViewProvider {
       for (const a of filled) this.draft.answered.set(a.gap.id, a.gap);
       this.base ??= text;
       this.draft.mergedAnswers = true;
+      this.pendingMerge = r.text;
       this.post({ type: "merged", text: r.text });
     } catch (e) {
       const changed = revision !== this.revision;
@@ -318,6 +353,7 @@ export class PromptPanel implements vscode.WebviewViewProvider {
       sentAnyway = true;
     }
     const openGaps = this.gaps().filter((g) => g.status === "open");
+    this.endSession("send");
     const target = await sendPrompt(text, this.workspace.root);
     const d = this.draft;
     await this.log.write("send", {

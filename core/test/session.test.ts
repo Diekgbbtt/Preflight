@@ -6,6 +6,9 @@ import {
   newSession,
   normalizeQuestion,
   normalizeText,
+  editRegion,
+  retainedShare,
+  sessionChange,
   questionOverlap,
   recordGaps,
   textHash,
@@ -63,5 +66,43 @@ describe("isSettled", () => {
     expect(questionOverlap("How fast?", "When is it fast enough?")).toBe(1); // the short question is contained
     expect(questionOverlap("Which page and button?", "Which page and field?")).toBe(0.5);
     expect(questionOverlap("What?", "Which?")).toBe(0);
+  });
+});
+
+describe("session boundaries", () => {
+  const active = () => newSession("s", 0);
+  const ended = (by: "send" | "copy") => ({ ...newSession("s", 0), endedBy: by });
+  const prompt = "Fix the login bug in src/auth.ts so the tests pass";
+
+  it("starts a session on the first text", () => {
+    expect(sessionChange(undefined, "", "F")).toEqual({ end: undefined, start: true });
+    expect(sessionChange(undefined, "", "   ")).toEqual({ end: undefined, start: false });
+  });
+
+  it("keeps the session for ordinary edits", () => {
+    expect(sessionChange(active(), prompt, prompt + " now")).toEqual({ end: undefined, start: false });
+    expect(sessionChange(active(), prompt, prompt.replace("login", "signup"))).toEqual({ end: undefined, start: false });
+  });
+
+  it("ends on clear, without starting a new one", () => {
+    expect(sessionChange(active(), prompt, "")).toEqual({ end: "clear", start: false });
+    expect(sessionChange(active(), prompt, " \n ")).toEqual({ end: "clear", start: false });
+  });
+
+  it("ends and restarts when one edit keeps under 30% of the text", () => {
+    expect(sessionChange(active(), prompt, "Add dark mode to the settings page")).toEqual({ end: "replace", start: true });
+    expect(retainedShare(prompt, "Fix the login bug")).toBeCloseTo(17 / prompt.length);
+    expect(sessionChange(active(), prompt, prompt.slice(0, 20))).toEqual({ end: undefined, start: false }); // 20/51 kept
+  });
+
+  it("starts a new session on the next edit after send or copy, even when the text is reused", () => {
+    expect(sessionChange(ended("send"), "", "F")).toEqual({ end: undefined, start: true });
+    expect(sessionChange(ended("copy"), prompt, prompt.replace("login", "signup"))).toEqual({ end: undefined, start: true });
+    expect(sessionChange(ended("copy"), prompt, "")).toEqual({ end: undefined, start: false });
+  });
+
+  it("finds the single edit between two texts", () => {
+    expect(editRegion("the app is slow", "the dashboard is slow")).toEqual({ at: 4, removed: 3, inserted: 9 });
+    expect(editRegion("same", "same")).toEqual({ at: 4, removed: 0, inserted: 0 });
   });
 });

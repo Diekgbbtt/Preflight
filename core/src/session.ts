@@ -109,3 +109,49 @@ export function isSettled(s: PromptSession, g: { category: Category; question: s
   }
   return false;
 }
+
+/** The one contiguous edit that turns `a` into `b`: everything outside it is a common prefix or suffix. */
+export interface EditRegion {
+  /** Where the edit starts, in both texts. */
+  at: number;
+  /** Characters of `a` replaced, and characters of `b` that replaced them. */
+  removed: number;
+  inserted: number;
+}
+
+export function editRegion(a: string, b: string): EditRegion {
+  const max = Math.min(a.length, b.length);
+  let at = 0;
+  while (at < max && a[at] === b[at]) at++;
+  let tail = 0;
+  while (tail < max - at && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  return { at, removed: a.length - tail - at, inserted: b.length - tail - at };
+}
+
+/** Share of `before` that survives in `after` (0..1), counting the unchanged prefix and suffix. */
+export function retainedShare(before: string, after: string): number {
+  if (!before.length) return 1;
+  return (before.length - editRegion(before, after).removed) / before.length;
+}
+
+/** Below this share of retained text, one edit counts as starting a new prompt. */
+export const REPLACE_BELOW = 0.3;
+
+/**
+ * Whether a text change ends the current session and whether a new one starts.
+ * Clearing ends it; replacing most of the text in one edit ends it and starts a new one;
+ * after a send or copy, the next edit starts a new one even if the text is reused.
+ */
+export function sessionChange(
+  session: PromptSession | undefined,
+  before: string,
+  after: string,
+): { end?: SessionEnd; start: boolean } {
+  let end: SessionEnd | undefined;
+  if (session && !session.endedBy) {
+    if (!after.trim()) end = "clear";
+    else if (retainedShare(before, after) < REPLACE_BELOW) end = "replace";
+  }
+  const active = session && !session.endedBy && !end;
+  return { end, start: !!after.trim() && !active };
+}
