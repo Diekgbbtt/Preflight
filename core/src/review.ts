@@ -35,7 +35,8 @@ const RUBRIC = `A good prompt for a coding agent states:
 
 const GAP_SHAPE = `{"gaps":[{"category":"target"|"action"|"scope"|"done"|"clarity"|"risk"|"privacy","priority":"important"|"advisory"|"blocking","quote":"exact words from the prompt the gap is about, or empty","question":"what to ask the user, max 6 words, e.g. Which page?","reason":"why the agent needs this, one sentence, max 15 words","suggestion":"words the user could add, or empty"}]}`;
 
-const PRIORITIES = `Priority: "important" when the agent would have to guess, "advisory" when it is only nice to have. Use "blocking" only for secrets or passwords in the prompt.`;
+const PRIORITIES = `Priority: "important" when the agent would have to guess, "advisory" when it is only nice to have. Use "blocking" only for secrets or passwords in the prompt.
+Report only genuinely new gaps that would change how a coding agent understands the task. Never ask again, in any wording, about something the user already answered or dismissed in this session.`;
 
 const QUICK_SYSTEM = `You review prompts that a user is about to send to an AI coding agent. You do not do the task.
 ${RUBRIC}
@@ -59,6 +60,8 @@ export interface ReviewContext {
   analysis?: Analysis;
   /** Short project facts, e.g. file names or recently changed files. */
   projectNotes?: string;
+  /** What was already asked in this prompt session, from sessionSummary(). */
+  history?: string;
 }
 
 export function buildReviewRequest(prompt: string, mode: ReviewMode, model: string, ctx: ReviewContext = {}): ModelRequest {
@@ -72,6 +75,7 @@ export function buildReviewRequest(prompt: string, mode: ReviewMode, model: stri
     );
   }
   if (ctx.projectNotes) parts.push(`Project context:\n${ctx.projectNotes}`);
+  if (ctx.history) parts.push(`Already settled with the user in this session (do not ask about these again):\n${ctx.history}`);
   return { system: mode === "quick" ? QUICK_SYSTEM : DEEP_SYSTEM, user: parts.join("\n\n"), model };
 }
 

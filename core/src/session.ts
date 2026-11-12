@@ -218,3 +218,14 @@ export function planReview(s: PromptSession, last: Reviewed | undefined, text: s
 export function reviewedGaps(last: Reviewed, text: string, source: "quick" | "deep"): Gap[] {
   return shiftGaps(modelGaps(last.text, last.gaps, source, last.revision), last.text, text);
 }
+
+/** Answered and dismissed questions of the session, one per line, for model requests. Empty when there are none. */
+export function sessionSummary(s: PromptSession | undefined): string {
+  if (!s) return "";
+  const lines: string[] = [];
+  for (const r of s.gapHistory.values()) {
+    if (r.status === "answered") lines.push(`- ${r.question} Answer: ${r.answer ?? "(added to the prompt)"}`);
+    else if (r.status === "dismissed") lines.push(`- ${r.question} (dismissed by the user)`);
+  }
+  return lines.join("\n");
+}

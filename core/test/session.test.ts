@@ -14,6 +14,8 @@ import {
   planReview,
   reviewedGaps,
   type Reviewed,
+  sessionSummary,
+  buildReviewRequest,
   questionOverlap,
   recordGaps,
   textHash,
@@ -164,5 +166,26 @@ describe("planReview", () => {
     const [g] = reviewedGaps(last, edited, "quick");
     expect(g.id).toBe("quick:3:0");
     expect(edited.slice(g.span!.start, g.span!.end)).toBe("faster");
+  });
+});
+
+describe("history in model requests", () => {
+  it("summarizes answered and dismissed questions, not open ones", () => {
+    const s = newSession("s", 0);
+    recordGaps(s, [gap("Which test should pass?", "done")], 1);
+    markGap(s, gap("Which page?"), "answered", "the dashboard");
+    markGap(s, gap("Plan first?", "risk"), "dismissed");
+    expect(sessionSummary(s)).toBe("- Which page? Answer: the dashboard\n- Plan first? (dismissed by the user)");
+    expect(sessionSummary(undefined)).toBe("");
+  });
+
+  it("puts the summary and the no-re-asking rule into quick and deep requests", () => {
+    for (const mode of ["quick", "deep"] as const) {
+      const req = buildReviewRequest("Improve the app", mode, "m", { history: "- Which page? Answer: the dashboard" });
+      expect(req.user).toContain("Already settled with the user");
+      expect(req.user).toContain("Which page? Answer: the dashboard");
+      expect(req.system).toContain("Never ask again");
+      expect(buildReviewRequest("Improve the app", mode, "m").user).not.toContain("Already settled");
+    }
   });
 });

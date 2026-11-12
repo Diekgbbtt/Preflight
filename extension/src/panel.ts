@@ -6,6 +6,7 @@ import {
   claudeCliRunner,
   combineGaps,
   mergeAnswers,
+  markGap,
   newSession,
   planReview,
   recordRevision,
@@ -13,6 +14,7 @@ import {
   reviewedGaps,
   ruleGaps,
   sessionChange,
+  sessionSummary,
   textHash,
   type PromptSession,
   type Reviewed,
@@ -285,7 +287,7 @@ export class PromptPanel implements vscode.WebviewViewProvider {
         mode,
         this.runner(),
         this.model(mode),
-        { analysis: this.analysis, projectNotes: this.workspace.notes() },
+        { analysis: this.analysis, projectNotes: this.workspace.notes(), history: sessionSummary(session) },
         ctrl.signal,
       );
       this.draft[mode === "quick" ? "quickReviews" : "deepReviews"]++;
@@ -323,6 +325,7 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     if (!g) return;
     this.dismissed.add(dismissKey(g));
     this.draft.dismissed.set(g.id, g);
+    if (this.session) markGap(this.session, g, "dismissed", undefined, this.revision);
     this.postGaps();
   }
 
@@ -348,7 +351,10 @@ export class PromptPanel implements vscode.WebviewViewProvider {
       );
       this.count(r.usage);
       if (revision !== this.revision) throw new Error("The prompt changed while adding your answers. Try again.");
-      for (const a of filled) this.draft.answered.set(a.gap.id, a.gap);
+      for (const a of filled) {
+        this.draft.answered.set(a.gap.id, a.gap);
+        if (this.session) markGap(this.session, a.gap, "answered", a.answer, revision);
+      }
       this.base ??= text;
       this.draft.mergedAnswers = true;
       this.pendingMerge = r.text;
