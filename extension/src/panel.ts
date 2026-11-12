@@ -52,6 +52,23 @@ const newDraft = (): Draft => ({
   dismissed: new Map(),
 });
 
+export interface Meter {
+  segments: number;
+  label: string;
+  tone: "blocked" | "weak" | "strong";
+}
+
+/** Strength from open gaps: blocking empties it, each open important gap costs a segment, advisory gaps never count. */
+export function meterFor(gaps: Gap[]): Meter {
+  const open = gaps.filter((g) => g.status === "open");
+  if (open.some((g) => g.priority === "blocking")) return { segments: 0, label: "Fix before sending", tone: "blocked" };
+  const important = open.filter((g) => g.priority === "important").length;
+  if (important === 0) return { segments: 4, label: "Strong prompt", tone: "strong" };
+  if (important === 1) return { segments: 3, label: "Almost there", tone: "weak" };
+  if (important === 2) return { segments: 2, label: "Getting there", tone: "weak" };
+  return { segments: 1, label: "Weak prompt", tone: "weak" };
+}
+
 /** Dismissals hold for this id on these exact words, so an edited span asks again. */
 const dismissKey = (g: Gap) => `${g.id}\u0000${g.span?.text ?? ""}`;
 
@@ -172,8 +189,10 @@ export class PromptPanel implements vscode.WebviewViewProvider {
   }
 
   private postGaps(): void {
+    const gaps = this.gaps();
     const added = this.base === undefined ? [] : addedRanges(this.base, this.text);
-    this.post({ type: "gaps", revision: this.revision, gaps: this.gaps(), added });
+    const meter = this.text.trim() ? meterFor(gaps) : null;
+    this.post({ type: "gaps", revision: this.revision, gaps, meter, added });
   }
 
   // Tier 1: rules on every change. Tier 2: small model when typing pauses.
