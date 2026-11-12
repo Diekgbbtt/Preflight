@@ -214,9 +214,10 @@ export function planReview(s: PromptSession, last: Reviewed | undefined, text: s
   return cached ? { kind: "cached", gaps: cached } : { kind: "review" };
 }
 
-/** The gaps of a review, as they apply to the current text. */
-export function reviewedGaps(last: Reviewed, text: string, source: "quick" | "deep"): Gap[] {
-  return shiftGaps(modelGaps(last.text, last.gaps, source, last.revision), last.text, text);
+/** The gaps of a review as they apply to the current text, without questions the session already settled. */
+export function reviewedGaps(last: Reviewed, text: string, source: "quick" | "deep", session?: PromptSession): Gap[] {
+  const gaps = shiftGaps(modelGaps(last.text, last.gaps, source, last.revision), last.text, text);
+  return session ? gaps.filter((g) => !isSettled(session, g)) : gaps;
 }
 
 /** Answered and dismissed questions of the session, one per line, for model requests. Empty when there are none. */

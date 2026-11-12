@@ -9,6 +9,7 @@ import {
   markGap,
   newSession,
   planReview,
+  recordGaps,
   recordRevision,
   review,
   reviewedGaps,
@@ -207,7 +208,7 @@ export class PromptPanel implements vscode.WebviewViewProvider {
   private gaps(): Gap[] {
     const model = (mode: ReviewMode) => {
       const r = this.reviewed[mode];
-      return r ? reviewedGaps(r, this.text, mode) : [];
+      return r ? reviewedGaps(r, this.text, mode, this.session) : []; // settled questions are not asked again
     };
     return combineGaps(this.rules, model("quick"), model("deep")).map((g) =>
       this.dismissed.has(dismissKey(g)) ? { ...g, status: "dismissed" } : g,
@@ -216,6 +217,7 @@ export class PromptPanel implements vscode.WebviewViewProvider {
 
   private postGaps(): void {
     const gaps = this.gaps();
+    if (this.session && !this.session.endedBy) recordGaps(this.session, gaps.filter((g) => g.status === "open"), this.revision);
     const added = this.base === undefined ? [] : addedRanges(this.base, this.text);
     const meter = this.text.trim() ? meterFor(gaps) : null;
     this.post({ type: "gaps", revision: this.revision, gaps, meter, added });

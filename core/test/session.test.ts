@@ -189,3 +189,21 @@ describe("history in model requests", () => {
     }
   });
 });
+
+describe("settled gaps after a re-review", () => {
+  it("does not show a model gap again once its question was answered or dismissed", () => {
+    const s = newSession("s", 0);
+    markGap(s, gap("Which page should change?", "target"), "answered", "the dashboard");
+    markGap(s, gap("Done when?", "done", "rules"), "dismissed");
+    const text = "Improve the dashboard load time";
+    const rereview: Reviewed = {
+      text, revision: 9, gaps: [
+        { category: "target", priority: "important", quote: "dashboard", question: "Which page needs to change?", reason: "r" },
+        { category: "done", priority: "important", quote: "", question: "When is it done?", reason: "r" },
+        { category: "scope", priority: "important", quote: "", question: "Mobile too?", reason: "r" },
+      ],
+    };
+    expect(reviewedGaps(rereview, text, "quick", s).map((g) => g.question)).toEqual(["Mobile too?"]);
+    expect(reviewedGaps(rereview, text, "quick").length).toBe(3); // no session, no filter
+  });
+});
