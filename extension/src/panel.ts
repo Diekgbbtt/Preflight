@@ -26,7 +26,7 @@ import {
   type ReviewMode,
 } from "@prompt-preflight/core";
 import { sendPrompt } from "./send";
-import { gapCounts, type StudyLog } from "./studyLog";
+import { gapCounts, sessionEntry, type StudyLog } from "./studyLog";
 import type { WorkspaceIndex } from "./workspace";
 
 type FromWebview =
@@ -336,6 +336,9 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     if (!s || s.endedBy) return;
     s.endedBy = by;
     s.endedAt = Date.now();
+    // runs before the ending edit is applied, so the gaps and meter are those of the last prompt
+    const meter = this.text.trim() ? meterFor(this.gaps()) : null;
+    void this.log.write("session", sessionEntry(s, meter));
   }
 
   private dismiss(id: string): void {
