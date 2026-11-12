@@ -3,10 +3,13 @@ import {
   addedRanges,
   analyze,
   claudeCliRunner,
+  combineGaps,
   mergeAnswers,
+  modelGaps,
   review,
+  ruleGaps,
   type Analysis,
-  type Answer,
+  type Gap,
   type Review,
   type ReviewMode,
 } from "@prompt-preflight/core";
@@ -19,7 +22,8 @@ type FromWebview =
   | { type: "input"; text: string }
   | { type: "deepReview" }
   | { type: "cancel" }
-  | { type: "merge"; answers: Answer[] }
+  | { type: "dismiss"; id: string }
+  | { type: "answer"; answers: { id: string; text: string }[] }
   | { type: "send" };
 
 /** Per-draft numbers for the study log; reset after each send. */
@@ -32,9 +36,24 @@ interface Draft {
   outputTokens: number;
   costUsd: number;
   mergedAnswers: boolean;
+  /** Gaps the user answered or dismissed in this draft, by id. */
+  answered: Map<string, Gap>;
+  dismissed: Map<string, Gap>;
 }
 
-const newDraft = (): Draft => ({ quickReviews: 0, deepReviews: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, mergedAnswers: false });
+const newDraft = (): Draft => ({
+  quickReviews: 0,
+  deepReviews: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  costUsd: 0,
+  mergedAnswers: false,
+  answered: new Map(),
+  dismissed: new Map(),
+});
+
+/** Dismissals hold for this id on these exact words, so an edited span asks again. */
+const dismissKey = (g: Gap) => `${g.id}\u0000${g.span?.text ?? ""}`;
 
 export class PromptPanel implements vscode.WebviewViewProvider {
   static readonly viewId = "promptPreflight.panel";
@@ -42,11 +61,18 @@ export class PromptPanel implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private text = "";
   private analysis?: Analysis;
+  /** Increments on every change to the prompt text, merges included. Model results for older revisions are discarded. */
+  private revision = 0;
+  private rules: Gap[] = [];
+  private models: Record<ReviewMode, Gap[]> = { quick: [], deep: [] };
+  /** Revision the last quick review was started for, so it runs once per text. */
+  private quickRevision = -1;
+  /** Dismissed gaps for the rest of the session. */
+  private dismissed = new Set<string>();
   /** The prompt before the first merge in this draft; text added since is shown as the user's. */
   private base?: string;
   private draft = newDraft();
   private pauseTimer?: NodeJS.Timeout;
-  private lastQuickText = "";
   private running: Partial<Record<ReviewMode | "merge", AbortController>> = {};
 
   constructor(
@@ -69,7 +95,6 @@ export class PromptPanel implements vscode.WebviewViewProvider {
 
   /** Put text into the prompt box, e.g. from an editor selection. */
   setText(text: string): void {
-    this.text = text;
     this.base = undefined;
     this.post({ type: "setText", text });
     this.onInput(text);
@@ -112,9 +137,11 @@ export class PromptPanel implements vscode.WebviewViewProvider {
         break;
       case "cancel":
         this.running.deep?.abort();
-        this.post({ type: "cancelled", mode: "deep" });
         break;
-      case "merge":
+      case "dismiss":
+        this.dismiss(m.id);
+        break;
+      case "answer":
         await this.merge(m.answers);
         break;
       case "send":
@@ -137,36 +164,56 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     this.draft.costUsd += usage.costUsd;
   }
 
-  // Tier 1: rules on every keystroke. Tier 2: small model when typing pauses.
+  /** All gaps for the current revision, with session dismissals applied. */
+  private gaps(): Gap[] {
+    return combineGaps(this.rules, this.models.quick, this.models.deep).map((g) =>
+      this.dismissed.has(dismissKey(g)) ? { ...g, status: "dismissed" } : g,
+    );
+  }
+
+  private postGaps(): void {
+    const added = this.base === undefined ? [] : addedRanges(this.base, this.text);
+    this.post({ type: "gaps", revision: this.revision, gaps: this.gaps(), added });
+  }
+
+  // Tier 1: rules on every change. Tier 2: small model when typing pauses.
   private onInput(text: string): void {
-    this.text = text;
+    if (text !== this.text) {
+      this.revision++;
+      this.text = text;
+      // model gaps belong to the old text; stop work that would produce more of them
+      this.models = { quick: [], deep: [] };
+      for (const ctrl of Object.values(this.running)) ctrl?.abort();
+    }
     if (!text.trim()) this.base = undefined;
     if (text.trim() && this.draft.startedAt === undefined) this.draft.startedAt = Date.now();
     this.analysis = analyze(text, this.workspace.context());
     if (this.draft.firstScore === undefined && text.trim().split(/\s+/).length >= 3) {
       this.draft.firstScore = this.analysis.score;
     }
-    const added = this.base === undefined ? [] : addedRanges(this.base, text);
-    this.post({ type: "analysis", text, analysis: this.analysis, added });
+    this.rules = ruleGaps(text, this.analysis);
+    this.postGaps();
 
     clearTimeout(this.pauseTimer);
-    this.running.quick?.abort();
     if (!this.cfg().get<boolean>("quickReviewOnPause", true)) return;
     const words = text.trim().split(/\s+/).filter(Boolean).length;
-    if (words < 5 || this.analysis.level === "trivial" || text === this.lastQuickText) return;
+    if (words < 5 || this.analysis.level === "trivial" || this.quickRevision === this.revision) return;
     this.pauseTimer = setTimeout(() => void this.runReview("quick"), this.cfg().get<number>("pauseMs", 1500));
   }
 
-  // Tier 3: clarifying questions on request.
+  // Tier 2 and 3. Results count only for the revision they were asked about.
   private async runReview(mode: ReviewMode): Promise<void> {
     const text = this.text;
+    const revision = this.revision;
     if (!text.trim()) return;
     this.running[mode]?.abort();
     const ctrl = new AbortController();
     this.running[mode] = ctrl;
-    if (mode === "quick") this.lastQuickText = text;
+    if (mode === "quick") this.quickRevision = revision;
     this.post({ type: "reviewing", mode });
 
+    let error: string | undefined;
+    let empty = false;
     try {
       const r: Review = await review(
         text,
@@ -178,34 +225,56 @@ export class PromptPanel implements vscode.WebviewViewProvider {
       );
       this.draft[mode === "quick" ? "quickReviews" : "deepReviews"]++;
       this.count(r.usage);
-      this.post({ type: "review", mode, text, review: r });
+      if (revision !== this.revision) return; // the text changed meanwhile
+      this.models[mode] = modelGaps(text, r.gaps, mode, revision);
+      this.postGaps();
+      empty = r.gaps.length === 0;
     } catch (e) {
-      if (ctrl.signal.aborted) return; // superseded by newer input or cancelled
-      if (mode === "quick") this.lastQuickText = ""; // allow a retry
-      this.post({ type: "review", mode, text, error: (e as Error).message });
+      if (!ctrl.signal.aborted && revision === this.revision) error = (e as Error).message;
     } finally {
       if (this.running[mode] === ctrl) delete this.running[mode];
+      this.post({ type: "reviewDone", mode, error, empty });
     }
   }
 
+  private dismiss(id: string): void {
+    const g = this.gaps().find((x) => x.id === id);
+    if (!g) return;
+    this.dismissed.add(dismissKey(g));
+    this.draft.dismissed.set(g.id, g);
+    this.postGaps();
+  }
+
   // The user's answers, written into the prompt. Only on their request; the webview applies it undoably.
-  private async merge(answers: Answer[]): Promise<void> {
+  private async merge(answers: { id: string; text: string }[]): Promise<void> {
     const text = this.text;
-    const filled = answers.filter((a) => a.answer.trim());
+    const revision = this.revision;
+    const byId = new Map(this.gaps().map((g) => [g.id, g]));
+    const filled = answers
+      .map((a) => ({ gap: byId.get(a.id), answer: a.text.trim() }))
+      .filter((a): a is { gap: Gap; answer: string } => !!a.gap && !!a.answer);
     if (!text.trim() || filled.length === 0) return;
     this.running.merge?.abort();
     const ctrl = new AbortController();
     this.running.merge = ctrl;
     try {
-      const r = await mergeAnswers(text, filled, this.runner(), this.model("quick"), ctrl.signal);
+      const r = await mergeAnswers(
+        text,
+        filled.map((a) => ({ question: `${a.gap.question} (${a.gap.reason})`, answer: a.answer })),
+        this.runner(),
+        this.model("quick"),
+        ctrl.signal,
+      );
       this.count(r.usage);
-      if (this.text !== text) throw new Error("The prompt changed while adding your answers. Try again.");
+      if (revision !== this.revision) throw new Error("The prompt changed while adding your answers. Try again.");
+      for (const a of filled) this.draft.answered.set(a.gap.id, a.gap);
       this.base ??= text;
       this.draft.mergedAnswers = true;
       this.post({ type: "merged", text: r.text });
     } catch (e) {
-      if (ctrl.signal.aborted) return;
-      this.post({ type: "mergeError", error: (e as Error).message });
+      const changed = revision !== this.revision;
+      if (ctrl.signal.aborted && !changed) return;
+      this.post({ type: "mergeError", error: changed ? "The prompt changed while adding your answers. Try again." : (e as Error).message });
     } finally {
       if (this.running.merge === ctrl) delete this.running.merge;
     }
@@ -252,7 +321,6 @@ export class PromptPanel implements vscode.WebviewViewProvider {
       preflightCostUsd: d.costUsd,
     });
     this.draft = newDraft();
-    this.lastQuickText = "";
     this.setText("");
     this.post({ type: "sent" });
   }
