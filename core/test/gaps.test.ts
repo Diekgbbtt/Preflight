@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { analyze, combineGaps, modelGaps, resolveQuote, ruleGaps, type Gap, type ModelGap } from "../src";
+import { analyze, combineGaps, modelGaps, parseReview, resolveQuote, ruleGaps, type Gap, type ModelGap } from "../src";
 
 const rules = (p: string) => ruleGaps(p, analyze(p));
 
@@ -103,5 +103,28 @@ describe("combineGaps", () => {
 
   it("keeps model gaps without a span", () => {
     expect(combineGaps([g("rules:v", "rules", "Improve")], [g("quick:1:0", "quick")]).length).toBe(2);
+  });
+});
+
+describe("all three stages into one list", () => {
+  const prompt = "Improve the app's performance.";
+  const reply = (gaps: object[]) => ({ text: JSON.stringify({ gaps }), inputTokens: 0, outputTokens: 0, costUsd: 0 });
+
+  it("combines rules, quick and deep output with rules winning on shared words", () => {
+    const rulesOut = ruleGaps(prompt, analyze(prompt));
+    const quick = parseReview("quick", reply([
+      { category: "action", priority: "important", quote: "Improve", question: "Improve how?", reason: "Vague verb." },
+      { category: "done", priority: "advisory", quote: "", question: "How fast?", reason: "No target time." },
+    ]));
+    const deep = parseReview("deep", reply([
+      { category: "target", priority: "important", quote: "the APP", question: "Which screen?", reason: "The app has many screens.", suggestion: "the dashboard" },
+    ]));
+    const all = combineGaps(rulesOut, modelGaps(prompt, quick.gaps, "quick", 4), modelGaps(prompt, deep.gaps, "deep", 4));
+
+    expect(all.filter((g) => g.span?.text === "Improve").map((g) => g.source)).toEqual(["rules"]);
+    expect(all.find((g) => g.id === "quick:4:1")).toMatchObject({ category: "done", priority: "advisory", span: undefined });
+    expect(all.find((g) => g.id === "deep:4:0")).toMatchObject({ span: { start: 8, end: 15, text: "the app" }, suggestion: "the dashboard" });
+    expect(new Set(all.map((g) => g.id)).size).toBe(all.length);
+    expect(all.every((g) => g.status === "open")).toBe(true);
   });
 });
