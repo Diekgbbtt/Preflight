@@ -96,6 +96,8 @@ export class PromptPanel implements vscode.WebviewViewProvider {
   private rules: Gap[] = [];
   /** The last review per model and the text it was made for; shown on later text while edits stay small. */
   private reviewed: Partial<Record<ReviewMode, Reviewed>> = {};
+  /** Gaps that made the meter drop when the last review arrived; labelled "New" until the next review. */
+  private newIds = new Set<string>();
   /** The prompt being worked on, from first keystroke to send, copy, clear or replace. */
   private session?: PromptSession;
   /** Text a merge is about to produce, so its revision is recorded as "merge". */
@@ -220,7 +222,8 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     if (this.session && !this.session.endedBy) recordGaps(this.session, gaps.filter((g) => g.status === "open"), this.revision);
     const added = this.base === undefined ? [] : addedRanges(this.base, this.text);
     const meter = this.text.trim() ? meterFor(gaps) : null;
-    this.post({ type: "gaps", revision: this.revision, gaps, meter, added });
+    const newIds = gaps.filter((g) => g.status === "open" && this.newIds.has(g.id)).map((g) => g.id);
+    this.post({ type: "gaps", revision: this.revision, gaps, meter, added, newIds });
   }
 
   // Tier 1: rules on every change. Tier 2: small model when typing pauses.
@@ -263,8 +266,7 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     if (words < 5 || this.analysis.level === "trivial") return;
     const plan = planReview(s, this.reviewed.quick, text);
     if (plan.kind === "cached") {
-      this.reviewed.quick = { text, revision: this.revision, gaps: plan.gaps };
-      this.postGaps();
+      this.applyReview("quick", { text, revision: this.revision, gaps: plan.gaps });
     } else if (plan.kind === "review") {
       this.pauseTimer = setTimeout(() => void this.runReview("quick"), this.cfg().get<number>("pauseMs", 1500));
     }
@@ -296,8 +298,7 @@ export class PromptPanel implements vscode.WebviewViewProvider {
       this.count(r.usage);
       if (mode === "quick") session?.reviewCache.set(textHash(text), r.gaps); // worth keeping even if the text moved on
       if (revision !== this.revision) return; // the text changed meanwhile
-      this.reviewed[mode] = { text, revision, gaps: r.gaps };
-      this.postGaps();
+      this.applyReview(mode, { text, revision, gaps: r.gaps });
       empty = r.gaps.length === 0;
     } catch (e) {
       if (!ctrl.signal.aborted && revision === this.revision) error = (e as Error).message;
@@ -307,11 +308,26 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     }
   }
 
+  /** Show a review result. If it lowers the meter, label the gaps that did it as new. */
+  private applyReview(mode: ReviewMode, result: Reviewed): void {
+    const open = (gaps: Gap[]) => gaps.filter((g) => g.status === "open");
+    const before = open(this.gaps());
+    this.reviewed[mode] = result;
+    const after = open(this.gaps());
+    this.newIds = new Set();
+    if (meterFor(after).segments < meterFor(before).segments) {
+      const had = new Set(before.map((g) => g.id));
+      for (const g of after) if (g.priority !== "advisory" && !had.has(g.id)) this.newIds.add(g.id);
+    }
+    this.postGaps();
+  }
+
   private startSession(): void {
     this.session = newSession(randomUUID(), Date.now());
     // nothing carries over from the previous prompt
     this.dismissed.clear();
     this.reviewed = {};
+    this.newIds = new Set();
     this.base = undefined;
   }
 

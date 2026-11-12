@@ -141,6 +141,18 @@ button.pill:hover:not(:disabled) { filter: brightness(.96); }
 button.pill:disabled { opacity: .55; cursor: default; }
 .pill[aria-busy="true"] { animation: breathe 1.4s ease-in-out infinite; }
 .enter { animation: rise .6s var(--ease) both; }
+/* "New": this gap arrived with the review that lowered the meter */
+.pill.new::after, .qcard.new .q::after {
+  content: "New";
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--model-ink);
+  font-size: .78em;
+  font-weight: 600;
+  vertical-align: 1px;
+}
 .pill.leave { opacity: 0; transform: scale(.94); transition: opacity .25s var(--ease), transform .25s var(--ease); pointer-events: none; }
 
 /* "Ask me" grows out of the footer instead of popping in (as in the teaser) */

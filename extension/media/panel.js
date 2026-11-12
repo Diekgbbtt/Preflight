@@ -29,11 +29,11 @@
    * @typedef {{start:number,end:number,text:string}} Span
    * @typedef {{id:string,category:string,priority:"blocking"|"important"|"advisory",span?:Span,question:string,reason:string,suggestion?:string,source:"rules"|"quick"|"deep",status:"open"|"answered"|"dismissed"}} Gap
    * @typedef {{segments:number,label:string,tone:string}} Meter
-   * @typedef {{gaps:Gap[],meter:Meter|null,added:{start:number,end:number}[]}} View
+   * @typedef {{gaps:Gap[],meter:Meter|null,added:{start:number,end:number}[],newIds:string[]}} View  newIds: gaps that just lowered the meter
    */
 
   // The latest gaps from the host, and the ones on screen. The screen only changes when typing pauses.
-  /** @type {View} */ let latest = { gaps: [], meter: null, added: [] };
+  /** @type {View} */ let latest = { gaps: [], meter: null, added: [], newIds: [] };
   /** @type {View} */ let shown = latest;
   /** @type {Set<string>} */ const shownMarks = new Set(); // marks already on screen, so only new ones animate
   let typing = false;
@@ -122,6 +122,7 @@
         el = made;
       }
       el.textContent = g.question;
+      el.classList.toggle("new", shown.newIds.includes(g.id));
       el.title = g.category === "privacy" ? "Select it in the prompt" : g.reason;
       const want = prev ? prev.nextElementSibling : pillsEl.firstElementChild;
       if (want !== el) pillsEl.insertBefore(el, want);
@@ -221,6 +222,7 @@
       let card = cards().find((c) => c.dataset.id === id);
       if (!card) {
         card = makeCard(g, delay);
+        card.classList.toggle("new", shown.newIds.includes(g.id));
         delay += 0.12;
         grid.appendChild(card);
       }
@@ -235,7 +237,11 @@
   /** Cards follow the gaps on screen: a gap that is gone or dismissed takes its card with it; new deep gaps open as cards. */
   function syncCards() {
     const live = new Set(shown.gaps.filter(open).map((g) => g.id));
-    for (const c of cards()) if (!live.has(/** @type {string} */ (c.dataset.id))) c.remove();
+    for (const c of cards()) {
+      const id = /** @type {string} */ (c.dataset.id);
+      if (!live.has(id)) c.remove();
+      else c.classList.toggle("new", shown.newIds.includes(id));
+    }
     if (cards().length === 0) toggle(qWrap, false);
     const deep = shown.gaps.filter((g) => open(g) && g.source === "deep" && !cards().some((c) => c.dataset.id === g.id));
     if (deep.length) openCards(deep.map((g) => g.id), cards().length === 0);
@@ -320,7 +326,7 @@
     awaitingGaps = false; // typing again; wait for the pause instead
     if (!ta.value.trim()) {
       typing = false;
-      latest = shown = { gaps: [], meter: null, added: [] };
+      latest = shown = { gaps: [], meter: null, added: [], newIds: [] };
       closeCards();
       show();
       return;
@@ -353,7 +359,7 @@
         renderFooter();
         break;
       case "gaps":
-        latest = { gaps: m.gaps, meter: m.meter, added: m.added || [] };
+        latest = { gaps: m.gaps, meter: m.meter, added: m.added || [], newIds: m.newIds || [] };
         if (awaitingGaps) {
           awaitingGaps = false;
           settle();
