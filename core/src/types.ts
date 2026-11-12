@@ -50,6 +50,29 @@ export interface Analysis {
   skipped: boolean;
 }
 
+/** Which stage found a gap. */
+export type GapSource = "rules" | "quick" | "deep";
+export type GapStatus = "open" | "answered" | "dismissed";
+/** blocking: fix before sending (privacy only). important: counts against the meter. advisory: never does. */
+export type GapPriority = "blocking" | "important" | "advisory";
+
+/** One thing the prompt is missing, from any stage. The webview renders only these. */
+export interface Gap {
+  /** Stable identity, never derived from the display label. */
+  id: string;
+  category: Category;
+  priority: GapPriority;
+  span?: { start: number; end: number; text: string };
+  /** User-facing question or action, at most about six words, e.g. "Which file should change?". */
+  question: string;
+  /** One sentence on why it matters. */
+  reason: string;
+  /** Optional wording the user could add. */
+  suggestion?: string;
+  source: GapSource;
+  status: GapStatus;
+}
+
 /** What the checker may know about the user's project. All optional. */
 export interface WorkspaceContext {
   /** Whether a referenced path exists in the project. */
