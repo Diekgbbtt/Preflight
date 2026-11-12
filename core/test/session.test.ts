@@ -207,3 +207,32 @@ describe("settled gaps after a re-review", () => {
     expect(reviewedGaps(rereview, text, "quick").length).toBe(3); // no session, no filter
   });
 });
+
+describe("the reported problem: answer, merge, then a trivial edit", () => {
+  it("keeps settled questions away and does not re-review a trivial edit", () => {
+    const s = newSession("s", 0);
+    const v1 = "Improve the app's performance.";
+    const first: Reviewed = { text: v1, revision: 1, gaps: [{ category: "target", priority: "important", quote: "the app", question: "Which part of the app?", reason: "r" }] };
+    const [asked] = reviewedGaps(first, v1, "quick", s);
+    recordGaps(s, [asked], 1);
+    markGap(s, asked, "answered", "the dashboard, on first load", 1);
+
+    // the merge rewrites most words: a real change, so a new review is due
+    const v2 = "Improve the dashboard's first load to under one second.";
+    expect(sessionChange(s, v1, v2).end).toBeUndefined(); // same session
+    expect(planReview(s, first, v2)).toEqual({ kind: "review" });
+
+    // the new review re-asks the settled question in other words, plus one genuinely new gap
+    const second: Reviewed = {
+      text: v2, revision: 2, gaps: [
+        { category: "target", priority: "important", quote: "dashboard", question: "Which part of the app should be faster?", reason: "r" },
+        { category: "done", priority: "advisory", quote: "", question: "Measured on which device?", reason: "r" },
+      ],
+    };
+    expect(reviewedGaps(second, v2, "quick", s).map((g) => g.question)).toEqual(["Measured on which device?"]);
+
+    // adding a space or a full stop changes nothing: same gaps, no new model call
+    expect(planReview(s, second, v2 + " ")).toEqual({ kind: "keep" });
+    expect(planReview(s, second, v2.replace("second.", "second"))).toEqual({ kind: "keep" });
+  });
+});
