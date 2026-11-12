@@ -4,3 +4,4 @@ export { addedRanges } from "./diff";
 export { combineGaps, modelGaps, resolveQuote, ruleGaps, type ModelGap } from "./gaps";
 export * from "./review";
 export { claudeCliRunner, parseCliOutput } from "./claudeCli";
+export * from "./session";
