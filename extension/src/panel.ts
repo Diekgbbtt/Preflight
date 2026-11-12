@@ -14,7 +14,7 @@ import {
   type ReviewMode,
 } from "@prompt-preflight/core";
 import { sendPrompt } from "./send";
-import type { StudyLog } from "./studyLog";
+import { gapCounts, type StudyLog } from "./studyLog";
 import type { WorkspaceIndex } from "./workspace";
 
 type FromWebview =
@@ -317,6 +317,7 @@ export class PromptPanel implements vscode.WebviewViewProvider {
       if (choice !== "Send anyway") return;
       sentAnyway = true;
     }
+    const openGaps = this.gaps().filter((g) => g.status === "open");
     const target = await sendPrompt(text, this.workspace.root);
     const d = this.draft;
     await this.log.write("send", {
@@ -338,6 +339,11 @@ export class PromptPanel implements vscode.WebviewViewProvider {
       preflightInputTokens: d.inputTokens,
       preflightOutputTokens: d.outputTokens,
       preflightCostUsd: d.costUsd,
+      gaps: {
+        open: gapCounts(openGaps),
+        answered: gapCounts(d.answered.values()),
+        dismissed: gapCounts(d.dismissed.values()),
+      },
     });
     this.draft = newDraft();
     this.setText("");

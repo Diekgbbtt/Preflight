@@ -1,4 +1,15 @@
 import * as vscode from "vscode";
+import type { Gap, GapPriority, GapSource } from "@prompt-preflight/core";
+
+export type GapCounts = Record<GapSource, Record<GapPriority, number>>;
+
+/** Gaps counted by source and priority, e.g. { rules: { blocking: 0, important: 2, advisory: 1 }, ... }. */
+export function gapCounts(gaps: Iterable<Gap>): GapCounts {
+  const zero = () => ({ blocking: 0, important: 0, advisory: 0 });
+  const out: GapCounts = { rules: zero(), quick: zero(), deep: zero() };
+  for (const g of gaps) out[g.source][g.priority]++;
+  return out;
+}
 
 /** Appends one JSON line per event to a local file. Only active when the user opts in. */
 export class StudyLog {
