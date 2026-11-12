@@ -9,6 +9,11 @@ import {
   editRegion,
   retainedShare,
   sessionChange,
+  changedWords,
+  shiftGaps,
+  planReview,
+  reviewedGaps,
+  type Reviewed,
   questionOverlap,
   recordGaps,
   textHash,
@@ -104,5 +109,60 @@ describe("session boundaries", () => {
   it("finds the single edit between two texts", () => {
     expect(editRegion("the app is slow", "the dashboard is slow")).toEqual({ at: 4, removed: 3, inserted: 9 });
     expect(editRegion("same", "same")).toEqual({ at: 4, removed: 0, inserted: 0 });
+  });
+});
+
+describe("small edits", () => {
+  const before = "Make the dashboard load faster on first visit";
+
+  it("counts changed words, including partly edited ones", () => {
+    expect(changedWords(before, before)).toBe(0);
+    expect(changedWords(before, before + " ")).toBe(1); // touches the last word only
+    expect(changedWords(before, before.replace("dashboard", "dashbaord"))).toBe(1);
+    expect(changedWords(before, before.replace("faster", "much faster"))).toBe(2);
+    expect(changedWords(before, before.replace("on first visit", "after login for new users"))).toBe(5);
+  });
+
+  it("shifts spans after the edit and drops the ones it touched", () => {
+    const g = (id: string, text: string): Gap => ({
+      id, category: "target", priority: "important", source: "quick", status: "open", question: "q", reason: "r",
+      span: { start: before.indexOf(text), end: before.indexOf(text) + text.length, text },
+    });
+    const gaps = [g("a", "Make"), g("b", "dashboard"), g("c", "first visit"), { ...g("d", "x"), span: undefined }];
+    const after = before.replace("dashboard", "admin dashboard").replace("load", "loads");
+    const out = shiftGaps(gaps, before, after);
+    expect(out.map((x) => x.id)).toEqual(["a", "c", "d"]); // b sits inside the edited region
+    const c = out.find((x) => x.id === "c")!.span!;
+    expect(after.slice(c.start, c.end)).toBe("first visit");
+  });
+});
+
+describe("planReview", () => {
+  const text = "Make the dashboard load faster on first visit";
+  const last: Reviewed = { text, revision: 3, gaps: [{ category: "done", priority: "important", quote: "faster", question: "How fast?", reason: "r" }] };
+
+  it("keeps the last review for trivial and small edits", () => {
+    const s = newSession("s", 0);
+    expect(planReview(s, last, text + ".  ")).toEqual({ kind: "keep" });
+    expect(planReview(s, last, text.replace("faster", "much faster"))).toEqual({ kind: "keep" });
+  });
+
+  it("reviews again after 3 or more changed words, or with no review yet", () => {
+    const s = newSession("s", 0);
+    expect(planReview(s, last, text.replace("on first visit", "after login for new users"))).toEqual({ kind: "review" });
+    expect(planReview(s, undefined, text)).toEqual({ kind: "review" });
+  });
+
+  it("reuses a cached review of the same normalized text", () => {
+    const s = newSession("s", 0);
+    s.reviewCache.set(textHash(text), last.gaps);
+    expect(planReview(s, undefined, `  ${text}!`)).toEqual({ kind: "cached", gaps: last.gaps });
+  });
+
+  it("shows kept gaps on the edited text with their spans moved", () => {
+    const edited = "Please make the dashboard load faster on first visit";
+    const [g] = reviewedGaps(last, edited, "quick");
+    expect(g.id).toBe("quick:3:0");
+    expect(edited.slice(g.span!.start, g.span!.end)).toBe("faster");
   });
 });

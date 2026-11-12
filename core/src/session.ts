@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ModelGap } from "./gaps";
+import { modelGaps, type ModelGap } from "./gaps";
 import type { Category, Gap, GapPriority, GapSource, GapStatus } from "./types";
 
 export type RevisionKind = "typed" | "merge";
@@ -154,4 +154,67 @@ export function sessionChange(
   }
   const active = session && !session.endedBy && !end;
   return { end, start: !!after.trim() && !active };
+}
+
+// ---- when to review again
+
+/** A model review and the text it was made for. Its gaps are shown on later text while edits stay small. */
+export interface Reviewed {
+  text: string;
+  revision: number;
+  gaps: ModelGap[];
+}
+
+/** From this many changed words on, earlier model gaps are dropped and the prompt is reviewed again. */
+export const SMALL_EDIT_WORDS = 3;
+
+const wordCount = (s: string) => s.split(/\s+/).filter(Boolean).length;
+
+/** Words changed between two texts: the larger of words removed and words inserted, counting partly edited words. */
+export function changedWords(a: string, b: string): number {
+  const r = editRegion(a, b);
+  if (!r.removed && !r.inserted) return 0;
+  // widen the edit to whole words; prefix and suffix are the same in both texts
+  let start = r.at;
+  while (start > 0 && /\S/.test(a[start - 1])) start--;
+  let endA = r.at + r.removed;
+  let endB = r.at + r.inserted;
+  while (endA < a.length && /\S/.test(a[endA])) {
+    endA++;
+    endB++;
+  }
+  return Math.max(wordCount(a.slice(start, endA)), wordCount(b.slice(start, endB)));
+}
+
+/** Move gaps from `from` to `to`: gaps after the edit shift, gaps whose words were edited are dropped. */
+export function shiftGaps(gaps: Gap[], from: string, to: string): Gap[] {
+  const r = editRegion(from, to);
+  const oldEnd = r.at + r.removed;
+  const d = r.inserted - r.removed;
+  const out: Gap[] = [];
+  for (const g of gaps) {
+    if (!g.span || g.span.end <= r.at) out.push(g);
+    else if (g.span.start >= oldEnd) out.push({ ...g, span: { ...g.span, start: g.span.start + d, end: g.span.end + d } });
+  }
+  return out;
+}
+
+export type ReviewPlan = { kind: "keep" } | { kind: "cached"; gaps: ModelGap[] } | { kind: "review" };
+
+/**
+ * What to do with model feedback after the text changed:
+ * keep the last review when the text is the same once normalized or fewer than 3 words changed,
+ * reuse a cached review of this exact text, or review again.
+ */
+export function planReview(s: PromptSession, last: Reviewed | undefined, text: string): ReviewPlan {
+  if (last && (normalizeText(last.text) === normalizeText(text) || changedWords(last.text, text) < SMALL_EDIT_WORDS)) {
+    return { kind: "keep" };
+  }
+  const cached = s.reviewCache.get(textHash(text));
+  return cached ? { kind: "cached", gaps: cached } : { kind: "review" };
+}
+
+/** The gaps of a review, as they apply to the current text. */
+export function reviewedGaps(last: Reviewed, text: string, source: "quick" | "deep"): Gap[] {
+  return shiftGaps(modelGaps(last.text, last.gaps, source, last.revision), last.text, text);
 }

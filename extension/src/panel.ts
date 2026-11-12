@@ -6,13 +6,16 @@ import {
   claudeCliRunner,
   combineGaps,
   mergeAnswers,
-  modelGaps,
   newSession,
+  planReview,
   recordRevision,
   review,
+  reviewedGaps,
   ruleGaps,
   sessionChange,
+  textHash,
   type PromptSession,
+  type Reviewed,
   type SessionEnd,
   type Analysis,
   type Gap,
@@ -88,9 +91,8 @@ export class PromptPanel implements vscode.WebviewViewProvider {
   /** Increments on every change to the prompt text, merges included. Model results for older revisions are discarded. */
   private revision = 0;
   private rules: Gap[] = [];
-  private models: Record<ReviewMode, Gap[]> = { quick: [], deep: [] };
-  /** Revision the last quick review was started for, so it runs once per text. */
-  private quickRevision = -1;
+  /** The last review per model and the text it was made for; shown on later text while edits stay small. */
+  private reviewed: Partial<Record<ReviewMode, Reviewed>> = {};
   /** The prompt being worked on, from first keystroke to send, copy, clear or replace. */
   private session?: PromptSession;
   /** Text a merge is about to produce, so its revision is recorded as "merge". */
@@ -201,7 +203,11 @@ export class PromptPanel implements vscode.WebviewViewProvider {
 
   /** All gaps for the current revision, with session dismissals applied. */
   private gaps(): Gap[] {
-    return combineGaps(this.rules, this.models.quick, this.models.deep).map((g) =>
+    const model = (mode: ReviewMode) => {
+      const r = this.reviewed[mode];
+      return r ? reviewedGaps(r, this.text, mode) : [];
+    };
+    return combineGaps(this.rules, model("quick"), model("deep")).map((g) =>
       this.dismissed.has(dismissKey(g)) ? { ...g, status: "dismissed" } : g,
     );
   }
@@ -228,9 +234,14 @@ export class PromptPanel implements vscode.WebviewViewProvider {
       this.pendingMerge = undefined;
       this.revision++;
       this.text = text;
-      // model gaps belong to the old text; stop work that would produce more of them
-      this.models = { quick: [], deep: [] };
+      // running requests are for the old revision and would be discarded; stop them
       for (const ctrl of Object.values(this.running)) ctrl?.abort();
+      this.running = {};
+      // model gaps survive small edits; after 3+ changed words (or a new or empty prompt) they go
+      for (const mode of ["quick", "deep"] as const) {
+        const last = this.reviewed[mode];
+        if (last && (!this.session || !text.trim() || planReview(this.session, last, text).kind !== "keep")) delete this.reviewed[mode];
+      }
     }
     if (!text.trim()) this.base = undefined;
     if (text.trim() && this.draft.startedAt === undefined) this.draft.startedAt = Date.now();
@@ -242,21 +253,28 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     this.postGaps();
 
     clearTimeout(this.pauseTimer);
-    if (!this.cfg().get<boolean>("quickReviewOnPause", true)) return;
+    const s = this.session;
+    if (!s || s.endedBy || !this.cfg().get<boolean>("quickReviewOnPause", true) || this.running.quick) return;
     const words = text.trim().split(/\s+/).filter(Boolean).length;
-    if (words < 5 || this.analysis.level === "trivial" || this.quickRevision === this.revision) return;
-    this.pauseTimer = setTimeout(() => void this.runReview("quick"), this.cfg().get<number>("pauseMs", 1500));
+    if (words < 5 || this.analysis.level === "trivial") return;
+    const plan = planReview(s, this.reviewed.quick, text);
+    if (plan.kind === "cached") {
+      this.reviewed.quick = { text, revision: this.revision, gaps: plan.gaps };
+      this.postGaps();
+    } else if (plan.kind === "review") {
+      this.pauseTimer = setTimeout(() => void this.runReview("quick"), this.cfg().get<number>("pauseMs", 1500));
+    }
   }
 
   // Tier 2 and 3. Results count only for the revision they were asked about.
   private async runReview(mode: ReviewMode): Promise<void> {
     const text = this.text;
     const revision = this.revision;
+    const session = this.session;
     if (!text.trim()) return;
     this.running[mode]?.abort();
     const ctrl = new AbortController();
     this.running[mode] = ctrl;
-    if (mode === "quick") this.quickRevision = revision;
     this.post({ type: "reviewing", mode });
 
     let error: string | undefined;
@@ -272,8 +290,9 @@ export class PromptPanel implements vscode.WebviewViewProvider {
       );
       this.draft[mode === "quick" ? "quickReviews" : "deepReviews"]++;
       this.count(r.usage);
+      if (mode === "quick") session?.reviewCache.set(textHash(text), r.gaps); // worth keeping even if the text moved on
       if (revision !== this.revision) return; // the text changed meanwhile
-      this.models[mode] = modelGaps(text, r.gaps, mode, revision);
+      this.reviewed[mode] = { text, revision, gaps: r.gaps };
       this.postGaps();
       empty = r.gaps.length === 0;
     } catch (e) {
@@ -288,6 +307,7 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     this.session = newSession(randomUUID(), Date.now());
     // nothing carries over from the previous prompt
     this.dismissed.clear();
+    this.reviewed = {};
     this.base = undefined;
   }
 
