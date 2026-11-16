@@ -1,7 +1,18 @@
 // Ticket #37: language context provider tests. No vscode import here.
 import { describe, expect, it, vi } from "vitest";
 import { gitChangedFiles, gitStatus, rg, type ExecFileLike } from "../src/exec";
-import { buildDiagnosticsFragment, type LanguageDiagnostic } from "../src/languageContext";
+import {
+  buildDefinitionsFragment,
+  buildDiagnosticsFragment,
+  buildReferencesFragment,
+  buildSymbolsFragment,
+  buildWorkspaceSymbolsFragment,
+  type LanguageDiagnostic,
+  type LanguageLocation,
+  type LanguageSymbol,
+} from "../src/languageContext";
+
+const at = (line: number, character: number) => ({ line, character });
 
 const options = { cwd: "/repo", timeout: 5000, maxBuffer: 1024 * 1024 };
 
@@ -154,6 +165,133 @@ describe("buildDiagnosticsFragment", () => {
   it("records the folder uri in provenance", () => {
     const fragment = buildDiagnosticsFragment([diag("a.ts", 0)], "file:///w");
     expect(fragment?.provenance.folderUri).toBe("file:///w");
+  });
+});
+
+describe("buildSymbolsFragment", () => {
+  const sym = (name: string, kind = "function", extra: Partial<LanguageSymbol> = {}): LanguageSymbol => ({
+    name,
+    kind,
+    ...extra,
+  });
+
+  it("returns null for an empty list", () => {
+    expect(buildSymbolsFragment([])).toBeNull();
+  });
+
+  it("renders kind and name with the container name", () => {
+    const fragment = buildSymbolsFragment([
+      sym("makeThing", "function"),
+      sym("build", "method", { containerName: "Thing", uri: "file:///w/src/a.ts", path: "src/a.ts", range: { start: at(2, 0), end: at(9, 1) } }),
+    ]);
+    expect(fragment?.source).toBe("symbols");
+    expect(fragment?.priority).toBe(40);
+    expect(fragment?.content.split("\n")).toEqual(["function makeThing", "method Thing.build"]);
+    expect(fragment?.provenance).toEqual({
+      kind: "symbol",
+      truncated: false,
+      chars: fragment?.content.length,
+      folderUri: undefined,
+    });
+  });
+
+  it("sets provenance.path only when every symbol is in the same file", () => {
+    const one = buildSymbolsFragment([sym("a", "class", { path: "src/a.ts" })]);
+    expect(one?.provenance.path).toBe("src/a.ts");
+    const mixed = buildSymbolsFragment([sym("a", "class", { path: "src/a.ts" }), sym("b", "class", { path: "src/b.ts" })]);
+    expect(mixed?.provenance.path).toBeUndefined();
+  });
+
+  it("caps at 100 and marks truncated", () => {
+    const many = Array.from({ length: 101 }, (_, i) => sym(`s${i}`));
+    const fragment = buildSymbolsFragment(many);
+    expect(fragment?.content.split("\n")).toHaveLength(100);
+    expect(fragment?.provenance.truncated).toBe(true);
+  });
+});
+
+describe("buildWorkspaceSymbolsFragment", () => {
+  it("returns null for an empty list", () => {
+    expect(buildWorkspaceSymbolsFragment([])).toBeNull();
+  });
+
+  it("renders path:line:col, kind and name without a provenance range", () => {
+    const fragment = buildWorkspaceSymbolsFragment([
+      { name: "Thing", kind: "class", uri: "file:///w/src/a.ts", path: "src/a.ts", range: { start: at(0, 0), end: at(3, 1) } },
+      { name: "helper", kind: "function", uri: "file:///w/src/b.ts", path: "src/b.ts", range: { start: at(4, 2), end: at(6, 1) } },
+    ]);
+    expect(fragment?.source).toBe("workspace-symbols");
+    expect(fragment?.priority).toBe(37);
+    expect(fragment?.content.split("\n")).toEqual(["src/a.ts:1:1 class Thing", "src/b.ts:5:3 function helper"]);
+    expect(fragment?.provenance).toEqual({ kind: "workspace-symbol", truncated: false, chars: fragment?.content.length, folderUri: undefined });
+  });
+
+  it("caps at 50 and marks truncated", () => {
+    const many = Array.from({ length: 51 }, (_, i) => ({
+      name: `s${i}`,
+      kind: "function",
+      uri: `file:///w/f${i}.ts`,
+      path: `f${i}.ts`,
+      range: { start: at(0, 0), end: at(0, 1) },
+    }));
+    const fragment = buildWorkspaceSymbolsFragment(many);
+    expect(fragment?.content.split("\n")).toHaveLength(50);
+    expect(fragment?.provenance.truncated).toBe(true);
+  });
+});
+
+describe("buildDefinitionsFragment", () => {
+  const loc = (path: string, line: number, name?: string): LanguageLocation => ({
+    uri: `file:///w/${path}`,
+    path,
+    range: { start: at(line, 0), end: at(line, 3) },
+    ...(name !== undefined ? { name } : {}),
+  });
+
+  it("returns null for an empty list", () => {
+    expect(buildDefinitionsFragment([])).toBeNull();
+  });
+
+  it("renders one line per location with an optional name and no provenance range", () => {
+    const fragment = buildDefinitionsFragment([loc("src/a.ts", 9, "makeThing"), loc("src/b.ts", 2)]);
+    expect(fragment?.source).toBe("definitions");
+    expect(fragment?.priority).toBe(38);
+    expect(fragment?.content.split("\n")).toEqual(["src/a.ts:10:1 makeThing", "src/b.ts:3:1"]);
+    expect(fragment?.provenance).toEqual({ kind: "definition", truncated: false, chars: fragment?.content.length, folderUri: undefined });
+  });
+
+  it("caps at 20 and marks truncated", () => {
+    const many = Array.from({ length: 21 }, (_, i) => loc(`f${i}.ts`, i));
+    const fragment = buildDefinitionsFragment(many);
+    expect(fragment?.content.split("\n")).toHaveLength(20);
+    expect(fragment?.provenance.truncated).toBe(true);
+  });
+});
+
+describe("buildReferencesFragment", () => {
+  it("returns null for an empty list", () => {
+    expect(buildReferencesFragment([])).toBeNull();
+  });
+
+  it("renders one line per location with cap 50 and truncation", () => {
+    const loc = (path: string): LanguageLocation => ({
+      uri: `file:///w/${path}`,
+      path,
+      range: { start: at(0, 0), end: at(0, 1) },
+    });
+    const many = Array.from({ length: 51 }, (_, i) => loc(`f${i}.ts`));
+    const fragment = buildReferencesFragment(many);
+    expect(fragment?.source).toBe("references");
+    expect(fragment?.priority).toBe(39);
+    expect(fragment?.content.split("\n")).toEqual([
+      "f0.ts:1:1",
+      "f1.ts:1:1",
+      ...Array.from({ length: 48 }, (_, i) => `f${i + 2}.ts:1:1`),
+    ]);
+    expect(fragment?.content.split("\n")).toHaveLength(50);
+    expect(fragment?.provenance.truncated).toBe(true);
+    const single = buildReferencesFragment([loc("a.ts")]);
+    expect(single?.content).toBe("a.ts:1:1");
   });
 });
 

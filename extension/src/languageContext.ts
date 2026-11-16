@@ -192,3 +192,79 @@ export function buildDiagnosticsFragment(diagnostics: LanguageDiagnostic[], fold
     folderUri,
   });
 }
+
+/** A document-symbol line: `kind name` or `kind Container.name`. */
+function symbolLine(symbol: LanguageSymbol): string {
+  const name = symbol.containerName ? `${symbol.containerName}.${symbol.name}` : symbol.name;
+  return `${symbol.kind} ${name}`;
+}
+
+/** Renders one symbol line per document symbol, capped at MAX_DOCUMENT_SYMBOLS. */
+export function buildSymbolsFragment(symbols: LanguageSymbol[], folderUri?: string): ContextFragment | null {
+  if (symbols.length === 0) return null;
+  const included = symbols.slice(0, MAX_DOCUMENT_SYMBOLS);
+  // provenance.path only when every capped symbol is in the same known file.
+  const paths = new Set(included.map((symbol) => symbol.path));
+  const sharedPath = paths.size === 1 && paths.values().next().value !== undefined ? paths.values().next().value : undefined;
+  return buildFragment({
+    source: "symbols",
+    kind: "symbol",
+    lines: included.map(symbolLine),
+    capped: symbols.length > MAX_DOCUMENT_SYMBOLS,
+    folderUri,
+    ...(sharedPath !== undefined ? { path: sharedPath } : {}),
+  });
+}
+
+/** A workspace-symbol line: `path:line:col kind name`. */
+function workspaceSymbolLine(symbol: LanguageSymbol): string {
+  const name = symbol.containerName ? `${symbol.containerName}.${symbol.name}` : symbol.name;
+  const start = (symbol.range ?? { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }).start;
+  const location = symbol.path ? `${symbol.path}:${positionLabel(start)}` : symbol.uri ?? "?";
+  return `${location} ${symbol.kind} ${name}`;
+}
+
+/** Renders one workspace-symbol line per symbol, capped at MAX_WORKSPACE_SYMBOLS. */
+export function buildWorkspaceSymbolsFragment(symbols: LanguageSymbol[], folderUri?: string): ContextFragment | null {
+  if (symbols.length === 0) return null;
+  const included = symbols.slice(0, MAX_WORKSPACE_SYMBOLS);
+  return buildFragment({
+    source: "workspace-symbols",
+    kind: "workspace-symbol",
+    lines: included.map(workspaceSymbolLine),
+    capped: symbols.length > MAX_WORKSPACE_SYMBOLS,
+    folderUri,
+  });
+}
+
+/** A location line: `path:line:col` plus the target name when known. */
+function locationLine(location: LanguageLocation): string {
+  const base = `${location.path ?? location.uri}:${positionLabel(location.range.start)}`;
+  return location.name !== undefined ? `${base} ${location.name}` : base;
+}
+
+/** Renders one definition location per line, capped at MAX_DEFINITIONS. */
+export function buildDefinitionsFragment(definitions: LanguageLocation[], folderUri?: string): ContextFragment | null {
+  if (definitions.length === 0) return null;
+  const included = definitions.slice(0, MAX_DEFINITIONS);
+  return buildFragment({
+    source: "definitions",
+    kind: "definition",
+    lines: included.map(locationLine),
+    capped: definitions.length > MAX_DEFINITIONS,
+    folderUri,
+  });
+}
+
+/** Renders one reference location per line, capped at MAX_REFERENCES. */
+export function buildReferencesFragment(references: LanguageLocation[], folderUri?: string): ContextFragment | null {
+  if (references.length === 0) return null;
+  const included = references.slice(0, MAX_REFERENCES);
+  return buildFragment({
+    source: "references",
+    kind: "reference",
+    lines: included.map(locationLine),
+    capped: references.length > MAX_REFERENCES,
+    folderUri,
+  });
+}
