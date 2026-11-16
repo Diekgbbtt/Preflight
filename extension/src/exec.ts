@@ -32,6 +32,33 @@ export function git(cwd: string, args: string[], exec: ExecFileLike = defaultExe
   });
 }
 
+/**
+ * Runs one ripgrep command with a 5-second timeout and a 1 MB buffer.
+ * Exit code 1 with no stderr means "no matches": a successful empty result,
+ * not an error. A missing rg reports `code: "ENOENT"`; the caller omits the
+ * source as unsupported instead of substituting grep. Never uses a shell.
+ */
+export function rg(args: string[], cwd: string, exec: ExecFileLike = defaultExecFile): Promise<ExecResult> {
+  return new Promise((resolve) => {
+    exec("rg", args, { cwd, timeout: 5000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) {
+        // rg exits 1 when the pattern matched nothing; stderr is empty then.
+        if (error.code === 1 && stderr.trim() === "") {
+          resolve({ ok: true, stdout });
+          return;
+        }
+        resolve({
+          ok: false,
+          code: typeof error.code === "string" ? error.code : undefined,
+          stderr: stderr.trim() || error.message,
+        });
+        return;
+      }
+      resolve({ ok: true, stdout });
+    });
+  });
+}
+
 /** Adapts the overloaded execFile to the single ExecFileLike signature. */
 const defaultExecFile: ExecFileLike = (command, args, options, callback) => {
   execFile(command, args, options, (error, stdout, stderr) =>
