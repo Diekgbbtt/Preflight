@@ -7,6 +7,7 @@ import {
   type ContextFragment,
   type ContextSource,
   type ContextSourceId,
+  type ContextSourceResult,
 } from "@prompt-preflight/core";
 import { shouldInclude, type IncludePolicy } from "./privacy";
 
@@ -185,8 +186,7 @@ function buildFragment(options: {
   };
 }
 
-/** The diagnostics line: `severity source path:range message` with 1-based positions. */
-function diagnosticLine(diagnostic: LanguageDiagnostic): string {
+/** The diagnostics line: `severity source path:range message` with 1-based positions. */function diagnosticLine(diagnostic: LanguageDiagnostic): string {
   const location = `${diagnostic.path ?? diagnostic.uri}:${rangeLabel(diagnostic.range)}`;
   return `${diagnostic.severity} ${diagnostic.source ?? "-"} ${location} ${collapse(diagnostic.message)}`;
 }
@@ -436,4 +436,151 @@ export async function probeCapabilities(api: LanguageApi, uri: string, timeoutMs
     }),
   );
   return capabilities;
+}
+
+/** Drops results that cannot be resolved inside a workspace folder or fail the policy. */
+function filterByPolicy<T extends { path?: string }>(items: T[], policy: IncludePolicy): T[] {
+  return items.filter((item) => {
+    const path = item.path;
+    if (path === undefined) return false; // pathless results are outside the workspace
+    return shouldInclude(path, "workspace", policy);
+  });
+}
+
+/** True when the per-request probe is missing or says the capability is unavailable. */
+async function capabilityMissing(deps: LanguageSourceDeps, capability: keyof LanguageCapabilities, signal?: AbortSignal): Promise<boolean> {
+  if (deps.probe === undefined) return false;
+  const capabilities = await deps.probe();
+  return capabilities === null || !capabilities[capability];
+}
+
+/** The successful source result: one fragment plus the manifest detail. */
+function collected(fragment: ContextFragment, count: number, textSearch = false): { fragments: ContextFragment[]; details: Record<string, number | boolean> } {
+  return {
+    fragments: [fragment],
+    details: textSearch ? { count, textSearch: true } : { count },
+  };
+}
+
+/**
+ * Shared collect logic for the four LSP sources that can fall back to text
+ * search: gate on #41's predicate, probe per request, call the provider
+ * under the timeout, filter by policy, cap, and fall back when the LSP
+ * layer is unavailable and a query exists. A provider failure omits with
+ * `error`; an abort throws and rejects the whole assemble.
+ */
+function createFallbackSource(
+  deps: LanguageSourceDeps,
+  options: {
+    id: ContextSourceId;
+    capability: keyof LanguageCapabilities;
+    /** Verifies the prerequisites; returns an omit reason, or null to continue. */
+    guard: (signal?: AbortSignal) => Promise<"empty" | "excluded" | null>;
+    /** Builds the LSP call; returns raw results before the policy filter. */
+    call: () => Promise<Array<{ path?: string }>>;
+    /** Wraps the filtered results into the fragment with this source's cap. */
+    build: (results: Array<{ path?: string }>, folderUri?: string) => ContextFragment | null;
+  },
+): ContextSource {
+  const { id, capability, guard, call, build } = options;
+  const runFallback = async (signal?: AbortSignal): Promise<ContextSourceResult> => {
+    if (deps.query !== undefined && deps.query.trim() !== "") {
+      const fragment = await searchFallback(deps.api, deps.query, fallbackOptions(deps, id), signal);
+      return fragment === null ? { fragments: [], omittedReason: "empty" as const } : collected(fragment, fragment.content.split("\n").length, true);
+    }
+    return { fragments: [], omittedReason: "empty" as const };
+  };
+  return {
+    id,
+    priority: SOURCE_PRIORITIES[id],
+    collect: async (signal?: AbortSignal) => {
+      throwIfAborted(signal);
+      const reason = await guard(signal);
+      if (reason !== null) return { fragments: [], omittedReason: reason };
+      if (await capabilityMissing(deps, capability, signal)) {
+        // No LSP capability: fall back to text search when a query exists,
+        // otherwise the LSP layer is unavailable for this source.
+        if (deps.query === undefined || deps.query.trim() === "") {
+          return { fragments: [], omittedReason: "unsupported" as const };
+        }
+        const fragment = await searchFallback(deps.api, deps.query, fallbackOptions(deps, id), signal);
+        return fragment === null ? { fragments: [], omittedReason: "empty" as const } : collected(fragment, fragment.content.split("\n").length, true);
+      }
+      let raw: Array<{ path?: string }>;
+      try {
+        raw = await providerCall(deps, call, signal);
+      } catch (error) {
+        if (signal?.aborted) throw cancelledError();
+        return { fragments: [], omittedReason: "error" as const };
+      }
+      const filtered = filterByPolicy(raw, deps.policy);
+      if (filtered.length === 0) return runFallback(signal);
+      const fragment = build(filtered, deps.folderUri);
+      if (fragment === null) return { fragments: [], omittedReason: "empty" as const };
+      return collected(fragment, fragment.content.split("\n").length);
+    },
+  };
+}
+
+/** The guard for the sources around the active editor: uri, path, position and the #41 predicate. */
+function activeGuard(deps: LanguageSourceDeps, withPosition: boolean): Promise<"empty" | "excluded" | null> {
+  if (deps.activeUri === undefined || deps.activePath === undefined) return Promise.resolve("empty");
+  if (withPosition && deps.activePosition === undefined) return Promise.resolve("empty");
+  if (!shouldInclude(deps.activePath, "active-file", deps.policy)) return Promise.resolve("excluded");
+  return Promise.resolve(null);
+}
+
+/** The symbols source: document symbols of the active file. */
+export function createSymbolsSource(deps: LanguageSourceDeps): ContextSource {
+  return createFallbackSource(deps, {
+    id: "symbols",
+    capability: "documentSymbols",
+    guard: (signal) => activeGuard(deps, false),
+    call: () => deps.api.documentSymbols(deps.activeUri as string),
+    build: (results, folderUri) => buildSymbolsFragment(results as LanguageSymbol[], folderUri),
+  });
+}
+
+/** The workspace-symbols source: never searches with an empty query. */
+export function createWorkspaceSymbolsSource(deps: LanguageSourceDeps): ContextSource {
+  return createFallbackSource(deps, {
+    id: "workspace-symbols",
+    capability: "workspaceSymbols",
+    guard: async () => (deps.query !== undefined && deps.query.trim() !== "" ? null : "empty"),
+    call: () => deps.api.workspaceSymbols(deps.query as string),
+    build: (results, folderUri) => buildWorkspaceSymbolsFragment(results as LanguageSymbol[], folderUri),
+  });
+}
+
+/** The definitions source: where the active identifier is declared. */
+export function createDefinitionsSource(deps: LanguageSourceDeps): ContextSource {
+  return createFallbackSource(deps, {
+    id: "definitions",
+    capability: "definitions",
+    guard: (signal) => activeGuard(deps, true),
+    call: () => deps.api.definitions(deps.activeUri as string, deps.activePosition as LanguagePosition),
+    build: (results, folderUri) => buildDefinitionsFragment(results as LanguageLocation[], folderUri),
+  });
+}
+
+/** The references source: where the active identifier is used. */
+export function createReferencesSource(deps: LanguageSourceDeps): ContextSource {
+  return createFallbackSource(deps, {
+    id: "references",
+    capability: "references",
+    guard: (signal) => activeGuard(deps, true),
+    call: () => deps.api.references(deps.activeUri as string, deps.activePosition as LanguagePosition),
+    build: (results, folderUri) => buildReferencesFragment(results as LanguageLocation[], folderUri),
+  });
+}
+
+/** The five language sources in reserved order: diagnostics first. */
+export function createLanguageSources(deps: LanguageSourceDeps): ContextSource[] {
+  return [
+    createDiagnosticsSource(deps),
+    createSymbolsSource(deps),
+    createWorkspaceSymbolsSource(deps),
+    createDefinitionsSource(deps),
+    createReferencesSource(deps),
+  ];
 }

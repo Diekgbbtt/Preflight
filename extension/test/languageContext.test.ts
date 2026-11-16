@@ -11,6 +11,11 @@ import {
   searchFallback,
   withTimeout,
   createDiagnosticsSource,
+  createDefinitionsSource,
+  createLanguageSources,
+  createReferencesSource,
+  createSymbolsSource,
+  createWorkspaceSymbolsSource,
   type LanguageApi,
   type LanguageDiagnostic,
   type LanguageLocation,
@@ -577,6 +582,319 @@ describe("createDiagnosticsSource", () => {
       });
     controller.abort();
     await expect(createDiagnosticsSource(deps({ api, openDocuments: [{ uri: "file:///w/a.ts", path: "a.ts" }] })).collect(controller.signal)).rejects.toMatchObject({ code: "cancelled" });
+  });
+});
+
+describe("createSymbolsSource", () => {
+  const sym = (name: string, path?: string): LanguageSymbol => ({
+    name,
+    kind: "function",
+    ...(path !== undefined ? { uri: `file:///w/${path}`, path, range: { start: at(0, 0), end: at(0, 1) } } : {}),
+  });
+  const caps = { documentSymbols: true, workspaceSymbols: true, definitions: true, references: true, diagnostics: true };
+  const baseApi = (symbols: LanguageSymbol[] = [sym("makeThing", "src/a.ts")]): LanguageApi => ({
+    documentSymbols: async () => symbols,
+    workspaceSymbols: async () => [],
+    definitions: async () => [],
+    references: async () => [],
+    diagnostics: async () => [],
+    textSearch: async (query) => [
+      { uri: "file:///w/src/a.ts", path: "src/a.ts", range: { start: at(3, 0), end: at(3, 1) }, preview: query },
+    ],
+  });
+  const deps = (over: Partial<LanguageSourceDeps> & { api?: LanguageApi } = {}): LanguageSourceDeps => ({
+    api: over.api ?? baseApi(),
+    policy: { includeCode: "workspace" },
+    folderUri: "file:///w",
+    cwd: "/w",
+    activeUri: "file:///w/src/a.ts",
+    activePath: "src/a.ts",
+    activePosition: { line: 4, character: 6 },
+    ...over,
+  });
+
+  it("has the symbols source id and priority", () => {
+    const source = createSymbolsSource(deps());
+    expect(source.id).toBe("symbols");
+    expect(source.priority).toBe(40);
+  });
+
+  it("omits with empty when there is no active uri or path", async () => {
+    expect((await createSymbolsSource(deps({ activeUri: undefined })).collect()).omittedReason).toBe("empty");
+    expect((await createSymbolsSource(deps({ activePath: undefined })).collect()).omittedReason).toBe("empty");
+  });
+
+  it("omits with excluded when the active path fails shouldInclude", async () => {
+    const result = await createSymbolsSource(deps({ activePath: "node_modules/n/x.ts" })).collect();
+    expect(result.omittedReason).toBe("excluded");
+  });
+
+  it("collects document symbols with details", async () => {
+    const result = await createSymbolsSource(deps()).collect();
+    expect(result.fragments[0]?.source).toBe("symbols");
+    expect(result.fragments[0]?.content).toBe("function makeThing");
+    expect(result.details).toEqual({ count: 1 });
+  });
+
+  it("falls back to text search when the probe says no document symbols", async () => {
+    const probe = async () => ({ ...caps, documentSymbols: false });
+    const result = await createSymbolsSource(deps({ probe, query: "makeThing" })).collect();
+    expect(result.fragments[0]?.source).toBe("symbols");
+    expect(result.fragments[0]?.provenance.kind).toBe("text-search");
+    expect(result.details).toEqual({ count: 1, textSearch: true });
+  });
+
+  it("omits with unsupported when the probe fails and no query exists", async () => {
+    const probe = async () => null;
+    expect((await createSymbolsSource(deps({ probe })).collect()).omittedReason).toBe("unsupported");
+  });
+
+  it("omits with empty when the provider returns no symbols and no query exists", async () => {
+    expect((await createSymbolsSource(deps({ api: baseApi([]) })).collect()).omittedReason).toBe("empty");
+  });
+
+  it("caps at 100 and marks truncated", async () => {
+    const many = Array.from({ length: 101 }, (_, i) => sym(`s${i}`, "src/a.ts"));
+    const result = await createSymbolsSource(deps({ api: baseApi(many) })).collect();
+    expect(result.fragments[0]?.content.split("\n")).toHaveLength(100);
+    expect(result.fragments[0]?.provenance.truncated).toBe(true);
+    expect(result.details).toEqual({ count: 100 });
+  });
+
+  it("omits with error when the provider throws", async () => {
+    const api: LanguageApi = { ...baseApi(), documentSymbols: async () => { throw new Error("boom"); } };
+    expect((await createSymbolsSource(deps({ api })).collect()).omittedReason).toBe("error");
+  });
+
+  it("uses the text-search fallback with empty provider output and a query", async () => {
+    const result = await createSymbolsSource(deps({ api: baseApi([]), query: "makeThing" })).collect();
+    expect(result.fragments[0]?.provenance.kind).toBe("text-search");
+    expect(result.details).toEqual({ count: 1, textSearch: true });
+  });
+});
+
+describe("createWorkspaceSymbolsSource", () => {
+  const caps = { documentSymbols: true, workspaceSymbols: true, definitions: true, references: true, diagnostics: true };
+  const wsSym = (name: string, path?: string): LanguageSymbol => ({
+    name,
+    kind: "class",
+    ...(path !== undefined ? { uri: `file:///w/${path}`, path, range: { start: at(0, 0), end: at(0, 1) } } : {}),
+  });
+  const baseApi = (symbols: LanguageSymbol[] = [wsSym("Thing", "src/a.ts")]): LanguageApi => ({
+    documentSymbols: async () => [],
+    workspaceSymbols: async () => symbols,
+    definitions: async () => [],
+    references: async () => [],
+    diagnostics: async () => [],
+    textSearch: async () => [{ uri: "file:///w/src/a.ts", path: "src/a.ts", range: { start: at(0, 0), end: at(0, 1) }, preview: "class Thing" }],
+  });
+  const deps = (over: Partial<LanguageSourceDeps> & { api?: LanguageApi } = {}): LanguageSourceDeps => ({
+    api: over.api ?? baseApi(),
+    policy: { includeCode: "workspace" },
+    folderUri: "file:///w",
+    cwd: "/w",
+    query: "Thing",
+    ...over,
+  });
+
+  it("has the workspace-symbols source id and priority", () => {
+    const source = createWorkspaceSymbolsSource(deps());
+    expect(source.id).toBe("workspace-symbols");
+    expect(source.priority).toBe(37);
+  });
+
+  it("omits with empty when the query is missing or blank, without calling the provider", async () => {
+    let called = false;
+    const api: LanguageApi = { ...baseApi(), workspaceSymbols: async () => { called = true; return []; } };
+    expect((await createWorkspaceSymbolsSource(deps({ api, query: undefined })).collect()).omittedReason).toBe("empty");
+    expect((await createWorkspaceSymbolsSource(deps({ api, query: "  " })).collect()).omittedReason).toBe("empty");
+    expect(called).toBe(false);
+  });
+
+  it("collects workspace symbols with details", async () => {
+    const result = await createWorkspaceSymbolsSource(deps()).collect();
+    expect(result.fragments[0]?.content).toBe("src/a.ts:1:1 class Thing");
+    expect(result.details).toEqual({ count: 1 });
+  });
+
+  it("drops pathless symbols and filters excluded paths", async () => {
+    const api = baseApi([wsSym("Thing", "src/a.ts"), wsSym("Orphan"), wsSym("Secret", "credentials.json")]);
+    const result = await createWorkspaceSymbolsSource(deps({ api })).collect();
+    expect(result.fragments[0]?.content).toBe("src/a.ts:1:1 class Thing");
+    expect(result.details).toEqual({ count: 1 });
+  });
+
+  it("falls back to text search when the probe is null and the query exists", async () => {
+    const probe = async () => null;
+    const result = await createWorkspaceSymbolsSource(deps({ probe })).collect();
+    expect(result.fragments[0]?.provenance.kind).toBe("text-search");
+    expect(result.details).toEqual({ count: 1, textSearch: true });
+  });
+
+  it("omits with empty when the fallback finds nothing", async () => {
+    const api: LanguageApi = { ...baseApi(), textSearch: async () => [] };
+    expect((await createWorkspaceSymbolsSource(deps({ api, probe: async () => null })).collect()).omittedReason).toBe("empty");
+  });
+
+  it("caps at 50 and marks truncated", async () => {
+    const many = Array.from({ length: 55 }, (_, i) => wsSym(`s${i}`, `f${i}.ts`));
+    const result = await createWorkspaceSymbolsSource(deps({ api: baseApi(many) })).collect();
+    expect(result.fragments[0]?.content.split("\n")).toHaveLength(50);
+    expect(result.fragments[0]?.provenance.truncated).toBe(true);
+  });
+});
+
+describe("createDefinitionsSource", () => {
+  const caps = { documentSymbols: true, workspaceSymbols: true, definitions: true, references: true, diagnostics: true };
+  const loc = (path?: string, name?: string): LanguageLocation => ({
+    uri: path !== undefined ? `file:///w/${path}` : "file:///w/src/a.ts",
+    ...(path !== undefined ? { path } : {}),
+    range: { start: at(2, 0), end: at(2, 5) },
+    ...(name !== undefined ? { name } : {}),
+  });
+  const baseApi = (definitions: LanguageLocation[] = [loc("src/a.ts", "makeThing")]): LanguageApi => ({
+    documentSymbols: async () => [],
+    workspaceSymbols: async () => [],
+    definitions: async () => definitions,
+    references: async () => [],
+    diagnostics: async () => [],
+    textSearch: async () => [{ uri: "file:///w/src/a.ts", path: "src/a.ts", range: { start: at(2, 0), end: at(2, 5) }, preview: "makeThing" }],
+  });
+  const deps = (over: Partial<LanguageSourceDeps> & { api?: LanguageApi } = {}): LanguageSourceDeps => ({
+    api: over.api ?? baseApi(),
+    policy: { includeCode: "workspace" },
+    folderUri: "file:///w",
+    cwd: "/w",
+    activeUri: "file:///w/src/a.ts",
+    activePath: "src/a.ts",
+    activePosition: { line: 4, character: 6 },
+    ...over,
+  });
+
+  it("has the definitions source id and priority", () => {
+    const source = createDefinitionsSource(deps());
+    expect(source.id).toBe("definitions");
+    expect(source.priority).toBe(38);
+  });
+
+  it("omits with empty when there is no active uri or position", async () => {
+    expect((await createDefinitionsSource(deps({ activeUri: undefined })).collect()).omittedReason).toBe("empty");
+    expect((await createDefinitionsSource(deps({ activePosition: undefined })).collect()).omittedReason).toBe("empty");
+  });
+
+  it("omits with excluded when the active path is excluded", async () => {
+    expect((await createDefinitionsSource(deps({ activePath: "node_modules/n/x.ts" })).collect()).omittedReason).toBe("excluded");
+  });
+
+  it("collects definitions with details", async () => {
+    const result = await createDefinitionsSource(deps()).collect();
+    expect(result.fragments[0]?.content).toBe("src/a.ts:3:1 makeThing");
+    expect(result.details).toEqual({ count: 1 });
+  });
+
+  it("drops locations outside the workspace or excluded by policy", async () => {
+    const api = baseApi([loc("src/a.ts", "in"), loc("/etc/hosts"), loc("credentials.json"), loc(undefined, "pathless")]);
+    const result = await createDefinitionsSource(deps({ api })).collect();
+    expect(result.fragments[0]?.content).toBe("src/a.ts:3:1 in");
+    expect(result.details).toEqual({ count: 1 });
+  });
+
+  it("falls back to text search on null probe when a query exists, else unsupported", async () => {
+    const probe = async () => null;
+    const withQuery = await createDefinitionsSource(deps({ probe, query: "makeThing" })).collect();
+    expect(withQuery.fragments[0]?.provenance.kind).toBe("text-search");
+    expect(withQuery.details).toEqual({ count: 1, textSearch: true });
+    expect((await createDefinitionsSource(deps({ probe })).collect()).omittedReason).toBe("unsupported");
+  });
+
+  it("omits with empty when nothing survives filtering and no query exists", async () => {
+    const api = baseApi([loc("/etc/hosts")]);
+    expect((await createDefinitionsSource(deps({ api })).collect()).omittedReason).toBe("empty");
+  });
+
+  it("caps at 20 and marks truncated", async () => {
+    const many = Array.from({ length: 25 }, (_, i) => loc(`f${i}.ts`, `n${i}`));
+    const result = await createDefinitionsSource(deps({ api: baseApi(many) })).collect();
+    expect(result.fragments[0]?.content.split("\n")).toHaveLength(20);
+    expect(result.fragments[0]?.provenance.truncated).toBe(true);
+  });
+});
+
+describe("createReferencesSource", () => {
+  const caps = { documentSymbols: true, workspaceSymbols: true, definitions: true, references: true, diagnostics: true };
+  const loc = (path: string): LanguageLocation => ({
+    uri: `file:///w/${path}`,
+    path,
+    range: { start: at(1, 0), end: at(1, 3) },
+  });
+  const baseApi = (references: LanguageLocation[] = [loc("src/a.ts")]): LanguageApi => ({
+    documentSymbols: async () => [],
+    workspaceSymbols: async () => [],
+    definitions: async () => [],
+    references: async () => references,
+    diagnostics: async () => [],
+    textSearch: async () => [],
+  });
+  const deps = (over: Partial<LanguageSourceDeps> & { api?: LanguageApi } = {}): LanguageSourceDeps => ({
+    api: over.api ?? baseApi(),
+    policy: { includeCode: "workspace" },
+    folderUri: "file:///w",
+    cwd: "/w",
+    activeUri: "file:///w/src/a.ts",
+    activePath: "src/a.ts",
+    activePosition: { line: 4, character: 6 },
+    query: "makeThing",
+    ...over,
+  });
+
+  it("has the references source id and priority", () => {
+    const source = createReferencesSource(deps());
+    expect(source.id).toBe("references");
+    expect(source.priority).toBe(39);
+  });
+
+  it("collects references with details", async () => {
+    const result = await createReferencesSource(deps()).collect();
+    expect(result.fragments[0]?.content).toBe("src/a.ts:2:1");
+    expect(result.details).toEqual({ count: 1 });
+  });
+
+  it("caps at 50 and marks truncated", async () => {
+    const many = Array.from({ length: 60 }, (_, i) => loc(`f${i}.ts`));
+    const result = await createReferencesSource(deps({ api: baseApi(many) })).collect();
+    expect(result.fragments[0]?.content.split("\n")).toHaveLength(50);
+    expect(result.fragments[0]?.provenance.truncated).toBe(true);
+  });
+
+  it("falls back to text search when the provider is unavailable", async () => {
+    const probe = async () => ({ ...caps, references: false });
+    const api: LanguageApi = { ...baseApi(), textSearch: async () => [({ uri: "file:///w/src/a.ts", path: "src/a.ts", range: { start: at(0, 0), end: at(0, 1) }, preview: "hit" }) as TextSearchMatch] };
+    const result = await createReferencesSource(deps({ api, probe })).collect();
+    expect(result.fragments[0]?.provenance.kind).toBe("text-search");
+    expect(result.details).toEqual({ count: 1, textSearch: true });
+  });
+
+  it("omits with empty on a null probe when no query exists", async () => {
+    expect((await createReferencesSource(deps({ probe: async () => null, query: undefined })).collect()).omittedReason).toBe("unsupported");
+  });
+});
+
+describe("createLanguageSources", () => {
+  const deps: LanguageSourceDeps = {
+    api: {
+      documentSymbols: async () => [],
+      workspaceSymbols: async () => [],
+      definitions: async () => [],
+      references: async () => [],
+      diagnostics: async () => [],
+      textSearch: async () => [],
+    },
+    policy: { includeCode: "workspace" },
+  };
+  it("returns the five language sources in reserved order", () => {
+    const sources = createLanguageSources(deps);
+    expect(sources.map((s) => s.id)).toEqual(["diagnostics", "symbols", "workspace-symbols", "definitions", "references"]);
+    expect(sources.map((s) => s.priority)).toEqual([45, 40, 37, 38, 39]);
   });
 });
 
