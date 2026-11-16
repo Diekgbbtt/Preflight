@@ -10,5 +10,5 @@
     "types": ["node"],
     "noEmit": true
   },
-  "include": ["core/src", "core/test", "extension/src", "hook/src"]
+  "include": ["core/src", "core/test", "extension/src", "extension/test", "hook/src"]
 }
