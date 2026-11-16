@@ -536,7 +536,6 @@ export function parseCodexSession(text: string): ParsedSession {
         const name = typeof payload.name === "string" && payload.name ? payload.name : "exec";
         const input: Record<string, unknown> = { command: payload.command };
         const described = describeInput(input);
-        const ownerIndex = Math.max(0, state.turns.length - 1);
         const call: ToolCall = {
           name,
           status: "unknown",
