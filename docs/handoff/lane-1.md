@@ -11,12 +11,14 @@ Every entry has a contract version and a change log.
 | #40 | merged | ticket/40-review-schema | cf5cdbbcacbb73468dc8b8c0d90eb41eb59bc622 | `npm run typecheck && npm test && npm run build` -> 111 passed | PASS |
 | #41 | merged | ticket/41-privacy-policy | bf2bb83575f7007a9537c5802e5146587990fcc0 | `npm run typecheck && npm test && npm run build` -> 151 passed | PASS |
 | #35 | merged | ticket/35-jsonl-repository | 621906d336f7aaaf7d68165a11a01a1d15d52a4e | `npm run typecheck && npm test && npm run build` -> 187 passed | PASS |
+| #39 | merged | ticket/39-model-profiles | 986b610b2f5bf0ee0b18a3a803c51771fee789ff | `npm run typecheck && npm test && npm run build` -> 227 passed | PASS |
 
 Source branch: `lane-1/control-plane`.
 Setup commit: `098e887` (`chore: set up lane 1 worktrees and extension tests`).
 Lane base for ticket #40: `098e8873371ef995ba7cb1a2ddbd50a2bc385a03`.
 Lane base for ticket #41: `9ed943f7e352c4c56653ed5e003607a3d79d2a34`.
 Lane base for ticket #35: `6b1384bc0453247d9d2212a16b9bcc7f77a9077c`.
+Lane base for ticket #39: `ed0c1d7cb40aee3fe68e633d75b2896839ae124b`.
 
 <a id="contract-40"></a>
 
@@ -393,6 +395,138 @@ Lane base for ticket #35: `6b1384bc0453247d9d2212a16b9bcc7f77a9077c`.
 - Change log:
   - v1: initial contract merged in #35.
 
+<a id="contract-39"></a>
+
+## Contract: #39 Model provider profiles - v1
+
+- State: merged.
+- Commit: `986b610b2f5bf0ee0b18a3a803c51771fee789ff`.
+- Base: `ed0c1d7cb40aee3fe68e633d75b2896839ae124b`.
+- Exports:
+  - `type ProviderId = "claude" | "codex"`
+  - `type ThinkingEffort = "low" | "medium" | "high"`
+  - `interface ModelProfile { provider: ProviderId; model: string; thinkingEffort: ThinkingEffort }`
+  - `interface Config { provider: ProviderId; model: string; thinkingEffort: ThinkingEffort; quickModel: string; deepModel: string; claudePath: string }`
+  - `interface ModelCapabilities { structuredOutput: boolean; thinkingEffort: boolean; maxContextTokens: number; cost: { inputPerMTok: number; outputPerMTok: number }; supportsInstructionFiles: boolean }`
+  - `type ProfileValidation = { ok: true } | { ok: false; message: string }`
+  - `interface ModelProvider { readonly capabilities: ModelCapabilities; validateProfile(profile: ModelProfile): ProfileValidation; complete(request: ModelRequest, signal?: AbortSignal): Promise<ModelResponse> }`
+  - `function resolveProfile(settings: Config, mode: ReviewMode): ModelProfile`
+  - `function createProvider(profile: ModelProfile, config: Config): ModelProvider`
+  - `function createClaudeProvider(profile: ModelProfile, config: { claudePath: string }): ModelProvider`
+  - `function buildClaudeArgs(request: ModelRequest, profile: ModelProfile): string[]`
+  - `claudeCliRunner(claudePath = "claude", cwd?: string): ModelRunner` remains exported with its existing signature.
+  - `parseCliOutput(stdout: string): ModelResponse` remains exported and unchanged.
+  - `createCodexStubProvider` and `validateClaudeProfile` are module-private, not package exports.
+- `ThinkingEffort` alignment:
+  - `ThinkingEffort` is exactly `"low" | "medium" | "high"`.
+  - `ModelProfile.thinkingEffort` assigns directly into #40's `ScoreReport.thinkingEffort`.
+  - `ModelProfile.provider` assigns into #40's `ScoreReport.provider: string`.
+- Settings:
+  - `promptPreflight.provider`: string enum `claude`, `codex`; default `claude`. Codex is not implemented yet.
+  - `promptPreflight.model`: string; default `sonnet`. It is the fallback when the mode override is empty.
+  - `promptPreflight.thinkingEffort`: string enum `low`, `medium`, `high`; default `medium`.
+  - `promptPreflight.quickModel`: string; default `haiku`. Empty falls back to `promptPreflight.model`, then `haiku`.
+  - `promptPreflight.deepModel`: string; default `sonnet`. Empty falls back to `promptPreflight.model`, then `sonnet`.
+  - `promptPreflight.claudePath`: unchanged. There is no second CLI-path setting.
+- Profile resolution:
+  - `provider`: `settings.provider`.
+  - `model`: the mode override (`quickModel` for quick, `deepModel` for deep) when non-empty after trim, then `settings.model` when non-empty after trim, then `haiku` for quick or `sonnet` for deep.
+  - `thinkingEffort`: `settings.thinkingEffort`.
+  - `resolveProfile` is pure and reads no VS Code API.
+- Provider factory:
+  - `createProvider` is a pure factory. It returns the Claude adapter for a claude profile, the Codex stub for a codex profile, and throws for an unknown provider at runtime.
+  - The factory does not validate the profile implicitly. The caller calls `validateProfile`.
+  - The provider instance is bound to the profile. `complete(request, signal?)` takes no profile argument.
+- Claude adapter:
+  - `buildClaudeArgs` returns exactly `["-p", "--model", profile.model, "--effort", profile.thinkingEffort, "--output-format", "json", "--tools", "", "--setting-sources", "", "--system-prompt", request.system]`.
+  - The user prompt is written to stdin, never placed in the args.
+  - There is no shell interpolation and no `--json-schema` argument.
+  - `complete` rejects if `request.model !== profile.model`, before spawning.
+  - `complete` rejects with `Object.assign(new Error("cancelled"), { code: "cancelled" })` if the signal is already aborted, and does not spawn.
+  - An abort during the spawn maps to the same cancelled error.
+  - The default timeout is 120000 ms. A caller `AbortSignal` can shorten it. There is no retry.
+  - A nonzero exit rejects with an `Error` whose message is stderr or the process error. The error carries `code` from the process error when present.
+  - A missing CLI rejects with `Claude Code CLI not found at "<path>". Install it or set promptPreflight.claudePath.` and `code: "ENOENT"`.
+  - Success resolves `parseCliOutput(stdout)`.
+- Capability matrix:
+  - Claude: `structuredOutput: true`, `thinkingEffort: true`, `maxContextTokens: 200000`, `supportsInstructionFiles: true`.
+  - Claude cost, USD per million tokens, by model substring:
+    - contains `haiku`: `{ inputPerMTok: 0.1, outputPerMTok: 0.5 }`.
+    - contains `sonnet`: `{ inputPerMTok: 2, outputPerMTok: 10 }`.
+    - contains `opus`: `{ inputPerMTok: 4, outputPerMTok: 20 }`.
+    - unknown model: `{ inputPerMTok: 0, outputPerMTok: 0 }`. The gap is recorded.
+  - Price source, accessed 2026-11-16: `https://platform.claude.com/docs/en/about-claude/pricing`.
+    - The haiku row is the Claude Haiku 5.5 base tier for prompts up to 100,000 tokens. The over-100k tier is not encoded in the single cost pair.
+    - The sonnet row is Claude Sonnet 5.5.
+    - The opus row is Claude Opus 5.5.
+  - `maxContextTokens` is pinned to 200000 by lane brief 8.4. Current published windows are larger. #42 should revisit if the real window matters.
+  - `structuredOutput: true` is recorded because the CLI exposes `--json-schema`, but no schema argument is built because #40 exports no JSON Schema. This is a follow-up, not a current feature.
+  - `supportsInstructionFiles: true` because `--setting-sources ""` disables instruction auto-load, so #46 decides what to load through #48.
+  - Codex stub: `structuredOutput: false`, `thinkingEffort: false`, `maxContextTokens: 0` (unknown), cost zeros, `supportsInstructionFiles: false` until #10 proves auto-load can be disabled.
+- Validation:
+  - `validateProfile(profile)` never throws.
+  - Claude rejects a non-claude provider, an empty or whitespace-only model, and an effort outside the enum. It accepts all three efforts.
+  - The Codex stub rejects every profile with `Codex provider is not implemented; use Claude.`.
+  - The Codex stub `complete` rejects with the same message.
+- Legacy panel path:
+  - `claudeCliRunner` keeps its `(claudePath?, cwd?)` signature and its `ModelRunner` type.
+  - It now binds a profile `{ provider: "claude", model: req.model, thinkingEffort: "medium" }` and therefore passes `--effort medium`.
+  - The panel still uses this path. The new provider path is not wired to the panel in this ticket.
+- Extension wiring:
+  - `readConfig()` reads the six settings into a plain `Config` object.
+  - `validateModelSettings(config)` resolves quick and deep, creates each provider, and calls `validateProfile`. It returns the first failure prefixed with the mode, or `null`. It catches the unknown-provider throw from `createProvider`.
+  - Activation shows a non-modal warning for an invalid profile or the Codex stub. The default Claude config shows no warning.
+  - `probeEffortSupport(config)` runs only for `provider === "claude"`. It runs a read-only `claude --help` with a 2-second timeout and a 1 MB buffer. It checks stdout and stderr for `--effort`. A failed probe is silent; #42 owns missing-CLI health. A successful probe without the flag shows a non-modal warning.
+  - The probe never runs a model call and never logs prompt or file text.
+- Tests:
+  - `core/test/model.test.ts`: `npx vitest run core/test/model.test.ts` -> 21 passed.
+  - `core/test/claudeCli.test.ts`: `npx vitest run core/test/claudeCli.test.ts` -> 19 passed.
+  - Full suite: `npm test` -> 227 passed.
+- Test seams:
+  - `resolveProfile`: `core/test/model.test.ts`.
+  - `provider.validateProfile`: `core/test/model.test.ts`.
+  - `createProvider`: `core/test/model.test.ts`.
+  - `buildClaudeArgs`: `core/test/claudeCli.test.ts`.
+  - `parseCliOutput`: `core/test/claudeCli.test.ts` and the existing `core/test/review.test.ts`.
+  - Fake CLI harness for spawn, abort, stderr, nonzero exit, invalid JSON, empty output, and missing usage/cost: `core/test/claudeCli.test.ts`. No real CLI and no network.
+- Edge modes covered:
+  - Quick override set, deep override unset, both empty, whitespace-only overrides, empty global model, provider/effort passthrough.
+  - User and workspace settings as separate plain `Config` objects.
+  - Claude valid profile, foreign provider, empty model, invalid effort, default effort.
+  - Codex validate rejection and complete rejection.
+  - Capabilities for haiku, sonnet, opus, unknown model, and Codex.
+  - `buildClaudeArgs` for low, medium, high; exact array; no prompt in args; no `--json-schema`.
+  - Fake CLI success with stdin round-trip; stderr warning with exit 0; nonzero exit with code; invalid JSON; empty output; missing usage/cost.
+  - Abort before spawn with no spawn; abort during spawn with cancelled error; model mismatch with no spawn.
+  - Missing CLI ENOENT hint with code.
+  - Legacy runner passes `--effort medium`.
+- Assumptions:
+  - #40's `ScoreReport` field names matched; no schema change.
+  - Model aliases and names are matched by substring for the price table. A future model name with a different price falls back to zero and must be added deliberately.
+  - The haiku cost is the base tier. The over-100k tier is not represented.
+  - `maxContextTokens` 200000 is a lane pin, not the current published maximum.
+  - `structuredOutput` is a capability flag only; no JSON Schema argument exists yet.
+  - The new provider path is not wired to the panel. The panel keeps `claudeCliRunner` with medium effort. The user's `thinkingEffort` setting affects only consumers that use `resolveProfile`/`createProvider`; #42/#43/#46 own the panel integration.
+  - Codex is a stub. Selecting it warns and rejects; #10 owns the real adapter.
+- Consumers:
+  - #42: use `ModelProvider.validateProfile`, `complete`, capabilities, and the cancelled error code. Health check adds CLI presence; do not assume `probeEffortSupport` is a health check.
+  - #26: use `resolveProfile` and `parseQuickReview` with the profile fields.
+  - #46: use `supportsInstructionFiles` to decide whether to call #48's loader.
+  - #10: replace the Codex stub with the real adapter; keep the `ProviderId` and capability shape.
+  - #12: use the profile/provider contract for direct extension input.
+  - #45: use `capabilities.cost` for study-log cost reporting.
+  - #38: use `ModelProfile` for the session slice token cap.
+  - #6: use `resolveProfile` for quick model selection.
+  - #22: use `validateProfile` and the cancelled/error codes for missing CLI and auth handling.
+  - #27: use the profile fields in `ScoreReport`.
+- Open gaps:
+  - The panel is not wired to the new provider path. It still uses `claudeCliRunner` with medium effort. The `provider` and `thinkingEffort` settings do not change the panel's behavior yet.
+  - `structuredOutput` has no JSON Schema argument.
+  - The cost table is a substring table with a zero fallback for unknown models.
+  - The Codex stub is not a working provider.
+- Change log:
+  - v1: initial contract merged in #39.
+
 ## Contract changes
 
 | Date | Contract | From | To | Consumers notified |
@@ -400,6 +534,7 @@ Lane base for ticket #35: `6b1384bc0453247d9d2212a16b9bcc7f77a9077c`.
 | 2026-11-16 | #40 review schema | none | v1 | #26, #27, #35, #36, #38, #39, #42, #45, #13, #46 |
 | 2026-11-16 | #41 privacy boundary | none | v1 | #36, #38, #13, #46 |
 | 2026-11-16 | #35 JSONL repository | none | v1 | #38, #43, #45, #46, #15 |
+| 2026-11-16 | #39 model profiles | none | v1 | #42, #26, #46, #10, #12, #45, #38, #6, #22, #27 |
 
 ## Dispatch notes
 
