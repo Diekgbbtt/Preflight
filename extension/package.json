@@ -33,8 +33,25 @@
       "title": "Prompt Preflight",
       "properties": {
         "promptPreflight.claudePath": { "type": "string", "default": "claude", "description": "Path to the Claude Code CLI." },
-        "promptPreflight.quickModel": { "type": "string", "default": "haiku", "description": "Model for the quick check when you pause typing." },
-        "promptPreflight.deepModel": { "type": "string", "default": "sonnet", "description": "Model for detailed feedback." },
+        "promptPreflight.provider": {
+          "type": "string",
+          "enum": ["claude", "codex"],
+          "default": "claude",
+          "description": "Model provider for preflight checks. Codex is not implemented yet; use claude."
+        },
+        "promptPreflight.model": {
+          "type": "string",
+          "default": "sonnet",
+          "description": "Fallback model used when the quick or deep model override is empty."
+        },
+        "promptPreflight.thinkingEffort": {
+          "type": "string",
+          "enum": ["low", "medium", "high"],
+          "default": "medium",
+          "description": "Thinking effort passed as --effort to the Claude CLI."
+        },
+        "promptPreflight.quickModel": { "type": "string", "default": "haiku", "description": "Model for the quick check when you pause typing. Empty falls back to promptPreflight.model, then haiku." },
+        "promptPreflight.deepModel": { "type": "string", "default": "sonnet", "description": "Model for detailed feedback. Empty falls back to promptPreflight.model, then sonnet." },
         "promptPreflight.quickReviewOnPause": { "type": "boolean", "default": true, "description": "Run the quick model check when you stop typing. Uses your Claude account." },
         "promptPreflight.pauseMs": { "type": "number", "default": 1500, "minimum": 500, "description": "Milliseconds without typing before the quick check runs." },
         "promptPreflight.sendTo": {

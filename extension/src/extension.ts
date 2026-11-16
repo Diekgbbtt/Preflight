@@ -1,6 +1,7 @@
 import * as path from "node:path";
+import { execFile } from "node:child_process";
 import * as vscode from "vscode";
-import type { SendRecord } from "@prompt-preflight/core";
+import type { Config, SendRecord } from "@prompt-preflight/core";
 import { CONSENT_VERSION, consentKey, consentMessage, parseConsent, type IncludeCode } from "./privacy";
 import { PromptPanel } from "./panel";
 import { JsonlRepository } from "./repository";
@@ -20,6 +21,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Fire and forget: activation never waits on the answer.
   void ensureConsent(context);
+  probeEffortSupport(readConfig());
 
   context.subscriptions.push(
     workspace,
@@ -64,6 +66,33 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {}
+
+/** Reads the six model settings into a plain Config object for core. */
+function readConfig(): Config {
+  const c = vscode.workspace.getConfiguration("promptPreflight");
+  return {
+    provider: c.get<"claude" | "codex">("provider", "claude"),
+    model: c.get("model", "sonnet"),
+    thinkingEffort: c.get<"low" | "medium" | "high">("thinkingEffort", "medium"),
+    quickModel: c.get("quickModel", "haiku"),
+    deepModel: c.get("deepModel", "sonnet"),
+    claudePath: c.get("claudePath", "claude"),
+  };
+}
+
+/**
+ * Read-only probe that confirms the installed CLI still exposes --effort.
+ * Runs once at activation and never sends a model call. A failed probe is
+ * silent here; missing-CLI health belongs to #42.
+ */
+function probeEffortSupport(config: Config): void {
+  execFile(config.claudePath, ["--help"], { timeout: 2000, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+    if (err || stdout.includes("--effort")) return;
+    void vscode.window.showWarningMessage(
+      "The Claude Code CLI does not support --effort, so promptPreflight.thinkingEffort will be ignored.",
+    );
+  });
+}
 
 /**
  * First-use consent. Shown only while no valid current-version record exists.
