@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { analyze, extractJson, hashPrompt, parseCliOutput, parseQuickReview, parseScore, review, type ModelRunner, type ScoreMeta } from "../src";
+import { analyze, extractJson, hashPrompt, parseCliOutput, parseDeepReview, parseQuickReview, parseScore, review, type ModelRunner, type ScoreMeta } from "../src";
 
 describe("hashPrompt", () => {
   it.each([
@@ -118,6 +118,80 @@ describe("parseQuickReview", () => {
     expect(r.score).toBeNull();
     expect(r.issues.map((i) => i.problem)).toEqual(["Still an issue"]);
     expect(r.questions).toEqual(["What?"]);
+  });
+});
+
+describe("parseDeepReview", () => {
+  const prompt = "Fix the login bug";
+  const usage = { inputTokens: 100, outputTokens: 20, costUsd: 0.001 };
+  const meta = { source: "deep", provider: "stub", model: "sonnet", thinkingEffort: "high", scoredAt: "2026-01-01T00:00:00.000Z", usage, latency: 42 };
+
+  it("builds a full DeepReview with versions and injected usage", () => {
+    const text = JSON.stringify({
+      dimensions: { target: 25, action: 20, scope: 20, done: 15 },
+      confidence: 0.7,
+      issues: [{ quote: "login bug", problem: "No expected result", suggestion: "Describe what should happen" }],
+      questions: [{ question: "What should happen?", why: "Done needs a goal", options: ["Redirect", "Error message", ""] }],
+      improvedPrompt: "Fix [which bug?]",
+      assumptions: ["The bug is in the client"],
+      contextGaps: ["No error text"],
+    });
+    const r = parseDeepReview(text, prompt, meta);
+    expect(r.score?.score).toBe(80);
+    expect(r.score?.level).toBe("clear");
+    expect(r.score?.rubricVersion).toBe("v1");
+    expect(r.score?.promptHash).toBe(hashPrompt(prompt));
+    expect(r.issues).toHaveLength(1);
+    expect(r.questions).toEqual([{ question: "What should happen?", why: "Done needs a goal", options: ["Redirect", "Error message", ""] }]);
+    expect(r.improvedPrompt).toBe("Fix [which bug?]");
+    expect(r.assumptions).toEqual(["The bug is in the client"]);
+    expect(r.contextGaps).toEqual(["No error text"]);
+    expect(r.usage).toEqual(usage);
+    expect(r.latency).toBe(42);
+    expect(r.promptVersion).toBe("v1");
+  });
+
+  it("drops a question with empty text and fills missing why and options", () => {
+    const text = JSON.stringify({
+      dimensions: { target: 25, action: 25, scope: 25, done: 25 },
+      questions: [{ question: "", why: "x" }, { question: "Keep me" }, { why: "no question" }, "flat string"],
+    });
+    const r = parseDeepReview(text, prompt, meta);
+    expect(r.questions).toEqual([{ question: "Keep me", why: "", options: [] }]);
+  });
+
+  it("caps questions and options at 3 and keeps only string options", () => {
+    const q = (n: number) => ({ question: `q${n}`, options: ["a", 1, "b", "c"] });
+    const text = JSON.stringify({ dimensions: { target: 25, action: 25, scope: 25, done: 25 }, questions: [q(1), q(2), q(3), q(4)] });
+    const r = parseDeepReview(text, prompt, meta);
+    expect(r.questions.map((x) => x.question)).toEqual(["q1", "q2", "q3"]);
+    expect(r.questions[0].options).toEqual(["a", "b", "c"]);
+  });
+
+  it("keeps only strings in assumptions and contextGaps and defaults improvedPrompt", () => {
+    const text = JSON.stringify({
+      dimensions: { target: 25, action: 25, scope: 25, done: 25 },
+      assumptions: ["ok", 5],
+      contextGaps: [null, "gap"],
+    });
+    const r = parseDeepReview(text, prompt, meta);
+    expect(r.improvedPrompt).toBe("");
+    expect(r.assumptions).toEqual(["ok"]);
+    expect(r.contextGaps).toEqual(["gap"]);
+  });
+
+  it("returns a safe empty review without throwing on malformed text", () => {
+    for (const text of ["sorry, no", '{"dimensions":{"target":5.5}}', "[]", '{"questions":"no"}']) {
+      const r = parseDeepReview(text, prompt, meta);
+      expect(r, text).toEqual({ score: null, issues: [], questions: [], improvedPrompt: "", assumptions: [], contextGaps: [], usage, latency: 42, promptVersion: "v1" });
+    }
+  });
+
+  it("keeps issues when only the dimensions are invalid", () => {
+    const text = JSON.stringify({ dimensions: { target: 30, action: 25, scope: 25, done: 25 }, issues: [{ problem: "Still here", suggestion: "Fix" }] });
+    const r = parseDeepReview(text, prompt, meta);
+    expect(r.score).toBeNull();
+    expect(r.issues.map((i) => i.problem)).toEqual(["Still here"]);
   });
 });
 

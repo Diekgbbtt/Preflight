@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Dimensions, Level } from "./types";
-import type { ReviewIssue } from "./review";
+import type { ModelResponse, ReviewIssue } from "./review";
 import { extractJson } from "./review";
 
 /** Version of the shared review rubric. Bump when the anchors change. */
@@ -46,6 +46,27 @@ export interface QuickReview {
   score: ScoreReport | null;
   issues: ReviewIssue[];
   questions: string[];
+}
+
+export type ModelUsage = Pick<ModelResponse, "inputTokens" | "outputTokens" | "costUsd">;
+
+export interface DeepQuestion {
+  question: string;
+  /** Why the agent needs this detail. Empty when the model omits it. */
+  why: string;
+  options: string[];
+}
+
+export interface DeepReview {
+  score: ScoreReport | null;
+  issues: ReviewIssue[];
+  questions: DeepQuestion[];
+  improvedPrompt: string;
+  assumptions: string[];
+  contextGaps: string[];
+  usage: ModelUsage;
+  latency: number;
+  promptVersion: string;
 }
 
 const DIMENSION_KEYS = ["target", "action", "scope", "done"] as const;
@@ -139,5 +160,34 @@ export function parseQuickReview(text: string, prompt: string, meta: ScoreMeta):
     score: parseScore(text, prompt, meta),
     issues: parseIssues(raw.issues, prompt),
     questions: parseStringList(raw.questions, MAX_QUESTIONS),
+  };
+}
+
+export function parseDeepReview(text: string, prompt: string, meta: ScoreMeta & { usage: ModelUsage; latency: number }): DeepReview {
+  const raw = asObject(text);
+  if (!raw) {
+    return { score: null, issues: [], questions: [], improvedPrompt: "", assumptions: [], contextGaps: [], usage: meta.usage, latency: meta.latency, promptVersion: PROMPT_VERSION };
+  }
+  const questions: DeepQuestion[] = [];
+  for (const item of Array.isArray(raw.questions) ? raw.questions : []) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const q = item as Record<string, unknown>;
+    const question = typeof q.question === "string" ? q.question : "";
+    if (!question) continue;
+    const why = typeof q.why === "string" ? q.why : "";
+    const options = parseStringList(q.options, MAX_QUESTIONS);
+    questions.push({ question, why, options });
+    if (questions.length >= MAX_QUESTIONS) break;
+  }
+  return {
+    score: parseScore(text, prompt, meta),
+    issues: parseIssues(raw.issues, prompt),
+    questions,
+    improvedPrompt: typeof raw.improvedPrompt === "string" ? raw.improvedPrompt : "",
+    assumptions: parseStringList(raw.assumptions, Infinity),
+    contextGaps: parseStringList(raw.contextGaps, Infinity),
+    usage: meta.usage,
+    latency: meta.latency,
+    promptVersion: PROMPT_VERSION,
   };
 }
