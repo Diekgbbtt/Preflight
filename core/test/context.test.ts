@@ -277,5 +277,99 @@ describe("assemble", () => {
     expect(ed?.chars).toBe(10);
     expect(bundle.fragments.find((f) => f.source === "open-editors")?.content).toBe("[redacted]");
   });
+
+  it("rejects on abort before, during and after collect, and never returns a partial bundle", async () => {
+    const before = new AbortController();
+    before.abort();
+    // The spec allows either the cancelled error or signal.reason.
+    const acceptsAbort = (error: unknown) => {
+      const e = error as { code?: string; name?: string };
+      return e.code === "cancelled" || e.name === "AbortError";
+    };
+    await expect(assemble({ draft: "d", qa: [] }, [], { budget: 10, estimateTokens: fakeEstimate, redact: noRedact, signal: before.signal }))
+      .rejects.toSatisfy(acceptsAbort);
+
+    const during = new AbortController();
+    const neverReturns: ContextSource = {
+      id: "selection",
+      priority: 80,
+      collect: async (signal) => {
+        signal?.throwIfAborted();
+        return { fragments: [] };
+      },
+    };
+    during.abort();
+    await expect(assemble({ draft: "d", qa: [] }, [neverReturns], { budget: 10, estimateTokens: fakeEstimate, redact: noRedact, signal: during.signal }))
+      .rejects.toSatisfy(acceptsAbort);
+
+    const after = new AbortController();
+    const thenAbort: ContextSource = {
+      id: "git-diff",
+      priority: 50,
+      collect: async () => {
+        after.abort();
+        return { fragments: [] };
+      },
+    };
+    await expect(assemble({ draft: "d", qa: [] }, [thenAbort], { budget: 10, estimateTokens: fakeEstimate, redact: noRedact, signal: after.signal }))
+      .rejects.toSatisfy(acceptsAbort);
+  });
+
+  it("produces identical fragments and manifest regardless of the input source order", async () => {
+    const frag = (content: string) => ({
+      fragments: [{ source: "x", priority: 0, content, tokens: 0, provenance: { kind: "open-editor" as const, truncated: false, chars: 0 } }],
+    });
+    const a = fixedSource("open-editors", SOURCE_PRIORITIES["open-editors"], frag("aaaa"));
+    const b = fixedSource("selection", SOURCE_PRIORITIES.selection, frag("bbbb"));
+    const c = fixedSource("git-diff", SOURCE_PRIORITIES["git-diff"], frag("cccc"));
+    const one = await assemble({ draft: "d", qa: [{ question: "q", answer: "a" }] }, [a, b, c], { budget: 4, estimateTokens: fakeEstimate, redact: noRedact });
+    const two = await assemble({ draft: "d", qa: [{ question: "q", answer: "a" }] }, [c, b, a], { budget: 4, estimateTokens: fakeEstimate, redact: noRedact });
+    expect(two.fragments).toEqual(one.fragments);
+    expect(two.manifest).toEqual(one.manifest);
+  });
+
+  it("redacts before estimating, so redaction can save the budget", async () => {
+    const source = fixedSource("open-editors", SOURCE_PRIORITIES["open-editors"], {
+      fragments: [{ source: "x", priority: 0, content: "KEY-abcdefghijklmnop", tokens: 5, provenance: { kind: "open-editor", truncated: false, chars: 20 } }],
+    });
+    const redact = (text: string) => ({ text: text.replaceAll("KEY-abcdefghijklmnop", "[redacted]"), count: text.includes("KEY-abcdefghijklmnop") ? 1 : 0 });
+    // Raw 20 chars = 5 tokens would cross a budget of 4; redacted 10 chars = 3 tokens fits.
+    const bundle = await assemble({ draft: "", qa: [] }, [source], { budget: 4, estimateTokens: fakeEstimate, redact });
+    const entry = bundle.manifest.sources.find((s) => s.source === "open-editors");
+    expect(entry?.included).toBe(true);
+    expect(entry?.truncated).toBe(false);
+    expect(entry?.tokens).toBe(3);
+    expect(entry?.redactions).toBe(1);
+  });
+
+  it("omits every workspace source with budget when the draft and qa exactly fill the budget", async () => {
+    const draft = "d".repeat(32); // 8 tokens
+    const qa = [{ question: "q".repeat(16), answer: "a".repeat(16) }]; // 4 + 4 = 8 tokens
+    const source = fixedSource("selection", SOURCE_PRIORITIES.selection, {
+      fragments: [{ source: "x", priority: 0, content: "code", tokens: 1, provenance: { kind: "selection", truncated: false, chars: 4 } }],
+    });
+    const bundle = await assemble({ draft, qa }, [source], { budget: 16, estimateTokens: fakeEstimate, redact: noRedact });
+    const entry = bundle.manifest.sources.find((s) => s.source === "selection");
+    expect(entry?.included).toBe(false);
+    expect(entry?.omittedReason).toBe("budget");
+    expect(bundle.fragments).toHaveLength(0);
+    expect(bundle.manifest.totalTokens).toBe(16);
+    expect(bundle.manifest.totalTokens).toBe(bundle.manifest.budget);
+  });
+
+  it("handles the empty edges: no sources, empty draft and qa, empty content", async () => {
+    const none = await assemble({ draft: "", qa: [] }, [], { budget: 0, estimateTokens: fakeEstimate, redact: noRedact });
+    expect(none.manifest.totalTokens).toBe(0);
+    expect(none.manifest.sources.map((s) => s.source)).toEqual(["draft", "qa"]);
+    expect(none.manifest.sources[0].tokens).toBe(0);
+
+    const emptyFrag = fixedSource("selection", 80, {
+      fragments: [{ source: "x", priority: 0, content: "", tokens: 0, provenance: { kind: "selection", truncated: false, chars: 0 } }],
+    });
+    const withEmpty = await assemble({ draft: "", qa: [] }, [emptyFrag], { budget: 0, estimateTokens: fakeEstimate, redact: noRedact });
+    expect(withEmpty.fragments).toHaveLength(0);
+    const entry = withEmpty.manifest.sources.find((s) => s.source === "selection");
+    expect(entry?.omittedReason).toBe("budget");
+  });
 });
 

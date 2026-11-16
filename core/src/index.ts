@@ -7,3 +7,4 @@ export * from "./errors";
 export { buildClaudeArgs, claudeCliRunner, createClaudeProvider, parseCliOutput } from "./claudeCli";
 export { SECRETS } from "./patterns";
 export * from "./repository";
+export * from "./context";
