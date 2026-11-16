@@ -119,6 +119,14 @@ describe("parseQuickReview", () => {
     expect(r.issues.map((i) => i.problem)).toEqual(["Still an issue"]);
     expect(r.questions).toEqual(["What?"]);
   });
+
+  it("reads fenced JSON wrapped in prose and keeps duplicate quotes", () => {
+    const text = 'Here you go:\n```json\n{"dimensions":{"target":25,"action":25,"scope":25,"done":25},"issues":[{"quote":"the app","problem":"First","suggestion":"Fix"},{"quote":"the app","problem":"Second","suggestion":"Fix"}]}\n```\nHope that helps!';
+    const r = parseQuickReview(text, prompt, meta);
+    expect(r.score?.score).toBe(100);
+    expect(r.issues.map((i) => i.problem)).toEqual(["First", "Second"]);
+    expect(r.issues[0].range).toEqual({ start: 8, end: 15 });
+  });
 });
 
 describe("parseDeepReview", () => {
