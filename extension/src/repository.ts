@@ -208,7 +208,9 @@ export class JsonlRepository<T> implements Repository<T> {
     }
     const stored = { ...event, seq, schemaVersion: SCHEMA_VERSION } as Event<T>;
     const body = JSON.stringify(stored) + "\n";
-    const data = terminatedPartial === null ? body : terminatedPartial + "\n" + body;
+    // A trailing partial segment is terminated by a leading newline. The
+    // partial text is never rewritten or truncated.
+    const data = terminatedPartial === null ? body : "\n" + body;
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
     await fs.appendFile(this.filePath, data, "utf8");
     this.events.push(stored);
