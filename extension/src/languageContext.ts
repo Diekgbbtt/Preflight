@@ -23,7 +23,8 @@ export interface LanguageRange {
   end: LanguagePosition;
 }
 
-/** Where one language result points: the raw uri plus a workspace path when known. */export interface LanguageAnchor {
+/** Where one language result points: the raw uri plus a workspace path when known. */
+export interface LanguageAnchor {
   uri: string;
   /** Workspace-relative POSIX path, or undefined for untitled/virtual documents. */
   path?: string;
@@ -193,7 +194,8 @@ function buildFragment(options: {
   };
 }
 
-/** The diagnostics line: `severity source path:range message` with 1-based positions. */function diagnosticLine(diagnostic: LanguageDiagnostic): string {
+/** The diagnostics line: `severity source path:range message` with 1-based positions. */
+function diagnosticLine(diagnostic: LanguageDiagnostic): string {
   const location = `${diagnostic.path ?? diagnostic.uri}:${rangeLabel(diagnostic.range)}`;
   return `${diagnostic.severity} ${diagnostic.source ?? "-"} ${location} ${collapse(diagnostic.message)}`;
 }
