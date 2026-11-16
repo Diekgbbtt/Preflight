@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -37,6 +37,10 @@ describe("buildClaudeArgs", () => {
 // Fake CLI harness: a tiny node script that reads stdin and prints JSON.
 // No real CLI and no network in tests.
 const FAKE_DIR = path.join(os.tmpdir(), "prompt-preflight-fake-cli");
+
+afterAll(() => {
+  fs.rmSync(FAKE_DIR, { recursive: true, force: true });
+});
 
 function makeCli(script: string): string {
   fs.mkdirSync(FAKE_DIR, { recursive: true });

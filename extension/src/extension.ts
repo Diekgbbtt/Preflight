@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { execFile } from "node:child_process";
 import * as vscode from "vscode";
 import type { Config, SendRecord } from "@prompt-preflight/core";
+import { createProvider, resolveProfile } from "@prompt-preflight/core";
 import { CONSENT_VERSION, consentKey, consentMessage, parseConsent, type IncludeCode } from "./privacy";
 import { PromptPanel } from "./panel";
 import { JsonlRepository } from "./repository";
@@ -21,7 +22,10 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Fire and forget: activation never waits on the answer.
   void ensureConsent(context);
-  probeEffortSupport(readConfig());
+  const config = readConfig();
+  probeEffortSupport(config);
+  const settingsIssue = validateModelSettings(config);
+  if (settingsIssue) void vscode.window.showWarningMessage(settingsIssue);
 
   context.subscriptions.push(
     workspace,
@@ -78,6 +82,21 @@ function readConfig(): Config {
     deepModel: c.get("deepModel", "sonnet"),
     claudePath: c.get("claudePath", "claude"),
   };
+}
+
+/**
+ * Pure settings validation: resolves both modes and runs each profile through
+ * its provider's validateProfile. Returns the first failure prefixed with the
+ * mode, or null when both are valid. No model call and no CLI presence check;
+ * #42 owns health.
+ */
+function validateModelSettings(config: Config): string | null {
+  for (const mode of ["quick", "deep"] as const) {
+    const profile = resolveProfile(config, mode);
+    const result = createProvider(profile, config).validateProfile(profile);
+    if (!result.ok) return `${mode}: ${result.message}`;
+  }
+  return null;
 }
 
 /**

@@ -119,6 +119,13 @@ describe("createProvider", () => {
     });
   });
 
+  it("rejects complete() on the Codex stub with the exact clear message", async () => {
+    const provider = createProvider(codexProfile, config);
+    await expect(provider.complete({ system: "s", user: "u", model: "gpt-5" })).rejects.toThrow(
+      "Codex provider is not implemented; use Claude.",
+    );
+  });
+
   it("throws for an unknown provider at runtime", () => {
     expect(() => createProvider({ ...claudeProfile, provider: "openai" as ModelProfile["provider"] }, config)).toThrow(/Unknown model provider/);
   });

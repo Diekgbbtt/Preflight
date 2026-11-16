@@ -24,7 +24,8 @@ function isThinkingEffort(value: unknown): value is ThinkingEffort {
   return value === "low" || value === "medium" || value === "high";
 }
 
-export function validateClaudeProfile(profile: ModelProfile): ProfileValidation {
+/** Module-private: the public seam is provider.validateProfile(profile). */
+function validateClaudeProfile(profile: ModelProfile): ProfileValidation {
   if (profile.provider !== "claude") {
     return { ok: false, message: `Provider "${String(profile.provider)}" is not claude; the Claude adapter only accepts claude profiles.` };
   }

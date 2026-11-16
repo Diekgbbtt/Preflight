@@ -57,8 +57,8 @@ export function resolveProfile(settings: Config, mode: ReviewMode): ModelProfile
 
 const CODEX_MESSAGE = "Codex provider is not implemented; use Claude.";
 
-/** Seam for #10: rejects until the real Codex adapter lands. */
-export function createCodexStubProvider(profile: ModelProfile): ModelProvider {
+/** Seam for #10: rejects until the real Codex adapter lands. Module-private; createProvider is the public factory. */
+function createCodexStubProvider(profile: ModelProfile): ModelProvider {
   void profile;
   return {
     capabilities: {
