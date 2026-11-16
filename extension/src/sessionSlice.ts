@@ -5,9 +5,9 @@
 import * as path from "node:path";
 import { open, readdir, stat } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { ContextSource } from "@prompt-preflight/core";
+import { estimateTokens, type Clock, type ContextSource } from "@prompt-preflight/core";
 import { canonicalFolderUri, type SessionCandidate, type SessionProvider } from "./sessionLocator";
-import type { IncludeCode } from "./privacy";
+import { shouldInclude, type IncludeCode } from "./privacy";
 
 /** Caps for one slice: turns kept, token budget, and the byte window. */
 export interface SessionCaps {
@@ -315,13 +315,50 @@ function registerCall(state: ParserState, call: ToolCall, ownerIndex: number, is
 
 /** Extracts fenced code per turn and removes it from the turn text. */
 function finalizeTurns(state: ParserState): void {
+  const out: Turn[] = [];
+  const ownerMap: number[] = [];
   state.turns.forEach((turn, index) => {
     const { code, paths, rest } = extractFences(turn.text);
-    if (code.length === 0) return;
-    turn.code = code;
-    turn.codePath = paths.find((p) => p !== undefined) ?? state.turnFiles[index]?.[0];
-    turn.text = rest.replace(/\n{3,}/g, "\n\n").trim();
+    if (code.length === 0) {
+      ownerMap.push(index);
+      out.push({ ...turn, text: turn.text.trim() });
+      return;
+    }
+    // Group fences by path so every code item in a turn shares one codePath.
+    const groups = new Map<string, string[]>();
+    const order: string[] = [];
+    code.forEach((body, i) => {
+      const key = paths[i] ?? state.turnFiles[index]?.[0] ?? "";
+      if (!groups.has(key)) {
+        groups.set(key, []);
+        order.push(key);
+      }
+      groups.get(key)!.push(body);
+    });
+    const clean = rest.replace(/\n{3,}/g, "\n\n").trim();
+    const firstKey = order[0];
+    const firstCode = groups.get(firstKey)!;
+    ownerMap.push(index);
+    out.push({
+      ...turn,
+      text: clean,
+      code: firstCode,
+      ...(firstKey ? { codePath: firstKey } : {}),
+    });
+    // Fences bound for another file become code-only turns with their own path.
+    for (const key of order.slice(1)) {
+      ownerMap.push(index);
+      out.push({
+        role: turn.role,
+        text: "",
+        ...(turn.at ? { at: turn.at } : {}),
+        code: groups.get(key)!,
+        ...(key ? { codePath: key } : {}),
+      });
+    }
   });
+  state.turns = out;
+  state.ownerOf = state.ownerOf.map((owner) => ownerMap[owner] ?? owner);
 }
 
 /** Fills a ParsedSession from the parse state. */
@@ -680,4 +717,273 @@ export async function discoverCandidates(folderUri: string, homeDir: string): Pr
   }
 
   return candidates;
+}
+
+// ---------------------------------------------------------------------------
+// Slice reading
+// ---------------------------------------------------------------------------
+
+/** Policy inputs for one slice read: code inclusion plus injected redaction. */
+export interface SliceOptions {
+  includeCode: IncludeCode;
+  activeFileUri?: string;
+  redact(text: string): { text: string; count: number };
+}
+
+/** The workspace-relative POSIX path of a raw changed or code path, or null when it is outside. */
+function relativeToWorkspace(raw: string, cwdPath: string | undefined): string | null {
+  if (!raw) return null;
+  let rel = raw;
+  if (/^[A-Za-z]:[\\/]/.test(raw) || raw.startsWith("/")) {
+    if (!cwdPath) return null;
+    rel = path.relative(cwdPath, raw);
+  }
+  const posix = rel.split(path.sep).join("/").replace(/\\/g, "/");
+  if (!posix || posix === "." || posix.startsWith("/") || /^[A-Za-z]:\//.test(posix) || posix === ".." || posix.startsWith("../")) return null;
+  return posix;
+}
+
+/** The workspace-relative path of the active file URI, or undefined when unknown. */
+function activeRelativePath(activeFileUri: string | undefined, cwdPath: string | undefined): string | undefined {
+  if (!activeFileUri || !activeFileUri.startsWith("file:") || !cwdPath) return undefined;
+  try {
+    const rel = path.relative(cwdPath, fileURLToPath(activeFileUri));
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return undefined;
+    return rel.split(path.sep).join("/");
+  } catch {
+    return undefined;
+  }
+}
+
+/** Builds an empty slice with the given provenance facts. */
+function emptySlice(
+  filePath: string,
+  provider: SessionProvider,
+  reason: SessionProvenance["reason"],
+  bytesRead: number,
+  truncated: boolean,
+  parsed?: ParsedSession,
+  extra?: Partial<SessionProvenance>,
+): SessionSlice {
+  return {
+    sessionId: parsed?.sessionId ?? path.basename(filePath, ".jsonl"),
+    provider,
+    folderUri: parsed?.folderUri ?? "",
+    startedAt: parsed?.startedAt ?? null,
+    endedAt: parsed?.endedAt ?? null,
+    turns: [],
+    toolCalls: [],
+    errors: [],
+    testResults: [],
+    changedFiles: [],
+    tokens: 0,
+    truncated,
+    provenance: {
+      sourcePath: filePath,
+      bytesRead,
+      turnsKept: 0,
+      truncated,
+      droppedTurns: 0,
+      droppedToolCalls: 0,
+      droppedFiles: 0,
+      redactions: 0,
+      ...(reason ? { reason } : {}),
+      ...extra,
+    },
+  };
+}
+
+/**
+ * Reads at most the last `maxBytes` of one session file and derives the
+ * bounded slice. Never reads the whole file with readFile; a partial first
+ * line after the seek and a partial final line are dropped, never parsed.
+ */
+export async function readSlice(
+  filePath: string,
+  provider: SessionProvider,
+  caps: SessionCaps,
+  _clock: Clock,
+  options: SliceOptions,
+): Promise<SessionSlice> {
+  void _clock;
+  if (provider !== "claude" && provider !== "codex") {
+    return emptySlice(filePath, provider, "unsupported", 0, false);
+  }
+
+  const st = await stat(filePath).catch(() => null);
+  if (!st || !st.isFile()) return emptySlice(filePath, provider, "error", 0, false);
+  const size = st.size;
+  const start = Math.max(0, size - caps.maxBytes);
+  const want = size - start;
+
+  let windowText: string;
+  try {
+    const handle = await open(filePath, "r");
+    try {
+      const buf = Buffer.alloc(want);
+      const { bytesRead } = await handle.read(buf, 0, want, start);
+      windowText = buf.toString("utf8", 0, bytesRead);
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return emptySlice(filePath, provider, "error", 0, false);
+  }
+
+  // A window that opens mid-line loses everything up to the first newline.
+  if (start > 0) {
+    const nl = windowText.indexOf("\n");
+    if (nl < 0) return emptySlice(filePath, provider, "empty", want, true);
+    windowText = windowText.slice(nl + 1);
+  }
+  // A final line without a trailing newline may be mid-write: drop, never parse.
+  if (!windowText.endsWith("\n")) {
+    const last = windowText.lastIndexOf("\n");
+    windowText = last < 0 ? "" : windowText.slice(0, last + 1);
+  }
+  if (windowText.trim() === "") return emptySlice(filePath, provider, "empty", want, start > 0);
+
+  const parsed = provider === "claude" ? parseClaudeSession(windowText) : parseCodexSession(windowText);
+  if (parsed.turns.length === 0) {
+    return emptySlice(filePath, provider, "empty", want, start > 0, parsed);
+  }
+
+  const cwdPath = sessionCwdPath(parsed.folderUri);
+  const activeRel = activeRelativePath(options.activeFileUri, cwdPath);
+
+  // Apply the code policy per turn, then redact everything that stays.
+  let redactions = 0;
+  const policyTurns: Turn[] = [];
+  const originOf: number[] = [];
+  parsed.turns.forEach((turn, index) => {
+    const clean: Turn = { role: turn.role, text: turn.text };
+    if (turn.at) clean.at = turn.at;
+    if (turn.code && turn.code.length > 0 && turn.codePath) {
+      const rel = relativeToWorkspace(turn.codePath, cwdPath);
+      const keep =
+        rel !== null &&
+        options.includeCode !== "off" &&
+        (options.includeCode === "active-file"
+          ? activeRel !== undefined && shouldInclude(rel, "active-file", { includeCode: "active-file", activePath: activeRel })
+          : shouldInclude(rel, "workspace", { includeCode: "workspace" }));
+      if (keep && rel !== null) {
+        clean.code = turn.code.map((item) => {
+          const applied = options.redact(item);
+          redactions += applied.count;
+          return applied.text;
+        });
+        clean.codePath = rel;
+      }
+    }
+    const appliedText = options.redact(clean.text);
+    redactions += appliedText.count;
+    clean.text = appliedText.text;
+    if (clean.text || (clean.code && clean.code.length > 0)) {
+      policyTurns.push(clean);
+      originOf.push(index);
+    }
+  });
+
+  // Cap by turns, then drop the oldest until the token cap is met.
+  let kept = policyTurns.slice(-caps.maxTurns);
+  let droppedTurns = parsed.turns.length - policyTurns.length + (policyTurns.length - kept.length);
+  const turnTokens = (turn: Turn): number =>
+    estimateTokens(turn.text) + (turn.code ?? []).reduce((sum, code) => sum + estimateTokens(code), 0);
+  const keptTokens = (): number => kept.reduce((sum, turn) => sum + turnTokens(turn), 0);
+  while (kept.length > 1 && keptTokens() > caps.maxTokens) {
+    kept.shift();
+    droppedTurns++;
+  }
+  if (kept.length === 1 && keptTokens() > caps.maxTokens) {
+    // One turn alone exceeds the cap: an empty bounded slice is the only safe answer.
+    return emptySlice(filePath, provider, "empty", want, true, parsed, {
+      droppedTurns: parsed.turns.length,
+      droppedToolCalls: parsed.toolCalls.length,
+      droppedFiles: 0,
+      redactions,
+    });
+  }
+
+  // Retain the tool calls owned by kept turns, matched through timestamps.
+  const firstKept = kept.length > 0 ? originOf[policyTurns.length - kept.length] : parsed.turns.length;
+  const owners = parsed.toolCalls.map((call) => ownerTurnIndex(parsed, call));
+  const retainedCalls = parsed.toolCalls.filter((_call, index) => owners[index] >= firstKept);
+  const droppedToolCalls = parsed.toolCalls.length - retainedCalls.length;
+
+  // Redact and keep the one-line status records.
+  const errors: SessionError[] = parsed.errors.map((error) => {
+    const applied = options.redact(error.message);
+    redactions += applied.count;
+    return { ...error, message: applied.text };
+  });
+  const testResults: TestResult[] = parsed.testResults.map((result) => {
+    const applied = options.redact(result.name);
+    redactions += applied.count;
+    return { ...result, name: applied.text };
+  });
+
+  // Normalize changed files against the session cwd, POSIX, sorted.
+  const changedFiles = new Set<string>();
+  let droppedFiles = 0;
+  for (const raw of parsed.changedFiles) {
+    const rel = relativeToWorkspace(raw, cwdPath);
+    if (rel === null) droppedFiles++;
+    else changedFiles.add(rel);
+  }
+
+  const tokens =
+    kept.reduce((sum, turn) => sum + turnTokens(turn), 0) +
+    retainedCalls.reduce((sum, call) => sum + estimateTokens(call.summary), 0) +
+    errors.reduce((sum, error) => sum + estimateTokens(error.message), 0) +
+    testResults.reduce((sum, result) => sum + estimateTokens(result.name), 0);
+
+  return {
+    sessionId: parsed.sessionId ?? path.basename(filePath, ".jsonl"),
+    provider,
+    folderUri: parsed.folderUri ?? "",
+    startedAt: parsed.startedAt ?? null,
+    endedAt: parsed.endedAt ?? null,
+    turns: kept,
+    toolCalls: retainedCalls,
+    errors,
+    testResults,
+    changedFiles: [...changedFiles].sort(),
+    tokens,
+    truncated: start > 0 || droppedTurns > 0,
+    provenance: {
+      sourcePath: filePath,
+      bytesRead: want,
+      turnsKept: kept.length,
+      truncated: start > 0 || droppedTurns > 0,
+      droppedTurns,
+      droppedToolCalls,
+      droppedFiles,
+      redactions,
+    },
+  };
+}
+
+/** The absolute cwd path behind a parsed folderUri, or undefined. */
+function sessionCwdPath(folderUri: string | undefined): string | undefined {
+  if (!folderUri || !folderUri.startsWith("file:")) return undefined;
+  try {
+    return fileURLToPath(folderUri);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The parsed turn index a tool call belongs to, matched through timestamps; -1 when unknown. */
+function ownerTurnIndex(parsed: ParsedSession, call: ToolCall): number {
+  if (!call.at) return -1;
+  const callTime = Date.parse(call.at);
+  if (Number.isNaN(callTime)) return -1;
+  let owner = -1;
+  parsed.turns.forEach((turn, index) => {
+    if (!turn.at) return;
+    const turnTime = Date.parse(turn.at);
+    if (Number.isNaN(turnTime) || turnTime > callTime) return;
+    owner = index;
+  });
+  return owner;
 }

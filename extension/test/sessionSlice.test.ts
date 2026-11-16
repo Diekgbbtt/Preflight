@@ -3,7 +3,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { discoverCandidates, parseClaudeSession, parseCodexSession } from "../src/sessionSlice";
+import { DEFAULT_SESSION_CAPS, discoverCandidates, parseClaudeSession, parseCodexSession, readSlice } from "../src/sessionSlice";
+import { redact } from "../src/privacy";
 
 const claudeFixture = readFileSync(new URL("./fixtures/claude/session-basic.jsonl", import.meta.url), "utf8");
 const codexFixture = readFileSync(new URL("./fixtures/codex/session-basic.jsonl", import.meta.url), "utf8");
@@ -189,5 +190,197 @@ describe("discoverCandidates", () => {
   it("returns an empty list for a non-file folder URI", async () => {
     const dir = await setup();
     expect(await discoverCandidates("untitled:Untitled-1", dir)).toEqual([]);
+  });
+});
+
+describe("readSlice", () => {
+  let dir: string | null = null;
+
+  afterEach(async () => {
+    if (dir) await fs.rm(dir, { recursive: true, force: true });
+    dir = null;
+  });
+
+  const setup = async (): Promise<string> => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-slice-"));
+    return dir;
+  };
+
+  const write = async (name: string, text: string): Promise<string> => {
+    const base = await setup();
+    const file = path.join(base, name);
+    await fs.writeFile(file, text);
+    return file;
+  };
+
+  const CWD = "/Users/alice/proj";
+  const at = (n: number) => `2026-01-02T10:00:${String(n).padStart(2, "0")}.000Z`;
+
+  const claudeTurns = (turns: Array<{ role: "user" | "assistant"; text: string }>): string =>
+    turns.map((t, i) => JSON.stringify({ type: t.role, sessionId: "sess-x", timestamp: at(i), cwd: CWD, message: { role: t.role, content: t.text } })).join("\n") + "\n";
+
+  const options = { includeCode: "off" as const, redact };
+
+  it("returns an empty slice with reason unsupported for an unknown provider", async () => {
+    const file = await write("s.jsonl", claudeTurns([{ role: "user", text: "hello" }]));
+    const slice = await readSlice(file, "gemini" as "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, options);
+    expect(slice.turns).toEqual([]);
+    expect(slice.provenance.reason).toBe("unsupported");
+  });
+
+  it("returns an empty slice with reason error for a missing file", async () => {
+    const slice = await readSlice(path.join(os.tmpdir(), "preflight-missing-xyz.jsonl"), "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, options);
+    expect(slice.turns).toEqual([]);
+    expect(slice.provenance.reason).toBe("error");
+  });
+
+  it("returns an empty slice with reason empty for an empty or unparseable file", async () => {
+    const empty = await write("empty.jsonl", "");
+    expect((await readSlice(empty, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, options)).provenance.reason).toBe("empty");
+    const corrupt = await write("corrupt.jsonl", "not json\nnot json either\n");
+    expect((await readSlice(corrupt, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, options)).provenance.reason).toBe("empty");
+  });
+
+  it("builds a slice with session id from the basename and derived content", async () => {
+    const file = await write("sess-x.jsonl", claudeTurns([{ role: "user", text: "hello" }, { role: "assistant", text: "hi there" }]));
+    const slice = await readSlice(file, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, options);
+    expect(slice.sessionId).toBe("sess-x");
+    expect(slice.provider).toBe("claude");
+    expect(slice.folderUri).toBe("file:///Users/alice/proj");
+    expect(slice.startedAt).toBe(at(0));
+    expect(slice.endedAt).toBe(at(1));
+    expect(slice.turns.map((t) => t.text)).toEqual(["hello", "hi there"]);
+    expect(slice.tokens).toBeGreaterThan(0);
+    expect(slice.truncated).toBe(false);
+    expect(slice.provenance).toMatchObject({ turnsKept: 2, droppedTurns: 0, truncated: false });
+  });
+
+  it("keeps the last maxTurns turns and counts dropped ones", async () => {
+    const turns = Array.from({ length: 11 }, (_, i) => ({ role: (i % 2 === 0 ? "user" : "assistant") as "user" | "assistant", text: `turn ${i}` }));
+    const file = await write("many.jsonl", claudeTurns(turns));
+    const slice = await readSlice(file, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, options);
+    expect(slice.turns).toHaveLength(10);
+    expect(slice.turns[0].text).toBe("turn 1");
+    expect(slice.turns[9].text).toBe("turn 10");
+    expect(slice.provenance.droppedTurns).toBe(1);
+    expect(slice.truncated).toBe(true);
+  });
+
+  it("keeps exactly 10 turns without truncation", async () => {
+    const turns = Array.from({ length: 10 }, (_, i) => ({ role: (i % 2 === 0 ? "user" : "assistant") as "user" | "assistant", text: `turn ${i}` }));
+    const file = await write("ten.jsonl", claudeTurns(turns));
+    const slice = await readSlice(file, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, options);
+    expect(slice.turns).toHaveLength(10);
+    expect(slice.truncated).toBe(false);
+  });
+
+  it("drops the oldest turns until the token cap is met", async () => {
+    const turns = Array.from({ length: 5 }, (_, i) => ({ role: (i % 2 === 0 ? "user" : "assistant") as "user" | "assistant", text: `turn ${i} `.repeat(40) }));
+    const file = await write("big.jsonl", claudeTurns(turns));
+    const slice = await readSlice(file, "claude", { ...DEFAULT_SESSION_CAPS, maxTokens: 100 }, { now: () => 0 }, options);
+    expect(slice.tokens).toBeLessThanOrEqual(100);
+    expect(slice.provenance.droppedTurns).toBeGreaterThan(0);
+    expect(slice.truncated).toBe(true);
+  });
+
+  it("returns an empty truncated slice when one turn alone exceeds the token cap", async () => {
+    const file = await write("huge-turn.jsonl", claudeTurns([{ role: "user", text: "word ".repeat(1000) }]));
+    const slice = await readSlice(file, "claude", { ...DEFAULT_SESSION_CAPS, maxTokens: 10 }, { now: () => 0 }, options);
+    expect(slice.turns).toEqual([]);
+    expect(slice.truncated).toBe(true);
+    expect(slice.provenance.droppedTurns).toBe(1);
+  });
+
+  it("reads at most the last maxBytes and drops the first partial line after the seek", async () => {
+    const pad = "x".repeat(300);
+    const lines = [
+      JSON.stringify({ type: "user", sessionId: "sess-old", timestamp: at(0), cwd: CWD, message: { role: "user", content: `old turn ${pad}` } }),
+      JSON.stringify({ type: "user", sessionId: "sess-x", timestamp: at(1), cwd: CWD, message: { role: "user", content: "fresh turn" } }),
+      JSON.stringify({ type: "assistant", sessionId: "sess-x", timestamp: at(2), cwd: CWD, message: { role: "assistant", content: [{ type: "text", text: "answer" }] } }),
+    ];
+    const text = lines.join("\n") + "\n";
+    // Seek 100 bytes before the end of the first line, so the window opens mid-line.
+    const firstLen = Buffer.byteLength(lines[0], "utf8") + 1;
+    const maxBytes = Buffer.byteLength(text, "utf8") - (firstLen - 100);
+    const file = await write("window.jsonl", text);
+    const slice = await readSlice(file, "claude", { ...DEFAULT_SESSION_CAPS, maxBytes }, { now: () => 0 }, options);
+    expect(slice.provenance.bytesRead).toBe(maxBytes);
+    expect(slice.provenance.truncated).toBe(true);
+    expect(slice.turns.map((t) => t.text)).toEqual(["fresh turn", "answer"]);
+    expect(slice.sessionId).toBe("sess-x");
+  });
+
+  it("drops a trailing line without a newline instead of parsing it", async () => {
+    const lines = [
+      JSON.stringify({ type: "user", sessionId: "sess-x", timestamp: at(0), cwd: CWD, message: { role: "user", content: "complete turn" } }),
+      JSON.stringify({ type: "user", sessionId: "sess-x", timestamp: at(1), cwd: CWD, message: { role: "user", content: "second turn" } }),
+    ];
+    const file = await write("partial.jsonl", lines.join("\n") + "\n" + '{"type":"user"');
+    const slice = await readSlice(file, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, options);
+    // Both complete lines parse (consecutive same-role text merges); the
+    // trailing fragment without a newline is dropped, never parsed.
+    expect(slice.turns.map((t) => t.text)).toEqual(["complete turn\nsecond turn"]);
+  });
+
+  it("normalizes changed files to sorted workspace-relative paths and drops outside paths", async () => {
+    const lines = [
+      JSON.stringify({ type: "assistant", sessionId: "sess-x", timestamp: at(0), cwd: CWD, message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Write", input: { file_path: `${CWD}/src/b.ts` } }] } }),
+      JSON.stringify({ type: "assistant", sessionId: "sess-x", timestamp: at(1), cwd: CWD, message: { role: "assistant", content: [{ type: "tool_use", id: "t2", name: "Edit", input: { file_path: `${CWD}/src/a.ts` } }] } }),
+      JSON.stringify({ type: "assistant", sessionId: "sess-x", timestamp: at(2), cwd: CWD, message: { role: "assistant", content: [{ type: "tool_use", id: "t3", name: "Write", input: { file_path: "/Users/other/evil.ts" } }] } }),
+    ];
+    const file = await write("changed.jsonl", lines.join("\n") + "\n");
+    const slice = await readSlice(file, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, options);
+    expect(slice.changedFiles).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(slice.provenance.droppedFiles).toBe(1);
+  });
+
+  it("drops all code excerpts under includeCode off but keeps turn text", async () => {
+    const text = "Here is the plan.\n\n```ts src/app.ts\nconst secretCode = 42;\n```";
+    const file = await write("code-off.jsonl", claudeTurns([{ role: "assistant", text }]));
+    const slice = await readSlice(file, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, options);
+    expect(slice.turns[0].code).toBeUndefined();
+    expect(slice.turns[0].text).toContain("Here is the plan.");
+    expect(slice.turns[0].text).not.toContain("secretCode");
+  });
+
+  it("keeps code only for the active file under includeCode active-file", async () => {
+    const text = "```ts src/app.ts\nconst app = 1;\n```\n```ts src/other.ts\nconst other = 2;\n```";
+    const file = await write("code-active.jsonl", claudeTurns([{ role: "assistant", text }]));
+    const slice = await readSlice(file, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, {
+      includeCode: "active-file",
+      activeFileUri: "file:///Users/alice/proj/src/app.ts",
+      redact,
+    });
+    expect(slice.turns[0].code).toEqual(["const app = 1;"]);
+    expect(slice.turns[0].codePath).toBe("src/app.ts");
+  });
+
+  it("drops all code under active-file when no active file is known", async () => {
+    const text = "Patching now.\n\n```ts src/app.ts\nconst app = 1;\n```";
+    const file = await write("code-noactive.jsonl", claudeTurns([{ role: "assistant", text }]));
+    const slice = await readSlice(file, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, { includeCode: "active-file", redact });
+    expect(slice.turns[0].code).toBeUndefined();
+    expect(slice.turns[0].text).toContain("Patching now.");
+  });
+
+  it("keeps workspace code except excluded paths under includeCode workspace", async () => {
+    const text = "```ts src/app.ts\nconst app = 1;\n```\n```json node_modules/pkg/data.json\n{\"k\":1}\n```";
+    const file = await write("code-ws.jsonl", claudeTurns([{ role: "assistant", text }]));
+    const slice = await readSlice(file, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, { includeCode: "workspace", redact });
+    expect(slice.turns[0].code).toEqual(["const app = 1;"]);
+  });
+
+  it("redacts secrets in turn text and counts redactions", async () => {
+    const file = await write("secret.jsonl", claudeTurns([{ role: "user", text: "use sk-ant-0123456789abcdefghij please" }]));
+    const slice = await readSlice(file, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, options);
+    expect(slice.turns[0].text).toContain("[redacted]");
+    expect(slice.turns[0].text).not.toContain("sk-ant-");
+    expect(slice.provenance.redactions).toBe(1);
+  });
+
+  it("keeps non-English turn text intact apart from redaction", async () => {
+    const file = await write("i18n.jsonl", claudeTurns([{ role: "user", text: "認証を追加してください" }, { role: "assistant", text: "理解しました" }]));
+    const slice = await readSlice(file, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, options);
+    expect(slice.turns.map((t) => t.text)).toEqual(["認証を追加してください", "理解しました"]);
   });
 });
