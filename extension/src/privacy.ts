@@ -55,3 +55,74 @@ export function redact(text: string): RedactionResult {
   }
   return { text: masked.split(SENTINEL).join("[redacted]"), count };
 }
+
+/** How much code context may be included in a model call. */
+export type IncludeCode = "off" | "active-file" | "workspace";
+
+/** The kind of text a source would include. Only code-bearing kinds reach shouldInclude. */
+export type IncludeKind = "selection" | "active-file" | "open-editor" | "workspace" | "diagnostic" | "session";
+
+/** The current privacy policy: the setting plus the active document path. */
+export interface IncludePolicy {
+  includeCode: IncludeCode;
+  /** Workspace-relative POSIX path of the active document, when there is one. */
+  activePath?: string;
+}
+
+// Excluded names, matched case-insensitively. Secret-bearing file names by
+// basename, plus dependency and git directories by segment.
+const EXCLUDED_DIR_SEGMENTS = new Set(["node_modules", ".git"]);
+const EXCLUDED_BASENAMES = new Set(["credentials.json", "id_rsa", "id_ed25519"]);
+
+/** True when the workspace-relative path names an excluded secret-bearing file or directory. */
+function isExcludedPath(path: string): boolean {
+  const segments = path.split("/");
+  if (segments.some((s) => EXCLUDED_DIR_SEGMENTS.has(s.toLowerCase()))) return true;
+  const base = segments[segments.length - 1].toLowerCase();
+  return (
+    EXCLUDED_BASENAMES.has(base) ||
+    base === ".env" ||
+    base.startsWith(".env.") ||
+    base.endsWith(".pem") ||
+    base.endsWith(".key")
+  );
+}
+
+/** True when the path cannot be resolved inside a workspace folder. */
+function isOutsideWorkspace(path: string): boolean {
+  return path.startsWith("/") || path.split("/").includes("..");
+}
+
+/**
+ * Decides whether a code source may enter the model call. Pure and testable.
+ * `path` is a workspace-relative POSIX path, or "" for an untitled or virtual document.
+ * Under `off`, every kind is excluded. Under `active-file`, only the active path.
+ * Under `workspace`, every non-excluded path. An explicit selection is user text:
+ * it is included unless the exclusion list or workspace boundary rejects it.
+ */
+export function shouldInclude(path: string, kind: IncludeKind, policy: IncludePolicy): boolean {
+  if (policy.includeCode === "off") return false;
+
+  const normalized = path.replace(/\\/g, "/").replace(/^\.\//, "");
+
+  if (kind === "selection") {
+    return normalized !== "" ? !isOutsideWorkspace(normalized) && !isExcludedPath(normalized) : true;
+  }
+
+  if (
+    kind !== "active-file" &&
+    kind !== "open-editor" &&
+    kind !== "workspace" &&
+    kind !== "diagnostic" &&
+    kind !== "session"
+  ) {
+    return false;
+  }
+
+  if (normalized === "" || isOutsideWorkspace(normalized) || isExcludedPath(normalized)) return false;
+
+  if (policy.includeCode === "active-file") {
+    return normalized === policy.activePath?.replace(/\\/g, "/").replace(/^\.\//, "");
+  }
+  return true;
+}

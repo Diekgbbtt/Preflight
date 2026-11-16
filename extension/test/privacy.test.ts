@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { CONSENT_VERSION, consentKey, parseConsent, redact } from "../src/privacy";
+import {
+  CONSENT_VERSION,
+  consentKey,
+  parseConsent,
+  redact,
+  shouldInclude,
+  type IncludeKind,
+  type IncludePolicy,
+} from "../src/privacy";
 
 describe("consentKey", () => {
   it("returns the versioned global-state key", () => {
@@ -109,5 +117,91 @@ describe("redact", () => {
     expect(result.count).toBe(2);
     expect(result.text).not.toContain("ghp_");
     expect(result.text).not.toContain("github_pat_");
+  });
+});
+
+describe("shouldInclude", () => {
+  const active: IncludePolicy = { includeCode: "active-file", activePath: "src/app.ts" };
+  const ws: IncludePolicy = { includeCode: "workspace" };
+  const off: IncludePolicy = { includeCode: "off", activePath: "src/app.ts" };
+
+  it("off returns false for every kind, including selection", () => {
+    expect(shouldInclude("src/app.ts", "workspace", off)).toBe(false);
+    expect(shouldInclude("src/app.ts", "active-file", off)).toBe(false);
+    expect(shouldInclude("src/app.ts", "open-editor", off)).toBe(false);
+    expect(shouldInclude("src/app.ts", "diagnostic", off)).toBe(false);
+    expect(shouldInclude("src/app.ts", "session", off)).toBe(false);
+    expect(shouldInclude("src/app.ts", "selection", off)).toBe(false);
+    expect(shouldInclude("", "selection", off)).toBe(false);
+  });
+
+  it("active-file includes only the active path", () => {
+    expect(shouldInclude("src/app.ts", "workspace", active)).toBe(true);
+    expect(shouldInclude("src/app.ts", "open-editor", active)).toBe(true);
+    expect(shouldInclude("src/app.ts", "diagnostic", active)).toBe(true);
+    expect(shouldInclude("src/app.ts", "session", active)).toBe(true);
+    expect(shouldInclude("src/other.ts", "workspace", active)).toBe(false);
+    expect(shouldInclude("src/other.ts", "diagnostic", active)).toBe(false);
+    expect(shouldInclude("", "workspace", active)).toBe(false);
+    expect(shouldInclude("src/app.ts", "workspace", { includeCode: "active-file" })).toBe(false);
+  });
+
+  it("active-file includes an explicit selection even outside the active path", () => {
+    expect(shouldInclude("src/other.ts", "selection", active)).toBe(true);
+    expect(shouldInclude("", "selection", active)).toBe(true);
+  });
+
+  it("workspace includes every non-excluded path", () => {
+    expect(shouldInclude("src/app.ts", "workspace", ws)).toBe(true);
+    expect(shouldInclude("docs/readme.md", "diagnostic", ws)).toBe(true);
+    expect(shouldInclude("", "workspace", ws)).toBe(false);
+  });
+
+  it("excludes secret file names under both active-file and workspace", () => {
+    for (const policy of [active, ws]) {
+      for (const path of [
+        ".env",
+        ".env.local",
+        "credentials.json",
+        "id_rsa",
+        "id_ed25519",
+        "foo.pem",
+        "foo.KEY",
+        "node_modules/x.ts",
+        ".git/config",
+        "src/credentials.json",
+      ]) {
+        expect(shouldInclude(path, "workspace", policy)).toBe(false);
+      }
+    }
+  });
+
+  it("exclusion wins over an explicit selection", () => {
+    expect(shouldInclude("credentials.json", "selection", active)).toBe(false);
+    expect(shouldInclude(".env", "selection", ws)).toBe(false);
+  });
+
+  it("includes an untitled or virtual selection, but not untitled workspace kinds", () => {
+    expect(shouldInclude("", "selection", ws)).toBe(true);
+    expect(shouldInclude("", "active-file", ws)).toBe(false);
+    expect(shouldInclude("", "open-editor", ws)).toBe(false);
+    expect(shouldInclude("", "diagnostic", ws)).toBe(false);
+  });
+
+  it("rejects absolute paths and path traversal", () => {
+    expect(shouldInclude("/etc/passwd", "workspace", ws)).toBe(false);
+    expect(shouldInclude("/etc/passwd", "selection", ws)).toBe(false);
+    expect(shouldInclude("../secrets.env", "workspace", ws)).toBe(false);
+    expect(shouldInclude("src/../../etc/passwd", "selection", ws)).toBe(false);
+  });
+
+  it("normalizes windows separators and leading ./", () => {
+    expect(shouldInclude("src\\app.ts", "workspace", active)).toBe(true);
+    expect(shouldInclude("./src/app.ts", "workspace", active)).toBe(true);
+    expect(shouldInclude(".\\credentials.json", "workspace", ws)).toBe(false);
+  });
+
+  it("rejects an unknown kind", () => {
+    expect(shouldInclude("src/app.ts", "history" as IncludeKind, ws)).toBe(false);
   });
 });
