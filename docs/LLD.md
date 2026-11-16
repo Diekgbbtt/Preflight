@@ -1,90 +1,151 @@
 # Preflight LLD
 
-One VS Code extension. Five layers. Ports at every seam.
+Current prototype versus target design. Prose is short. The diagrams carry the constructs.
+
+## Architecture
+
+Current is a stateless pipeline. Post adds application services, domain objects, and ports.
 
 ```mermaid
 flowchart TB
-  subgraph P[Presentation]
-    Panel[Panel controller<br/>typed protocol]
+  subgraph Current
+    P1[Panel] --> A1[analyze]
+    P1 --> R1[review]
+    A1 --> W1[workspace.notes]
+    R1 --> C1[Claude CLI]
+    P1 --> S1[send]
+    P1 --> L1[study log]
   end
-  subgraph A[Application]
-    Prompt[PromptService]
-    Feedback[FeedbackService]
-    Rules[RuleEngine]
-    Context[ContextAssembler]
-    Gate[GatePolicy]
-    Session[SessionService]
+  subgraph Post
+    P2[Panel] --> PS[PromptService]
+    P2 --> FS[FeedbackService]
+    P2 --> SS[SessionService]
+    FS --> RE[RuleEngine]
+    FS --> CA[ContextAssembler]
+    FS --> MP[ModelProvider]
+    FS --> GP[GatePolicy]
+    PS --> DR[DraftRepository]
+    SS --> SR[SessionRepository]
+    CA --> WS[Workspace and language sources]
+    CA --> SL[SessionSliceReader]
+    MP --> CLI[Claude Code and Codex CLI]
   end
-  subgraph D[Domain]
-    Draft[PromptDraft · Question]
-    Bundle[ContextBundle · Manifest]
-    Reports[RuleReport · ScoreReport<br/>QuickReview · DeepReview]
-    Send[FeedbackSession · SendRecord]
-  end
-  subgraph I[Infrastructure]
-    Repo[JSONL repositories]
-    Sources[Workspace and language sources]
-    Slice[SessionSliceReader]
-    Model[ModelProvider adapter]
-  end
-  subgraph Plat[Platform]
-    VSCode[VS Code API]
-    CLI[Claude Code and Codex CLI]
-  end
-
-  Panel --> Prompt
-  Panel --> Feedback
-  Panel --> Session
-  Prompt --> Draft
-  Prompt --> Repo
-  Feedback --> Rules
-  Feedback --> Context
-  Feedback --> Model
-  Feedback --> Reports
-  Rules --> Reports
-  Context --> Bundle
-  Context --> Sources
-  Context --> Slice
-  Session --> Send
-  Session --> Repo
-  Session --> Slice
-  Session --> Gate
-  Gate --> Reports
-  Sources --> VSCode
-  Slice --> VSCode
-  Model --> CLI
 ```
 
-## Constructs
+## Objects
 
-| Construct | Responsibility |
-|---|---|
-| Panel | Draft, view state, typed messages |
-| PromptService | Draft lifecycle and restore |
-| FeedbackService | Quick and deep review orchestration |
-| RuleEngine | Instant symbolic findings |
-| ContextAssembler | Bounded bundle and manifest |
-| GatePolicy | Pure send decision |
-| SessionService | Sessions, answers, send records |
-| Repositories | JSONL append and snapshot |
-| ModelProvider | Provider, model, effort, completion |
-| Sources and SliceReader | Workspace, language, git, current session |
+Current keeps state in the panel. Post persists the draft, session, bundle, reports, and send record.
 
-## Rules
+```mermaid
+flowchart LR
+  subgraph Current
+    panel1["panel1: PanelState"] --> analysis1["analysis1: Analysis"]
+    panel1 --> review1["review1: Review"]
+    analysis1 --> workspace1["workspace1: WorkspaceContext"]
+    review1 --> workspace1
+  end
+  subgraph Post
+    draft1["draft1: PromptDraft"] --> session1["session1: FeedbackSession"]
+    session1 --> question1["question1: Question"]
+    session1 --> quick1["quick1: QuickReview"]
+    session1 --> deep1["deep1: DeepReview"]
+    bundle1["bundle1: ContextBundle"] --> draft1
+    bundle1 --> question1
+    bundle1 --> manifest1["manifest1: ContextManifest"]
+    quick1 --> rule1["rule1: RuleReport"]
+    quick1 --> score1["score1: ScoreReport"]
+    deep1 --> rule1
+    deep1 --> score1
+    deep1 --> manifest1
+    send1["send1: SendRecord"] --> draft1
+    send1 --> session1
+  end
+```
 
-- Dependencies point down. Domain imports nothing.
-- Application uses ports. Infrastructure implements them.
-- `core/` has no VS Code imports.
-- Invalid model output yields no score, no crash, no gate.
-- `gateSending` defaults false.
-- Deep feedback receives draft, answers, workspace, and a bounded current-session slice.
+## Sequence
 
-## Core flow
+Current reviews, then gates on the rule score. Post assembles context, reviews deeply, then applies one gate policy.
 
-```text
-FeedbackService.deep(draft, answers)
-  ContextAssembler.build -> ContextBundle + ContextManifest
-  ModelProvider.complete(bundle) -> DeepReview + ScoreReport
-  SessionService.save(review)
-  GatePolicy.decide(ruleReport, scoreReport, settings)
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant P as Panel
+  participant A as analyze
+  participant R as review
+  participant C as Claude
+  participant F as FeedbackService
+  participant X as ContextAssembler
+  participant M as ModelProvider
+  participant G as GatePolicy
+  participant S as SessionService
+  rect rgb(245,245,245)
+    Note over U,C: Current
+    U->>P: type draft
+    P->>A: analyze(draft, workspace)
+    A-->>P: Analysis and score
+    P->>R: review(draft, mode, notes)
+    R->>C: claude -p
+    C-->>R: Review JSON
+    R-->>P: Review
+    U->>P: Send
+    P->>P: gate on rule score
+  end
+  rect rgb(235,245,255)
+    Note over U,S: Post
+    U->>P: type draft
+    P->>F: quick(draft)
+    F->>F: RuleEngine
+    F->>M: complete(draft, rubric)
+    M-->>F: QuickReview and ScoreReport
+    F-->>P: render
+    U->>P: deep(draft, answers)
+    P->>F: deep(draft, answers)
+    F->>X: build(draft, answers)
+    X-->>F: ContextBundle and Manifest
+    F->>M: complete(bundle)
+    M-->>F: DeepReview
+    F->>S: save(review)
+    F-->>P: render
+    U->>P: Send
+    P->>S: send(draft)
+    S->>G: decide(rule, score, settings)
+    G-->>S: allow or confirm
+    S-->>P: SendRecord
+  end
+```
+
+## Activity
+
+Current is linear. Post adds a context loop and an answer loop.
+
+```mermaid
+flowchart TB
+  subgraph Current
+    C0([Type draft]) --> C1[Analyze]
+    C1 --> C2[Show score and findings]
+    C2 --> C3[Review]
+    C3 --> C4[Render issues]
+    C4 --> C5{Rule score low?}
+    C5 -- yes --> C6[Confirm]
+    C5 -- no --> C7[Send]
+    C6 --> C7
+  end
+  subgraph Post
+    P0([Type draft]) --> P1[RuleEngine]
+    P1 --> P2[Quick review]
+    P2 --> P3[ScoreReport]
+    P3 --> P4{Deep feedback?}
+    P4 -- yes --> P5[ContextAssembler]
+    P5 --> P6[ContextBundle and Manifest]
+    P6 --> P7[ModelProvider.deep]
+    P7 --> P8[DeepReview]
+    P8 --> P9{Questions?}
+    P9 -- yes --> P10[Answer]
+    P10 --> P5
+    P9 -- no --> P11{GatePolicy}
+    P4 -- no --> P11
+    P11 -- allow --> P12[SendRecord]
+    P11 -- confirm --> P13[Confirm]
+    P13 --> P12
+  end
 ```
