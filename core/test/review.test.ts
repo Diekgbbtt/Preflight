@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { analyze, extractJson, hashPrompt, parseCliOutput, review, type ModelRunner } from "../src";
+import { analyze, extractJson, hashPrompt, parseCliOutput, parseScore, review, type ModelRunner, type ScoreMeta } from "../src";
 
 describe("hashPrompt", () => {
   it.each([
@@ -9,6 +9,56 @@ describe("hashPrompt", () => {
     ["Target: src/a.ts\nAction: add a test", "380c8cdb25423d97431861938064739609ddfdc729ab81fafa996983e36fbba8"],
   ])("hashes %j to the known vector", (text, expected) => {
     expect(hashPrompt(text)).toBe(expected);
+  });
+});
+
+describe("parseScore", () => {
+  const prompt = "Add a test for login";
+  const meta: ScoreMeta = { source: "quick", provider: "stub", model: "sonnet", thinkingEffort: "low", scoredAt: "2026-01-01T00:00:00.000Z" };
+  const res = (json: string) => json;
+
+  it("sums the four dimensions and records versions", () => {
+    const text = res('{"dimensions":{"target":20,"action":25,"scope":15,"done":20},"verdict":"ready","score":99}');
+    const s = parseScore(text, prompt, meta);
+    expect(s?.dimensions).toEqual({ target: 20, action: 25, scope: 15, done: 20 });
+    expect(s?.score).toBe(80);
+    expect(s?.level).toBe("clear");
+    expect(s?.source).toBe("quick");
+    expect(s?.provider).toBe("stub");
+    expect(s?.model).toBe("sonnet");
+    expect(s?.thinkingEffort).toBe("low");
+    expect(s?.rubricVersion).toBe("v1");
+    expect(s?.scoredAt).toBe("2026-01-01T00:00:00.000Z");
+    expect(s?.promptHash).toBe(hashPrompt(prompt));
+  });
+
+  it("ignores the model total and verdict", () => {
+    const text = res('{"dimensions":{"target":5,"action":5,"scope":5,"done":5},"score":100,"verdict":"ready"}');
+    const s = parseScore(text, prompt, meta);
+    expect(s?.score).toBe(20);
+    expect(s?.level).toBe("vague");
+  });
+
+  it.each([
+    ["missing dimension", '{"dimensions":{"target":20,"action":25,"scope":15}}'],
+    ["string number", '{"dimensions":{"target":"20","action":25,"scope":15,"done":20}}'],
+    ["float", '{"dimensions":{"target":5.5,"action":25,"scope":15,"done":20}}'],
+    ["negative", '{"dimensions":{"target":-5,"action":25,"scope":15,"done":20}}'],
+    ["out of range", '{"dimensions":{"target":30,"action":25,"scope":15,"done":20}}'],
+    ["not multiple of 5", '{"dimensions":{"target":22,"action":25,"scope":15,"done":20}}'],
+    ["dimensions not an object", '{"dimensions":[20,25,15,20]}'],
+    ["dimensions missing", '{"issues":[]}'],
+    ["two JSON objects", '{"dimensions":{"target":20,"action":25,"scope":15,"done":20}} {"dimensions":{"target":5,"action":5,"scope":5,"done":5}}'],
+    ["malformed JSON", '{"dimensions":{"target":20,'],
+  ])("rejects %s", (_name, text) => {
+    expect(parseScore(text, prompt, meta)).toBeNull();
+  });
+
+  it("ignores extra dimension keys and keeps confidence only in 0..1", () => {
+    const good = res('{"dimensions":{"target":20,"action":25,"scope":15,"done":20,"style":25},"confidence":0.8}');
+    expect(parseScore(good, prompt, meta)?.confidence).toBe(0.8);
+    const badConfidence = res('{"dimensions":{"target":20,"action":25,"scope":15,"done":20},"confidence":1.5}');
+    expect(parseScore(badConfidence, prompt, meta)?.confidence).toBeUndefined();
   });
 });
 
