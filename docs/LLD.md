@@ -109,8 +109,10 @@ sequenceDiagram
     F-->>P: render
     U->>P: deep(draft, answers)
     P->>F: deep(draft, answers)
-    F->>I: loadInstructionBlock(draft)
-    I-->>F: block and files
+    alt supports instruction files
+      F->>I: load(draft)
+      I-->>F: block and files
+    end
     F->>X: build(draft, answers, files)
     X-->>F: ContextBundle and Manifest
     F->>D: buildDeepPrompt(bundle, block)
