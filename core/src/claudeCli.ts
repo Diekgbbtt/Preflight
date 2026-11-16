@@ -66,9 +66,60 @@ export function createClaudeProvider(profile: ModelProfile, config: { claudePath
       supportsInstructionFiles: true,
     },
     validateProfile: validateClaudeProfile,
-    // Placeholder until the shared spawn runner is driven in by its tests.
-    complete: () => Promise.reject(new Error("Claude complete() is not implemented yet.")),
+    complete: (request, signal) => execClaude({ claudePath: config.claudePath }, request, profile, signal),
   };
+}
+
+function cancelledError(): Error {
+  return Object.assign(new Error("cancelled"), { code: "cancelled" });
+}
+
+/**
+ * Shared spawn runner: one execFile call for both the provider path and the
+ * legacy panel runner. The prompt goes over stdin so it can't be mistaken for
+ * a flag and has no length limit. No retries; #42 owns retry.
+ */
+function execClaude(
+  opts: { claudePath: string; cwd?: string },
+  request: ModelRequest,
+  profile: ModelProfile,
+  signal?: AbortSignal,
+): Promise<ModelResponse> {
+  if (request.model !== profile.model) {
+    return Promise.reject(
+      new Error(`Model mismatch: request model "${request.model}" does not match the profile model "${profile.model}".`),
+    );
+  }
+  if (signal?.aborted) return Promise.reject(cancelledError());
+  return new Promise<ModelResponse>((resolve, reject) => {
+    const child = execFile(
+      opts.claudePath,
+      buildClaudeArgs(request, profile),
+      { cwd: opts.cwd, signal, timeout: DEFAULT_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err) {
+          if (signal?.aborted || err.name === "AbortError" || (err as NodeJS.ErrnoException).code === "ABORT_ERR") {
+            return reject(cancelledError());
+          }
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code === "ENOENT") {
+            return reject(
+              new Error(`Claude Code CLI not found at "${opts.claudePath}". Install it or set promptPreflight.claudePath.`),
+            );
+          }
+          const failure = new Error(stderr.trim() || err.message);
+          if (code !== undefined) failure.code = code;
+          return reject(failure);
+        }
+        try {
+          resolve(parseCliOutput(stdout));
+        } catch (e) {
+          reject(e);
+        }
+      },
+    );
+    child.stdin?.end(request.user);
+  });
 }
 
 export function parseCliOutput(stdout: string): ModelResponse {
