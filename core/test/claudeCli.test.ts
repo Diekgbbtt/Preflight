@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildClaudeArgs, createClaudeProvider } from "../src/claudeCli";
+import { buildClaudeArgs, createClaudeProvider, parseCliOutput } from "../src/claudeCli";
 import type { ModelProfile } from "../src/model";
 
 const request = { system: "You review prompts.", user: "<prompt>\nhi\n</prompt>", model: "sonnet" };
@@ -210,5 +210,31 @@ setTimeout(() => {
       removeCli(cliPath);
       fs.rmSync(marker, { force: true });
     }
+  });
+});
+
+describe("parseCliOutput", () => {
+  it("parses result, token sums including cache tokens, and cost", () => {
+    const stdout = JSON.stringify({
+      result: "ok",
+      usage: { input_tokens: 3, output_tokens: 2, cache_creation_input_tokens: 4, cache_read_input_tokens: 5 },
+      total_cost_usd: 0.02,
+    });
+    expect(parseCliOutput(stdout)).toEqual({ text: "ok", inputTokens: 12, outputTokens: 2, costUsd: 0.02 });
+  });
+
+  it("defaults missing usage and cost to zeros", () => {
+    expect(parseCliOutput(JSON.stringify({ result: "ok" }))).toEqual({
+      text: "ok", inputTokens: 0, outputTokens: 0, costUsd: 0,
+    });
+    expect(parseCliOutput(JSON.stringify({ result: "ok", usage: { output_tokens: 7 } }))).toEqual({
+      text: "ok", inputTokens: 0, outputTokens: 7, costUsd: 0,
+    });
+  });
+
+  it("throws on is_error and on invalid JSON", () => {
+    expect(() => parseCliOutput(JSON.stringify({ result: "bad", is_error: true }))).toThrow("bad");
+    expect(() => parseCliOutput("not json")).toThrow();
+    expect(() => parseCliOutput("")).toThrow();
   });
 });
