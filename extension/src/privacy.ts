@@ -113,7 +113,7 @@ function isExcludedPath(path: string): boolean {
 }
 
 /** True when the path cannot be resolved inside a workspace folder. */
-function isOutsideWorkspace(path: string): boolean {
+export function isOutsideWorkspace(path: string): boolean {
   return path.startsWith("/") || /^[A-Za-z]:\//.test(path) || path.split("/").includes("..");
 }
 

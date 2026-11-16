@@ -6,7 +6,6 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import {
   MAX_TEXT_SEARCH_MATCHES,
-  isOutsideWorkspace,
   probeCapabilities,
   type LanguageApi,
   type LanguageCapabilities,
@@ -18,6 +17,7 @@ import {
   type TextSearchMatch,
   type TextSearchOptions,
 } from "./languageContext";
+import { isOutsideWorkspace } from "./privacy";
 import { rg, type ExecResult } from "./exec";
 
 export interface VscodeLanguageApiOptions {

@@ -9,7 +9,7 @@ import {
   type ContextSourceId,
   type ContextSourceResult,
 } from "@prompt-preflight/core";
-import { shouldInclude, type IncludePolicy } from "./privacy";
+import { isOutsideWorkspace, shouldInclude, type IncludePolicy } from "./privacy";
 
 /** A 0-based editor position with VS Code semantics; display adds 1. */
 export interface LanguagePosition {
@@ -162,11 +162,6 @@ function rangeLabel(range: LanguageRange): string {
 /** Newlines and carriage returns never survive into a fragment line. */
 function collapse(text: string): string {
   return text.replace(/\r\n?|\n/g, " ").trim();
-}
-
-/** True when the path cannot be resolved inside a workspace folder. */
-export function isOutsideWorkspace(path: string): boolean {
-  return path.startsWith("/") || /^[A-Za-z]:\//.test(path) || path.split("/").includes("..");
 }
 
 /** Shared fragment assembly: cap the input, render, and stamp provenance. */
