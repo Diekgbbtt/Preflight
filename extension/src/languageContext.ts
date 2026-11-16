@@ -480,12 +480,21 @@ function createFallbackSource(
   },
 ): ContextSource {
   const { id, capability, guard, call, build } = options;
+  /**
+   * Runs the text-search fallback with one error contract: a missing `rg`
+   * (ENOENT) omits with `unsupported`, any other fallback failure omits
+   * with `error`, no matches omits with `empty`, and an abort rethrows.
+   */
   const runFallback = async (signal?: AbortSignal): Promise<ContextSourceResult> => {
-    if (deps.query !== undefined && deps.query.trim() !== "") {
+    if (deps.query === undefined || deps.query.trim() === "") return { fragments: [], omittedReason: "empty" as const };
+    try {
       const fragment = await searchFallback(deps.api, deps.query, fallbackOptions(deps, id), signal);
       return fragment === null ? { fragments: [], omittedReason: "empty" as const } : collected(fragment, fragment.content.split("\n").length, true);
+    } catch (error) {
+      if (signal?.aborted) throw cancelledError();
+      if ((error as { code?: unknown } | null)?.code === "ENOENT") return { fragments: [], omittedReason: "unsupported" as const };
+      return { fragments: [], omittedReason: "error" as const };
     }
-    return { fragments: [], omittedReason: "empty" as const };
   };
   return {
     id,
@@ -500,8 +509,7 @@ function createFallbackSource(
         if (deps.query === undefined || deps.query.trim() === "") {
           return { fragments: [], omittedReason: "unsupported" as const };
         }
-        const fragment = await searchFallback(deps.api, deps.query, fallbackOptions(deps, id), signal);
-        return fragment === null ? { fragments: [], omittedReason: "empty" as const } : collected(fragment, fragment.content.split("\n").length, true);
+        return runFallback(signal);
       }
       let raw: Array<{ path?: string }>;
       try {

@@ -725,6 +725,30 @@ describe("createSymbolsSource", () => {
     expect(result.fragments[0]?.provenance.kind).toBe("text-search");
     expect(result.details).toEqual({ count: 1, textSearch: true });
   });
+  it("omits with unsupported when the fallback reports a missing rg", async () => {
+    const probe = async () => ({ ...caps, documentSymbols: false });
+    const api: LanguageApi = {
+      ...baseApi([]),
+      textSearch: async () => {
+        throw Object.assign(new Error("rg is not available"), { code: "ENOENT" });
+      },
+    };
+    const result = await createSymbolsSource(deps({ api, probe, query: "makeThing" })).collect();
+    expect(result.omittedReason).toBe("unsupported");
+    expect(result.fragments).toEqual([]);
+  });
+
+  it("omits with error when the fallback fails for another reason", async () => {
+    const probe = async () => ({ ...caps, documentSymbols: false });
+    const api: LanguageApi = {
+      ...baseApi([]),
+      textSearch: async () => {
+        throw new Error("rg exploded");
+      },
+    };
+    const result = await createSymbolsSource(deps({ api, probe, query: "makeThing" })).collect();
+    expect(result.omittedReason).toBe("error");
+  });
 });
 
 describe("createWorkspaceSymbolsSource", () => {
