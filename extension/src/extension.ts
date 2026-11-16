@@ -106,12 +106,13 @@ function validateModelSettings(config: Config): string | null {
 
 /**
  * Read-only probe that confirms the installed CLI still exposes --effort.
- * Runs once at activation and never sends a model call. A failed probe is
- * silent here; missing-CLI health belongs to #42.
+ * Runs once at activation for Claude profiles only and never sends a model
+ * call. A failed probe is silent here; missing-CLI health belongs to #42.
  */
 function probeEffortSupport(config: Config): void {
-  execFile(config.claudePath, ["--help"], { timeout: 2000, maxBuffer: 1024 * 1024 }, (err, stdout) => {
-    if (err || stdout.includes("--effort")) return;
+  if (config.provider !== "claude") return;
+  execFile(config.claudePath, ["--help"], { timeout: 2000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+    if (err || stdout.includes("--effort") || stderr.includes("--effort")) return;
     void vscode.window.showWarningMessage(
       "The Claude Code CLI does not support --effort, so promptPreflight.thinkingEffort will be ignored.",
     );

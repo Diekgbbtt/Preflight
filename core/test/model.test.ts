@@ -71,6 +71,16 @@ describe("createProvider", () => {
     });
   });
 
+  it.each([
+    ["claude-3-5-haiku-latest", { inputPerMTok: 0.1, outputPerMTok: 0.5 }],
+    ["sonnet", { inputPerMTok: 2, outputPerMTok: 10 }],
+    ["opus-4-5", { inputPerMTok: 4, outputPerMTok: 20 }],
+    ["mystery-model", { inputPerMTok: 0, outputPerMTok: 0 }],
+  ])("prices model %s from the capability matrix", (model, cost) => {
+    const provider = createProvider({ provider: "claude", model, thinkingEffort: "medium" }, config);
+    expect(provider.capabilities.cost).toEqual(cost);
+  });
+
   it("binds a Codex profile to the stub with unknown capabilities", () => {
     const provider = createProvider(codexProfile, config);
     expect(provider.capabilities).toEqual({
