@@ -5,6 +5,8 @@ import {
   parseConsent,
   redact,
   shouldInclude,
+  consentMessage,
+  EXCLUDE_GLOB,
   type IncludeKind,
   type IncludePolicy,
 } from "../src/privacy";
@@ -203,5 +205,45 @@ describe("shouldInclude", () => {
 
   it("rejects an unknown kind", () => {
     expect(shouldInclude("src/app.ts", "history" as IncludeKind, ws)).toBe(false);
+  });
+});
+
+describe("consentMessage", () => {
+  const message = consentMessage();
+
+  it("discloses both provider data-handling URLs", () => {
+    expect(message).toContain("https://code.claude.com/docs/en/data-usage");
+    expect(message).toContain("https://openai.com/policies/privacy-policy/");
+  });
+
+  it("states that the draft and Q&A are always sent", () => {
+    expect(message).toContain("draft");
+    expect(message).toContain("Q&A");
+  });
+
+  it("states that code is gated and redacted", () => {
+    expect(message).toContain("includeCode");
+    expect(message.toLowerCase()).toContain("redact");
+  });
+
+  it("discloses unencrypted local persistence and clearHistory", () => {
+    expect(message).toContain("unencrypted");
+    expect(message).toContain("globalStorageUri");
+    expect(message).toContain("clearHistory");
+  });
+
+  it("discloses the opt-in study log that clearHistory keeps", () => {
+    expect(message.toLowerCase()).toContain("study log");
+    expect(message.toLowerCase()).toContain("opt-in");
+  });
+});
+
+describe("EXCLUDE_GLOB", () => {
+  it("covers dependencies, git metadata and build directories", () => {
+    expect(EXCLUDE_GLOB).toContain("node_modules");
+    expect(EXCLUDE_GLOB).toContain(".git");
+    for (const dir of ["dist", "out", "build", ".venv", "venv", "__pycache__", ".next", "target"]) {
+      expect(EXCLUDE_GLOB).toContain(dir);
+    }
   });
 });

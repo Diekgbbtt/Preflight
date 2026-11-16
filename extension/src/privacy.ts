@@ -126,3 +126,34 @@ export function shouldInclude(path: string, kind: IncludeKind, policy: IncludePo
   }
   return true;
 }
+
+/** Anthropic's page on how Claude Code handles your data. */
+export const CLAUDE_DATA_URL = "https://code.claude.com/docs/en/data-usage";
+
+/** OpenAI's privacy policy, for when Codex is selected as provider (#10). */
+export const CODEX_DATA_URL = "https://openai.com/policies/privacy-policy/";
+
+/** The full first-use disclosure shown once before code can leave the machine. */
+export function consentMessage(): string {
+  return [
+    "Prompt Preflight sends your draft and its Q&A answers to the selected model provider (Claude Code, or Codex once supported).",
+    `Code excerpts, diagnostics and session code are sent only when promptPreflight.context.includeCode allows it, after secret redaction. Provider data handling: Claude: ${CLAUDE_DATA_URL} - Codex: ${CODEX_DATA_URL}.`,
+    "Drafts, Q&A, reviews, session slices inside review records, and send records are stored unencrypted under context.globalStorageUri and stay on this machine; they leave it only inside a model request.",
+    "promptPreflight.clearHistory deletes those stored records.",
+    "The study log is opt-in, separate, and is not deleted by clearHistory.",
+  ].join(" ");
+}
+
+/** Single glob for vscode.workspace.findFiles that skips dependency, git and build directories. */
+export const EXCLUDE_GLOB = "**/{node_modules,.git,dist,out,build,.venv,venv,__pycache__,.next,target}/**";
+
+/**
+ * Required privacy fields for one context source entry in the #36 manifest.
+ * #36 owns the manifest type and uses these field names.
+ */
+export interface SourcePrivacyFields {
+  /** Final included excerpt size after redaction and truncation. */
+  chars: number;
+  /** Number of secret matches replaced during redaction. */
+  redactions: number;
+}
