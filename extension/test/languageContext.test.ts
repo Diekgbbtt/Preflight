@@ -10,9 +10,11 @@ import {
   probeCapabilities,
   searchFallback,
   withTimeout,
+  createDiagnosticsSource,
   type LanguageApi,
   type LanguageDiagnostic,
   type LanguageLocation,
+  type LanguageSourceDeps,
   type LanguageSymbol,
   type TextSearchMatch,
   type TextSearchOptions,
@@ -474,6 +476,107 @@ describe("searchFallback", () => {
     };
     controller.abort();
     await expect(searchFallback(api, "pat", options, controller.signal)).rejects.toMatchObject({ code: "cancelled" });
+  });
+});
+
+describe("createDiagnosticsSource", () => {
+  const diag = (path: string, message = "boom"): LanguageDiagnostic => ({
+    uri: `file:///w/${path}`,
+    path,
+    range: { start: at(0, 0), end: at(0, 1) },
+    severity: "error",
+    source: "tsc",
+    message,
+  });
+  const baseApi = (diagnostics: LanguageDiagnostic[] = [diag("a.ts")]): LanguageApi => ({
+    documentSymbols: async () => [],
+    workspaceSymbols: async () => [],
+    definitions: async () => [],
+    references: async () => [],
+    diagnostics: async () => diagnostics,
+    textSearch: async () => [],
+  });
+  const caps = { documentSymbols: true, workspaceSymbols: true, definitions: true, references: true, diagnostics: true };
+  const deps = (over: Partial<LanguageSourceDeps> & { api?: LanguageApi } = {}): LanguageSourceDeps => ({
+    api: over.api ?? baseApi(),
+    policy: { includeCode: "workspace" },
+    folderUri: "file:///w",
+    ...over,
+  });
+
+  it("has the diagnostics source id and priority", () => {
+    const source = createDiagnosticsSource(deps());
+    expect(source.id).toBe("diagnostics");
+    expect(source.priority).toBe(45);
+  });
+
+  it("omits with empty when there are no open documents", async () => {
+    const result = await createDiagnosticsSource(deps()).collect();
+    expect(result.fragments).toEqual([]);
+    expect(result.omittedReason).toBe("empty");
+  });
+
+  it("collects diagnostics for included open documents with details", async () => {
+    const api = baseApi([diag("a.ts", "one"), diag("a.ts", "two")]);
+    const result = await createDiagnosticsSource(deps({ api, openDocuments: [{ uri: "file:///w/a.ts", path: "a.ts" }] })).collect();
+    expect(result.fragments).toHaveLength(1);
+    expect(result.fragments[0]?.content.split("\n")).toEqual([
+      "error tsc a.ts:1:1-1:2 one",
+      "error tsc a.ts:1:1-1:2 two",
+    ]);
+    expect(result.details).toEqual({ files: 1, count: 2 });
+  });
+
+  it("skips excluded documents and omits with excluded when all are filtered", async () => {
+    const api = baseApi();
+    const result = await createDiagnosticsSource(
+      deps({ api, openDocuments: [{ uri: "file:///w/n/x.ts", path: "node_modules/n/x.ts" }] }),
+    ).collect();
+    expect(result.omittedReason).toBe("excluded");
+  });
+
+  it("omits with unsupported when the probe is null or diagnostics is false", async () => {
+    const probe = async () => null;
+    const result = await createDiagnosticsSource(deps({ probe, openDocuments: [{ uri: "file:///w/a.ts", path: "a.ts" }] })).collect();
+    expect(result.omittedReason).toBe("unsupported");
+    const probeFalse = async () => ({ ...caps, diagnostics: false });
+    const result2 = await createDiagnosticsSource(deps({ probe: probeFalse, openDocuments: [{ uri: "file:///w/a.ts", path: "a.ts" }] })).collect();
+    expect(result2.omittedReason).toBe("unsupported");
+  });
+
+  it("omits with empty when the file has no diagnostics", async () => {
+    const result = await createDiagnosticsSource(
+      deps({ api: baseApi([]), openDocuments: [{ uri: "file:///w/a.ts", path: "a.ts" }] }),
+    ).collect();
+    expect(result.omittedReason).toBe("empty");
+  });
+
+  it("caps at 200 diagnostics and marks truncated with the capped count", async () => {
+    const many = Array.from({ length: 10_000 }, (_, i) => diag(`f${i % 3}.ts`, `m${i}`));
+    const result = await createDiagnosticsSource(
+      deps({ api: baseApi(many), openDocuments: [{ uri: "file:///w/a.ts", path: "a.ts" }, { uri: "file:///w/b.ts", path: "b.ts" }, { uri: "file:///w/c.ts", path: "c.ts" }] }),
+    ).collect();
+    expect(result.fragments[0]?.content.split("\n")).toHaveLength(200);
+    expect(result.fragments[0]?.provenance.truncated).toBe(true);
+    expect(result.details).toEqual({ files: 3, count: 200 });
+  });
+
+  it("omits with error when the provider throws", async () => {
+    const api = deps({ openDocuments: [{ uri: "file:///w/a.ts", path: "a.ts" }] }).api as LanguageApi;
+    const throwing: LanguageApi = { ...api, diagnostics: async () => { throw new Error("boom"); } };
+    const result = await createDiagnosticsSource(deps({ api: throwing, openDocuments: [{ uri: "file:///w/a.ts", path: "a.ts" }] })).collect();
+    expect(result.omittedReason).toBe("error");
+  });
+
+  it("throws the cancelled error when the signal is aborted", async () => {
+    const controller = new AbortController();
+    const api = baseApi();
+    (api as { diagnostics: (uri: string) => Promise<LanguageDiagnostic[]> }).diagnostics = () =>
+      new Promise((_, reject) => {
+        controller.signal.addEventListener("abort", () => reject(Object.assign(new Error("cancelled"), { code: "cancelled" })), { once: true });
+      });
+    controller.abort();
+    await expect(createDiagnosticsSource(deps({ api, openDocuments: [{ uri: "file:///w/a.ts", path: "a.ts" }] })).collect(controller.signal)).rejects.toMatchObject({ code: "cancelled" });
   });
 });
 

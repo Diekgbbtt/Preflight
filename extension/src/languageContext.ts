@@ -327,6 +327,88 @@ export async function searchFallback(api: LanguageApi, query: string, options: S
   };
 }
 
+/** Everything the language sources need: the injected port, policy and per-request probe. */
+export interface LanguageSourceDeps {
+  api: LanguageApi;
+  policy: IncludePolicy;
+  folderUri?: string;
+  cwd?: string;
+  activeUri?: string;
+  activePath?: string;
+  activePosition?: LanguagePosition;
+  openDocuments?: Array<{ uri: string; path: string }>;
+  /** Workspace-symbol query: the selected identifier or a draft identifier. */
+  query?: string;
+  /** Per-request capability probe; the adapter caches per document version. */
+  probe?: () => Promise<LanguageCapabilities | null>;
+  timeoutMs?: number;
+}
+
+/** The provider timeout: a hung language call never blocks the bundle. */
+const DEFAULT_PROVIDER_TIMEOUT_MS = MAX_TIMEOUT_MS;
+
+/** True when the per-request probe is missing or says the provider is unavailable. */
+async function unavailable(deps: LanguageSourceDeps, capability: keyof LanguageCapabilities, signal?: AbortSignal): Promise<boolean> {
+  if (deps.probe === undefined) return false;
+  const capabilities = await deps.probe();
+  return capabilities === null || !capabilities[capability];
+}
+
+/** Runs one provider call under the timeout and the cancellation rules. */
+async function providerCall<T>(deps: LanguageSourceDeps, run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  return withTimeout(run(), deps.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS, signal);
+}
+
+/** Maps a failed provider call to an omit reason: an abort throws, everything else is error. */
+function failureReason(error: unknown, signal?: AbortSignal): { omit: "error" } {
+  if (signal?.aborted) throw cancelledError();
+  throw new Error(`provider call failed: ${error instanceof Error ? error.message : String(error)}`);
+}/** The fallback options shared by every LSP source. */
+function fallbackOptions(deps: LanguageSourceDeps, sourceId: ContextSourceId): SearchFallbackOptions {
+  return {
+    sourceId,
+    priority: SOURCE_PRIORITIES[sourceId],
+    cwd: deps.cwd,
+    folderUri: deps.folderUri,
+    allowPath: (path) => shouldInclude(path, "workspace", deps.policy),
+  };
+}
+
+/**
+ * The diagnostics source: live diagnostics for every included open document,
+ * flattened, capped at MAX_DIAGNOSTICS. #36 never calls getDiagnostics;
+ * this source owns it. No cache: diagnostics are read fresh per request.
+ */
+export function createDiagnosticsSource(deps: LanguageSourceDeps): ContextSource {
+  return {
+    id: "diagnostics",
+    priority: SOURCE_PRIORITIES.diagnostics,
+    collect: async (signal?: AbortSignal) => {
+      throwIfAborted(signal);
+      const documents = deps.openDocuments ?? [];
+      if (documents.length === 0) return { fragments: [], omittedReason: "empty" as const };
+      const included = documents.filter((document) => shouldInclude(document.path, "diagnostic", deps.policy));
+      if (included.length === 0) return { fragments: [], omittedReason: "excluded" as const };
+      if (await unavailable(deps, "diagnostics", signal)) return { fragments: [], omittedReason: "unsupported" as const };
+      let collected: LanguageDiagnostic[];
+      try {
+        const perDocument = await Promise.all(included.map((document) => providerCall(deps, () => deps.api.diagnostics(document.uri), signal)));
+        collected = perDocument.flat();
+      } catch (error) {
+        if (signal?.aborted) throw cancelledError();
+        return { fragments: [], omittedReason: "error" as const };
+      }
+      if (collected.length === 0) return { fragments: [], omittedReason: "empty" as const };
+      const fragment = buildDiagnosticsFragment(collected, deps.folderUri);
+      if (fragment === null) return { fragments: [], omittedReason: "empty" as const };
+      return {
+        fragments: [fragment],
+        details: { files: included.length, count: fragment.content.split("\n").length },
+      };
+    },
+  };
+}
+
 /**
  * Probes which language providers answer for one document. Runs every port
  * method under the timeout and turns each result into a boolean; a timeout
