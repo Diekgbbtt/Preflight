@@ -10,11 +10,13 @@ Every entry has a contract version and a change log.
 |---|---|---|---|---|---|
 | #40 | merged | ticket/40-review-schema | cf5cdbbcacbb73468dc8b8c0d90eb41eb59bc622 | `npm run typecheck && npm test && npm run build` -> 111 passed | PASS |
 | #41 | merged | ticket/41-privacy-policy | bf2bb83575f7007a9537c5802e5146587990fcc0 | `npm run typecheck && npm test && npm run build` -> 151 passed | PASS |
+| #35 | merged | ticket/35-jsonl-repository | 621906d336f7aaaf7d68165a11a01a1d15d52a4e | `npm run typecheck && npm test && npm run build` -> 187 passed | PASS |
 
 Source branch: `lane-1/control-plane`.
 Setup commit: `098e887` (`chore: set up lane 1 worktrees and extension tests`).
 Lane base for ticket #40: `098e8873371ef995ba7cb1a2ddbd50a2bc385a03`.
 Lane base for ticket #41: `9ed943f7e352c4c56653ed5e003607a3d79d2a34`.
+Lane base for ticket #35: `6b1384bc0453247d9d2212a16b9bcc7f77a9077c`.
 
 <a id="contract-40"></a>
 
@@ -249,12 +251,155 @@ Lane base for ticket #41: `9ed943f7e352c4c56653ed5e003607a3d79d2a34`.
 - Change log:
   - v1: initial contract merged in #41.
 
+<a id="contract-35"></a>
+
+## Contract: #35 JSONL repository and session persistence - v1
+
+- State: merged.
+- Commit: `621906d336f7aaaf7d68165a11a01a1d15d52a4e`.
+- Base: `6b1384bc0453247d9d2212a16b9bcc7f77a9077c`.
+- Exports:
+  - `const SCHEMA_VERSION = 1`
+  - `type EventInput<T> = { id: string; ts: string } & T`
+  - `type Event<T> = { schemaVersion: number; seq: number; id: string; ts: string } & T`
+  - `interface ListResult<T> { events: Event<T>[]; skipped: number }`
+  - `interface Repository<T> { append(event: EventInput<T>): Promise<Event<T>>; list(): Promise<ListResult<T>>; byDraft(draftId: string): Promise<Event<T>[]>; bySession(sessionId: string): Promise<Event<T>[]> }`
+  - `interface SendRecord { draftId: string; folderUri: string; text: string; promptHash: string; sessionId?: string; target: "terminal" | "clipboard" }`
+  - `type IdGenerator = () => string`
+  - `interface Clock { now(): number }`
+  - `type MigrationStep = (event: Event<unknown>) => Event<unknown> | null`
+  - `interface MigrationResult<T> { events: Event<T>[]; skipped: number }`
+  - `function migrate<T>(events: Event<T>[], steps?: Record<number, MigrationStep>): MigrationResult<T>`
+  - `interface ClearResult { deleted: number }`
+  - `function isValidEvent(value: unknown): value is Event<unknown>`
+  - `class JsonlRepository<T> implements Repository<T>` with `constructor(filePath: string)`, `append`, `list`, `byDraft`, `bySession`, and `clear(): Promise<ClearResult>`.
+  - `core/src/index.ts` re-exports `* from "./repository"`.
+- Envelope fields:
+  - `schemaVersion`: `number`, written as `1` on every append.
+  - `seq`: `number`, integer, at least 1, scoped to one file, monotonic, assigned by the repository.
+  - `id`: `string`, supplied by the caller. It is the aggregate id, not a uniqueness constraint.
+  - `ts`: `string`, supplied by the caller in ISO 8601. The repository does not validate the ISO format or call a clock.
+  - Payload keys are top-level. There is no `data` wrapper.
+- `SendRecord` fields:
+  - `draftId`: `string`, the draft the send belongs to.
+  - `folderUri`: `string`, the workspace folder URI for the send.
+  - `text`: `string`, the exact sent prompt. This is the only stored prompt copy.
+  - `promptHash`: `string`, supplied by #40's `hashPrompt` at send time. The repository never computes it.
+  - `sessionId`: `string | undefined`, the resolved agent session id, added by a later version of the same `sendId`.
+  - `target`: `"terminal" | "clipboard"`.
+  - The envelope `id` is `sendId`; the envelope `ts` is `sentAt`.
+- File names and aggregate ids:
+  - `drafts.jsonl`: envelope `id` is `draftId`. Payload `text: string`.
+  - `questions.jsonl`: envelope `id` is `questionId`. Payload `draftId`, `sessionId?`, and the #15 `Question` fields. #35 does not define those fields.
+  - `reviews.jsonl`: envelope `id` is `reviewId`. Payload `draftId`, `sessionId?`, the `DeepReview` from #40/#46, and the derived `SessionSlice` when one exists. #35 does not define or import those types and does not add `slices.jsonl`.
+  - `sends.jsonl`: envelope `id` is `sendId`. Payload is `SendRecord`.
+- Index mapping:
+  - `byDraft` matches the envelope `id` for `drafts.jsonl`.
+  - `byDraft` matches the payload `draftId` for `questions.jsonl`, `reviews.jsonl`, and `sends.jsonl`.
+  - `bySession` matches the payload `sessionId` for every file. A missing or non-string `sessionId` is not indexed.
+  - Unknown ids return `[]`.
+- Ordering and versions:
+  - `list`, `byDraft`, and `bySession` return events ordered by `seq` ascending.
+  - Equal `seq` values keep file order, because the sort is stable.
+  - Reads return copies of the arrays; callers cannot mutate the indexes.
+  - A later append with the same `id` is a new version ordered by `seq`. Every version is preserved. Consumers fold to the highest `seq` for the current state.
+  - `seq` starts at 1 and is `max numeric seq + 1`. A numeric `seq` from a corrupt, invalid, or future-version line still raises the max, so an interrupted write cannot cause a duplicate seq.
+- Append behavior:
+  - Appends use `fs.appendFile`, UTF-8, one JSON object per line, `\n` terminated. The file is never rewritten.
+  - Appends are serialized by a per-file promise queue.
+  - `append` creates the parent directory when needed.
+  - If the file does not end with `\n`, the append writes a leading `\n` before the new record. The partial line is never truncated or rewritten.
+  - After the write resolves, the repository adopts the terminated partial if it is a valid current-or-older event, or counts it as skipped otherwise, and commits the new event to the cache and indexes.
+  - A rejected write leaves the repository state unchanged, including the pending partial, so a retry writes the leading `\n` again.
+  - `append` resolves only after the bytes reach the file, and returns the stored event including `schemaVersion` and `seq`.
+- Read behavior:
+  - A missing file returns `{ events: [], skipped: 0 }`.
+  - A trailing line without `\n` is ignored and is not counted as skipped.
+  - A complete line that fails JSON parsing or envelope validation is skipped and counted.
+  - A blank line in the middle is a corrupt line and counts as skipped. The final empty segment after a trailing newline is not a line.
+  - An unknown future `schemaVersion` is skipped and counted. An older `schemaVersion` is kept in `list` for the caller to migrate; the repository does not migrate it.
+  - Envelope validation requires a plain object, an integer `schemaVersion` of at least 0, an integer `seq` of at least 1, a string `id`, and a string `ts`. Payload fields are not validated except the index keys.
+  - A failed read clears the cached load promise, so a later operation retries the read.
+- Migration:
+  - `migrate(events, steps = {})` is pure and idempotent. It does not mutate its inputs or write files.
+  - Events at `SCHEMA_VERSION` pass through.
+  - Events above `SCHEMA_VERSION` are skipped and counted.
+  - An older event uses `steps[schemaVersion]`. A missing step, a `null` result, a non-event result, or a step that does not increase the version causes the event to be skipped and counted.
+  - Multi-hop migrations apply each registered step in order until the event reaches `SCHEMA_VERSION`.
+  - A second run on the output is a no-op.
+- Clear:
+  - `JsonlRepository.clear()` deletes that repository's file, clears the cache, indexes, max seq, and skipped count, and returns `{ deleted }`.
+  - `deleted` counts valid events only, not skipped or corrupt lines.
+  - A missing file returns `{ deleted: 0 }`.
+  - Clear sets a clearing flag synchronously. Appends that begin after clear starts reject with `Error("repository is clearing")`.
+  - Clear waits for already queued appends before deleting.
+  - After clear, a new append starts at seq 1.
+- Clear history command:
+  - Command id: `promptPreflight.clearHistory`.
+  - Declared in `extension/package.json` with title "Clear History" and category "Prompt Preflight".
+  - The command shows a modal warning and proceeds only on the exact "Delete" label.
+  - It clears `drafts.jsonl`, `questions.jsonl`, `reviews.jsonl`, and `sends.jsonl`, sums the valid event counts, and reports the total as an event count.
+  - It keeps settings and the study log. It does not delete `study-log.jsonl`.
+  - If a clear fails, it shows an error message without a raw stack trace.
+- Persistence:
+  - Files live under `context.globalStorageUri.fsPath`.
+  - One file per aggregate. No snapshot, compaction, SQLite, ORM, or `slices.jsonl`.
+  - The raw transcript is never stored. The `SessionSlice`, when present, is a derived payload field in a review event.
+- Privacy:
+  - The exact sent text lives only in `SendRecord.text`. #41 discloses it.
+  - The repository never logs prompt text, file contents, paths, or secrets.
+- Tests:
+  - `extension/test/repository.test.ts`: `npx vitest run extension/test/repository.test.ts` -> 36 passed.
+  - Full suite: `npm test` -> 187 passed.
+- Test seams:
+  - `JsonlRepository<T>(filePath)` public methods: `extension/test/repository.test.ts`.
+  - `migrate(events, steps?)`: `extension/test/repository.test.ts`.
+  - `clear()`: `extension/test/repository.test.ts`.
+  - Temp directories via `node:os.tmpdir()` and `node:fs/promises`.
+  - Size test: append grows the file by exactly the new line's bytes and preserves the prefix.
+- Edge modes covered:
+  - Missing directory, missing file, empty file, corrupt first/middle/last complete line, blank line.
+  - Trailing partial with no newline: ignored, not counted. A partial that parses as a valid event is adopted on the next append. A corrupt partial is terminated, counted as skipped, and does not block the append.
+  - A partial with a numeric seq raises the next seq even when the envelope is invalid or the schema version is future.
+  - Two concurrent appends and a read behind them. Read results sorted by seq with stable ties.
+  - Duplicate seq after a crash: the next append uses max numeric seq + 1 and both duplicate-seq events are preserved.
+  - Duplicate `id`: both versions preserved and ordered.
+  - Unknown future schema version: skipped and counted, but its seq still raises the next append.
+  - Unicode and newlines inside string values: one line, round-trip exact.
+  - Read-only directory and read-only file: reject with the fs error, then retry after permissions are restored.
+  - Failed append over a partial tail: the write rejection leaves the partial pending; the retry preserves both records.
+  - Clear while an append is queued: clear waits, counts the queued event, then deletes. A new append after clear begins rejects.
+  - Unknown draft/session id: `[]`.
+  - `sends.jsonl` with a missing `promptHash` or `sessionId`: the envelope is valid, `list` returns it, `bySession` does not index a missing session.
+- Assumptions:
+  - The repository does not validate that `ts` is ISO 8601, only that it is a string. The caller owns the format.
+  - Older schema versions are returned by `list` and are not migrated automatically. The caller may use `migrate`.
+  - A numeric `seq` on any parseable line raises the max, even if the line is skipped. This is the crash-recovery rule.
+  - `isValidEvent` is a shared exported helper. It is not a new aggregate schema.
+  - `IdGenerator` and `Clock` are published types for the composition root. The repository does not use them; the caller supplies `id` and `ts` directly.
+  - `promptHash` is always caller-supplied. #35 does not import or duplicate `hashPrompt`.
+  - The repository is not wired to the panel in this ticket. Reload persistence is proven by constructing new repository instances over the same files.
+  - The clear command does not clear in-memory panel state or consent. It deletes the four repository files and keeps settings and the study log.
+- Consumers:
+  - #38: use `SendRecord`, `bySession`, `byDraft`, and the envelope `id`/`ts` mapping. The latest `sendId` version carries the resolved `sessionId`.
+  - #43: build the panel protocol on the same repository methods and the clear command.
+  - #45: use `migrate` and append migrated study-log events as new events. Do not import `study-log.jsonl` here.
+  - #46: store the final `DeepReview` with `contextManifest` as payload fields in `reviews.jsonl`. Do not add `slices.jsonl`.
+  - #15: store `Question` payload fields in `questions.jsonl`. #35 does not define them.
+- Open gaps:
+  - The panel is not wired to append or read repository events yet. #43/#15/#46 own that integration.
+  - The clear command does not reset in-memory panel state; the panel state is not persisted in this ticket.
+  - `JsonlRepository` is per-instance. Two instances over the same file do not share a cache; the intended composition root uses one instance per file.
+- Change log:
+  - v1: initial contract merged in #35.
+
 ## Contract changes
 
 | Date | Contract | From | To | Consumers notified |
 |---|---|---|---|---|
 | 2026-11-16 | #40 review schema | none | v1 | #26, #27, #35, #36, #38, #39, #42, #45, #13, #46 |
 | 2026-11-16 | #41 privacy boundary | none | v1 | #36, #38, #13, #46 |
+| 2026-11-16 | #35 JSONL repository | none | v1 | #38, #43, #45, #46, #15 |
 
 ## Dispatch notes
 
