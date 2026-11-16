@@ -111,29 +111,36 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 }
 
 /**
- * Rejects after `ms` milliseconds or on abort, whichever comes first, and
- * always clears the timer and the abort listener. A timed-out call rejects
- * with a `code: "timeout"` error; an abort rejects with `code: "cancelled"`.
+ * Rejects after `ms` milliseconds or on abort, whichever comes first. One
+ * settle path clears the timer and removes the abort listener on resolve,
+ * reject, abort, and timeout, so nothing stays attached afterwards. A
+ * timed-out call rejects with a `code: "timeout"` error; an abort rejects
+ * with `code: "cancelled"`.
  */
 export function withTimeout<T>(promise: Promise<T>, ms: number, signal?: AbortSignal): Promise<T> {
   if (signal?.aborted) return Promise.reject(cancelledError());
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(Object.assign(new Error(`timed out after ${ms} ms`), { code: "timeout" })), ms);
-    const onAbort = () => reject(cancelledError());
-    if (signal) signal.addEventListener("abort", onAbort, { once: true });
-    const cleanup = () => {
-      clearTimeout(timer);
-      if (signal) signal.removeEventListener("abort", onAbort);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
+    let settled = false;
+    const settle = (finish: () => void): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      if (signal !== undefined && onAbort !== undefined) signal.removeEventListener("abort", onAbort);
+      finish();
     };
+    timer = setTimeout(
+      () => settle(() => reject(Object.assign(new Error(`timed out after ${ms} ms`), { code: "timeout" }))),
+      ms,
+    );
+    if (signal !== undefined) {
+      onAbort = () => settle(() => reject(cancelledError()));
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
     promise.then(
-      (value) => {
-        cleanup();
-        resolve(value);
-      },
-      (error) => {
-        cleanup();
-        reject(error);
-      },
+      (value) => settle(() => resolve(value)),
+      (error) => settle(() => reject(error)),
     );
   });
 }

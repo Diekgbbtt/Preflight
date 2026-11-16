@@ -333,6 +333,29 @@ describe("withTimeout", () => {
   it("propagates the underlying rejection", async () => {
     await expect(withTimeout(Promise.reject(new Error("provider boom")), 50)).rejects.toThrow("provider boom");
   });
+
+  it("removes the abort listener and clears the timer on resolve", async () => {
+    const controller = new AbortController();
+    const removeSpy = vi.spyOn(controller.signal, "removeEventListener");
+    await expect(withTimeout(Promise.resolve("v"), 10_000, controller.signal)).resolves.toBe("v");
+    expect(removeSpy).toHaveBeenCalledWith("abort", expect.any(Function));
+  });
+
+  it("removes the abort listener and clears the timer on timeout", async () => {
+    const controller = new AbortController();
+    const removeSpy = vi.spyOn(controller.signal, "removeEventListener");
+    await expect(withTimeout(new Promise<string>(() => {}), 10, controller.signal)).rejects.toMatchObject({ code: "timeout" });
+    expect(removeSpy).toHaveBeenCalledWith("abort", expect.any(Function));
+  });
+
+  it("removes the abort listener when the abort itself settles the call", async () => {
+    const controller = new AbortController();
+    const removeSpy = vi.spyOn(controller.signal, "removeEventListener");
+    const pending = withTimeout(new Promise<string>(() => {}), 10_000, controller.signal);
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ code: "cancelled" });
+    expect(removeSpy).toHaveBeenCalledWith("abort", expect.any(Function));
+  });
 });
 
 describe("probeCapabilities", () => {
