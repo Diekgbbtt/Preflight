@@ -103,9 +103,11 @@ function execClaude(
           }
           const code = (err as NodeJS.ErrnoException).code;
           if (code === "ENOENT") {
-            return reject(
-              new Error(`Claude Code CLI not found at "${opts.claudePath}". Install it or set promptPreflight.claudePath.`),
+            const missing = new Error(
+              `Claude Code CLI not found at "${opts.claudePath}". Install it or set promptPreflight.claudePath.`,
             );
+            missing.code = code;
+            return reject(missing);
           }
           const failure: Error & { code?: string | number } = new Error(stderr.trim() || err.message);
           if (code !== undefined) failure.code = code;

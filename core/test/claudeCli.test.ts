@@ -263,3 +263,16 @@ process.stdout.write(${JSON.stringify(OK_JSON)});`);
     }
   });
 });
+
+describe("claude provider missing CLI", () => {
+  it("rejects with the install hint for a missing CLI path", async () => {
+    const profile: ModelProfile = { provider: "claude", model: "sonnet", thinkingEffort: "medium" };
+    const err = await rejectionOf(
+      createClaudeProvider(profile, { claudePath: "/no/such/claude" }).complete(request),
+    ) as Error & { code?: string };
+    expect(err.code).toBe("ENOENT");
+    expect(err.message).toBe(
+      'Claude Code CLI not found at "/no/such/claude". Install it or set promptPreflight.claudePath.',
+    );
+  });
+});
