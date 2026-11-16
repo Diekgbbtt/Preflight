@@ -9,10 +9,10 @@ import {
   findPathRefs,
   type ContextFragment,
   type ContextKind,
-  type ContextRange,
   type ContextSource,
   type ContextSourceId,
   type ContextSourceResult,
+  type Range,
 } from "@prompt-preflight/core";
 import { shouldInclude, type IncludePolicy } from "./privacy";
 import { git, type ExecResult } from "./exec";
@@ -40,7 +40,7 @@ function fragment(
   source: ContextSourceId,
   kind: ContextKind,
   content: string,
-  extra?: { path?: string; range?: ContextRange },
+  extra?: { path?: string; range?: Range },
 ): ContextFragment {
   const folderUri = folderUriOf(deps);
   return {

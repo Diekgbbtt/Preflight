@@ -1,6 +1,7 @@
 // Bounded, deterministic context plane for model calls (ticket #36).
 // Pure Node/TypeScript only: no vscode import, no privacy import. The caller
 // injects `redact` and the total budget; the assembler never reads settings.
+import type { Range } from "./types";
 
 /** Why a source produced no included fragments. */
 export type OmitReason = "budget" | "empty" | "excluded" | "unsupported" | "error";
@@ -53,19 +54,13 @@ export const SOURCE_PRIORITIES: Record<ContextSourceId, number> = {
   "test-command": 30,
 };
 
-/** Character offsets into the prompt, end exclusive. Same shape as core's Range. */
-export interface ContextRange {
-  start: number;
-  end: number;
-}
-
 /** Where one fragment came from and how it was produced. */
 export interface ContextProvenance {
   kind: ContextKind;
   /** Workspace-relative POSIX path, or "" for an untitled or virtual document. */
   path?: string;
   /** Character offsets of the excerpt inside its document, when known. */
-  range?: ContextRange;
+  range?: Range;
   truncated: boolean;
   /** Extra fact from the producing collector, e.g. a failure detail. */
   reason?: string;
@@ -330,7 +325,6 @@ export async function assemble(input: ContextInput, sources: ContextSource[], op
       sourceCap -= capped.tokens;
       if (capped.content === "") {
         // Nothing survived the cap or the budget: stop here; the rest is dropped.
-        remaining -= 0;
         if (!capped.truncated) continue;
         break;
       }
