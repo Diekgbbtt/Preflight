@@ -145,39 +145,13 @@ export function parseCliOutput(stdout: string): ModelResponse {
 }
 
 /**
- * Legacy runner kept for the existing panel path. It stays a ModelRunner and
- * gains --effort medium once the shared spawn runner lands.
+ * Legacy runner kept for the existing panel path. It stays a ModelRunner with
+ * the same signature and reuses the shared spawn runner, bound to a profile
+ * with medium effort. So the panel path now passes --effort medium too.
  */
 export function claudeCliRunner(claudePath = "claude", cwd?: string): ModelRunner {
-  return (req: ModelRequest, signal?: AbortSignal) =>
-    new Promise<ModelResponse>((resolve, reject) => {
-      const args = [
-        "-p",
-        "--model", req.model,
-        "--output-format", "json",
-        "--tools", "",
-        "--setting-sources", "",
-        "--system-prompt", req.system,
-      ];
-      const child = execFile(
-        claudePath,
-        args,
-        { cwd, signal, timeout: DEFAULT_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
-        (err, stdout, stderr) => {
-          if (err) {
-            const hint = (err as NodeJS.ErrnoException).code === "ENOENT"
-              ? `Claude Code CLI not found at "${claudePath}". Install it or set promptPreflight.claudePath.`
-              : stderr.trim() || err.message;
-            return reject(new Error(hint));
-          }
-          try {
-            resolve(parseCliOutput(stdout));
-          } catch (e) {
-            reject(e);
-          }
-        },
-      );
-      // Prompt goes over stdin so it can't be mistaken for a flag and has no length limit.
-      child.stdin?.end(req.user);
-    });
+  return (req: ModelRequest, signal?: AbortSignal) => {
+    const profile: ModelProfile = { provider: "claude", model: req.model, thinkingEffort: "medium" };
+    return execClaude({ claudePath, cwd }, req, profile, signal);
+  };
 }

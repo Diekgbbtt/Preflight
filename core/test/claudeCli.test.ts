@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildClaudeArgs, createClaudeProvider, parseCliOutput } from "../src/claudeCli";
+import { buildClaudeArgs, claudeCliRunner, createClaudeProvider, parseCliOutput } from "../src/claudeCli";
 import type { ModelProfile } from "../src/model";
 
 const request = { system: "You review prompts.", user: "<prompt>\nhi\n</prompt>", model: "sonnet" };
@@ -236,5 +236,30 @@ describe("parseCliOutput", () => {
     expect(() => parseCliOutput(JSON.stringify({ result: "bad", is_error: true }))).toThrow("bad");
     expect(() => parseCliOutput("not json")).toThrow();
     expect(() => parseCliOutput("")).toThrow();
+  });
+});
+
+describe("claudeCliRunner legacy path", () => {
+  it("spawns the CLI with --effort medium and resolves the response", async () => {
+    const marker = path.join(FAKE_DIR, "marker-legacy");
+    fs.rmSync(marker, { force: true });
+    const cliPath = makeCli(`const fs = require("fs");
+fs.writeFileSync(process.env.MARKER, JSON.stringify(process.argv.slice(2)));
+fs.readFileSync(0, "utf8");
+process.stdout.write(${JSON.stringify(OK_JSON)});`);
+    process.env.MARKER = marker;
+    try {
+      const res = await claudeCliRunner(cliPath)(request);
+      expect(res).toEqual({ text: '{"verdict":"ready"}', inputTokens: 8, outputTokens: 2, costUsd: 0.01 });
+      const args = JSON.parse(fs.readFileSync(marker, "utf8")) as string[];
+      expect(args).toContain("--effort");
+      expect(args[args.indexOf("--effort") + 1]).toBe("medium");
+      expect(args).toContain("sonnet");
+      expect(args).toContain("--setting-sources");
+    } finally {
+      delete process.env.MARKER;
+      removeCli(cliPath);
+      fs.rmSync(marker, { force: true });
+    }
   });
 });
