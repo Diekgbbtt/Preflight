@@ -1,5 +1,5 @@
 import type { Analysis, Range } from "./types";
-import { DEEP_REPLY_SCHEMA, QUICK_REPLY_SCHEMA, RUBRIC_TEXT } from "./schema";
+import { DEEP_REPLY_SCHEMA, QUICK_REPLY_SCHEMA, RUBRIC_TEXT, extractJson } from "./schema";
 
 export type ReviewMode = "quick" | "deep";
 
@@ -74,15 +74,8 @@ export function buildReviewRequest(prompt: string, mode: ReviewMode, model: stri
   return { system: mode === "quick" ? QUICK_SYSTEM : DEEP_SYSTEM, user: parts.join("\n\n"), model };
 }
 
-/** Pull the first JSON object out of a model reply (tolerates ```json fences and stray text). */
-export function extractJson(text: string): unknown {
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const body = fenced ? fenced[1] : text;
-  const start = body.indexOf("{");
-  const end = body.lastIndexOf("}");
-  if (start < 0 || end <= start) throw new Error("No JSON object in model reply");
-  return JSON.parse(body.slice(start, end + 1));
-}
+/** Pull the first JSON object out of a model reply. Re-exported here for the review.ts public path; the single implementation lives in schema.ts. */
+export { extractJson } from "./schema";
 
 export function parseReview(prompt: string, mode: ReviewMode, res: ModelResponse): Review {
   const raw = extractJson(res.text) as Record<string, unknown>;

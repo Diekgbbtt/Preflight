@@ -1,5 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { analyze, buildReviewRequest, extractJson, hashPrompt, parseCliOutput, parseDeepReview, parseQuickReview, parseScore, review, DEEP_REPLY_SCHEMA, QUICK_REPLY_SCHEMA, RUBRIC_TEXT, type ModelRunner, type ModelUsage, type ScoreMeta } from "../src";
+// Schema-first import: this file's first import evaluates schema.ts before review.ts.
+// It reproduces the D1 schema/review import cycle: before extractJson moved into schema.ts
+// this file failed with "ReferenceError: Cannot access 'RUBRIC_TEXT' before initialization".
+import { DEEP_REPLY_SCHEMA, QUICK_REPLY_SCHEMA, RUBRIC_TEXT, hashPrompt, parseScore } from "../src/schema";
+import { analyze, buildReviewRequest, extractJson, parseCliOutput, parseDeepReview, parseQuickReview, review, type ModelRunner, type ModelUsage, type ScoreMeta } from "../src";
+
+describe("schema module standalone import", () => {
+  it("exposes the rubric, hash and parser without review.ts evaluating first", () => {
+    expect(RUBRIC_TEXT).toContain("target (where): 0 = no target at all");
+    expect(hashPrompt("hello")).toBe("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
+    const s = parseScore('{"dimensions":{"target":25,"action":25,"scope":25,"done":25}}', "p", {
+      source: "quick", provider: "p", model: "m", thinkingEffort: "low", scoredAt: "2026-01-01T00:00:00.000Z",
+    });
+    expect(s?.score).toBe(100);
+  });
+});
 
 describe("hashPrompt", () => {
   it.each([
@@ -281,6 +296,12 @@ describe("analyze hardBlock", () => {
     expect(a.findings.some((f) => f.severity === "error")).toBe(true);
     expect(a.hardBlock).toBe(true);
     expect(analyze("Add a test for login in src/login.ts").hardBlock).toBe(false);
+  });
+
+  it("derives levels from the shared levelForScore thresholds", () => {
+    expect(analyze("Add a test for login in src/login.ts").level).toBe("clear");
+    expect(analyze("Fix the bug in the payment module").level).toBe("needs-work");
+    expect(analyze("Improve it").level).toBe("vague");
   });
 });
 

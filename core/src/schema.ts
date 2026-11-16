@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Dimensions, Level } from "./types";
 import type { ModelResponse, ReviewIssue } from "./review";
-import { extractJson } from "./review";
 
 /** Version of the shared review rubric. Bump when the anchors change. */
 export const RUBRIC_VERSION = "v1";
@@ -85,6 +84,16 @@ export interface DeepReview {
 
 const DIMENSION_KEYS = ["target", "action", "scope", "done"] as const;
 
+/** Pull the first JSON object out of a model reply (tolerates ```json fences and stray text).
+ * Lives here so schema.ts stays a leaf module: review.ts imports it, not the other way round. */
+export function extractJson(text: string): unknown {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const body = fenced ? fenced[1] : text;
+  const start = body.indexOf("{");
+  const end = body.lastIndexOf("}");
+  if (start < 0 || end <= start) throw new Error("No JSON object in model reply");
+  return JSON.parse(body.slice(start, end + 1));
+}
 /**
  * The four dimensions must be present, finite integers, multiples of 5, in range 0..25.
  * Extra keys are ignored. Any invalid dimension rejects the whole score.
