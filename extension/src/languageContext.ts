@@ -87,15 +87,14 @@ export const MAX_TEXT_SEARCH_MATCHES = 50;
 
 const MAX_TIMEOUT_MS = 3000;
 
-/** The assembler's own abort error, so every caller sees the same code. */
-function abortError(signal: AbortSignal | undefined): Error {
-  if (signal?.reason instanceof Error) return signal.reason;
+/** The abort error every cancelled call rejects with, per the ticket contract. */
+function cancelledError(): Error {
   return Object.assign(new Error("cancelled"), { code: "cancelled" });
 }
 
 /** Rejects when the caller aborted; a cancelled request never resolves. */
 function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) throw abortError(signal);
+  if (signal?.aborted) throw cancelledError();
 }
 
 /**
@@ -104,10 +103,10 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
  * with a `code: "timeout"` error; an abort rejects with `code: "cancelled"`.
  */
 export function withTimeout<T>(promise: Promise<T>, ms: number, signal?: AbortSignal): Promise<T> {
-  throwIfAborted(signal);
+  if (signal?.aborted) return Promise.reject(cancelledError());
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(Object.assign(new Error(`timed out after ${ms} ms`), { code: "timeout" })), ms);
-    const onAbort = () => reject(abortError(signal));
+    const onAbort = () => reject(cancelledError());
     if (signal) signal.addEventListener("abort", onAbort, { once: true });
     const cleanup = () => {
       clearTimeout(timer);
@@ -267,4 +266,33 @@ export function buildReferencesFragment(references: LanguageLocation[], folderUr
     capped: references.length > MAX_REFERENCES,
     folderUri,
   });
+}
+
+/**
+ * Probes which language providers answer for one document. Runs every port
+ * method under the timeout and turns each result into a boolean; a timeout
+ * or a throw is false. The full lists are discarded: the probe never
+ * collects symbols into a fragment. An empty uri means no document: null.
+ */
+export async function probeCapabilities(api: LanguageApi, uri: string, timeoutMs = MAX_TIMEOUT_MS, signal?: AbortSignal): Promise<LanguageCapabilities | null> {
+  if (uri === "") return null;
+  const answers: Array<[keyof LanguageCapabilities, Promise<unknown>]> = [
+    ["documentSymbols", api.documentSymbols(uri)],
+    ["workspaceSymbols", api.workspaceSymbols("probe")],
+    ["definitions", api.definitions(uri, { line: 0, character: 0 })],
+    ["references", api.references(uri, { line: 0, character: 0 })],
+    ["diagnostics", api.diagnostics(uri)],
+  ];
+  const capabilities = { documentSymbols: false, workspaceSymbols: false, definitions: false, references: false, diagnostics: false };
+  await Promise.all(
+    answers.map(async ([key, pending]) => {
+      try {
+        const value = await withTimeout(pending, timeoutMs, signal);
+        capabilities[key] = value !== null && value !== undefined;
+      } catch {
+        capabilities[key] = false; // a timeout or a throw means the provider is unavailable
+      }
+    }),
+  );
+  return capabilities;
 }

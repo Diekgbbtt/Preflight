@@ -7,6 +7,9 @@ import {
   buildReferencesFragment,
   buildSymbolsFragment,
   buildWorkspaceSymbolsFragment,
+  probeCapabilities,
+  withTimeout,
+  type LanguageApi,
   type LanguageDiagnostic,
   type LanguageLocation,
   type LanguageSymbol,
@@ -292,6 +295,79 @@ describe("buildReferencesFragment", () => {
     expect(fragment?.provenance.truncated).toBe(true);
     const single = buildReferencesFragment([loc("a.ts")]);
     expect(single?.content).toBe("a.ts:1:1");
+  });
+});
+
+describe("withTimeout", () => {
+  it("resolves with the underlying value when it arrives in time", async () => {
+    await expect(withTimeout(Promise.resolve("v"), 50)).resolves.toBe("v");
+  });
+
+  it("rejects with a timeout error after ms", async () => {
+    await expect(withTimeout(new Promise<string>(() => {}), 10)).rejects.toMatchObject({ code: "timeout" });
+  });
+
+  it("rejects with code cancelled on abort and clears the timer", async () => {
+    const controller = new AbortController();
+    const pending = withTimeout(new Promise<string>(() => {}), 10_000, controller.signal);
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ code: "cancelled", message: "cancelled" });
+  });
+
+  it("rejects immediately when the signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(withTimeout(Promise.resolve("v"), 50, controller.signal)).rejects.toMatchObject({ code: "cancelled" });
+  });
+
+  it("propagates the underlying rejection", async () => {
+    await expect(withTimeout(Promise.reject(new Error("provider boom")), 50)).rejects.toThrow("provider boom");
+  });
+});
+
+describe("probeCapabilities", () => {
+  const okApi = (): LanguageApi => ({
+    documentSymbols: async () => [{ name: "s", kind: "function" }],
+    workspaceSymbols: async () => [{ name: "w", kind: "function" }],
+    definitions: async () => [{ uri: "file:///w/a.ts", range: { start: at(0, 0), end: at(0, 1) } }],
+    references: async () => [],
+    diagnostics: async () => [],
+    textSearch: async () => [],
+  });
+
+  it("returns null for an empty uri", async () => {
+    await expect(probeCapabilities(okApi(), "")).resolves.toBeNull();
+  });
+
+  it("turns each provider result into a boolean and discards the lists", async () => {
+    const api = okApi();
+    const spy = vi.spyOn(api, "documentSymbols");
+    await expect(probeCapabilities(api, "file:///w/a.ts")).resolves.toEqual({
+      documentSymbols: true,
+      workspaceSymbols: true,
+      definitions: true,
+      references: true,
+      diagnostics: true,
+    });
+    expect(spy).toHaveReturnedTimes(1);
+  });
+
+  it("marks a provider false when it throws or hangs past the timeout", async () => {
+    const api: LanguageApi = {
+      ...okApi(),
+      documentSymbols: () => new Promise(() => {}),
+      references: async () => {
+        throw new Error("boom");
+      },
+    };
+    const capabilities = await probeCapabilities(api, "file:///w/a.ts", 20);
+    expect(capabilities).toEqual({
+      documentSymbols: false,
+      workspaceSymbols: true,
+      definitions: true,
+      references: false,
+      diagnostics: true,
+    });
   });
 });
 
