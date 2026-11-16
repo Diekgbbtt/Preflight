@@ -240,6 +240,21 @@ export async function assemble(input: ContextInput, sources: ContextSource[], op
   throwIfAborted(options.signal);
   assertUniqueSources(sources);
 
+  // #48 extra entries must not collide with any manifest id, and never repeat one.
+  const extraEntries = (options.extraEntries ?? []).map((entry) => ({ ...entry }));
+  const usedIds = new Set<string>(["draft", "qa", ...sources.map((source) => source.id)]);
+  const extraIds = new Set<string>();
+  for (const entry of extraEntries) {
+    if (usedIds.has(entry.source)) {
+      throw new Error(`extra manifest entry source "${entry.source}" collides with a reserved or collected source id`);
+    }
+    if (extraIds.has(entry.source)) {
+      throw new Error(`duplicate extra manifest entry source "${entry.source}"`);
+    }
+    extraIds.add(entry.source);
+  }
+  extraEntries.sort((a, b) => (a.source < b.source ? -1 : a.source > b.source ? 1 : 0));
+
   // Redact the user text first, then estimate; never return a partial draft or Q&A.
   const redactedDraft = redact(input.draft);
   const draftTokens = estimate(redactedDraft.text);
@@ -276,13 +291,10 @@ export async function assemble(input: ContextInput, sources: ContextSource[], op
   let remaining = Math.max(0, budget - draftTokens - qaTokens);
   const entries: ContextSourceEntry[] = [draftEntry, qaEntry];
   const fragments: ContextFragment[] = [];
-  let budgetExhausted = false;
 
+  // Every source is collected, even once the budget is spent, so the manifest
+  // can explain each omission and an abort still rejects the whole assemble.
   for (const source of sortSources(sources)) {
-    if (budgetExhausted) {
-      entries.push(omittedEntry(source, "budget"));
-      continue;
-    }
     throwIfAborted(options.signal);
     let result: ContextSourceResult;
     try {
@@ -301,6 +313,7 @@ export async function assemble(input: ContextInput, sources: ContextSource[], op
 
     const includedFragments: ContextFragment[] = [];
     let truncated = false;
+    let lostToCap = false;
     let chars = 0;
     let tokens = 0;
     let redactionCount = 0;
@@ -320,12 +333,20 @@ export async function assemble(input: ContextInput, sources: ContextSource[], op
       }
 
       // The per-source cap runs before the total budget.
-      const capped = fitFragment(content, Math.min(sourceCap, remaining), options.estimateTokens);
-      if (capped.truncated) truncated = true;
+      const effectiveCap = Math.min(sourceCap, remaining);
+      if (content === "") {
+        // An empty fragment is never included; a zero cap means the budget left no room.
+        if (effectiveCap <= 0) lostToCap = true;
+        continue;
+      }
+      const capped = fitFragment(content, effectiveCap, options.estimateTokens);
+      if (capped.truncated) {
+        truncated = true;
+        lostToCap = true;
+      }
       sourceCap -= capped.tokens;
       if (capped.content === "") {
         // Nothing survived the cap or the budget: stop here; the rest is dropped.
-        if (!capped.truncated) continue;
         break;
       }
 
@@ -349,10 +370,9 @@ export async function assemble(input: ContextInput, sources: ContextSource[], op
       if (capped.truncated) break;
     }
 
-    if (remaining <= 0) budgetExhausted = true;
-
     if (includedFragments.length === 0) {
-      entries.push(omittedEntry(source, "budget"));
+      // Distinguish "the budget or a cap took the content" from "the source had nothing".
+      entries.push(omittedEntry(source, lostToCap ? "budget" : "empty", result.details));
       continue;
     }
     fragments.push(...includedFragments);
@@ -368,14 +388,6 @@ export async function assemble(input: ContextInput, sources: ContextSource[], op
   }
 
   throwIfAborted(options.signal);
-
-  const extraEntries = (options.extraEntries ?? []).map((entry) => ({ ...entry }));
-  const extraIds = new Set<string>();
-  for (const entry of extraEntries) {
-    if (extraIds.has(entry.source)) throw new Error(`duplicate extra manifest entry source "${entry.source}"`);
-    extraIds.add(entry.source);
-  }
-  extraEntries.sort((a, b) => (a.source < b.source ? -1 : a.source > b.source ? 1 : 0));
 
   const totalTokens = draftTokens + qaTokens + entries.slice(2).reduce((sum, entry) => sum + (entry.included ? entry.tokens : 0), 0);
   const manifest: ContextManifest = { sources: [...entries, ...extraEntries], totalTokens, budget };

@@ -72,17 +72,16 @@ export class WorkspaceIndex implements vscode.Disposable {
   }
 }
 
-/** Uncommitted changes first, then files from the last few commits. Empty on git failure. */
+/** Uncommitted changes first, then files from the last few commits. Each command fails independently to empty. */
 async function gitRecentFiles(cwd: string): Promise<string[]> {
   const status = await git(cwd, ["status", "--porcelain"]);
   const log = await git(cwd, ["log", "-n", "5", "--name-only", "--pretty=format:"]);
-  if (!status.ok || !log.ok) return [];
-  const statusLines = status.stdout
+  const statusLines = (status.ok ? status.stdout : "")
     .split("\n")
     .map((l) => l.slice(3).trim().replace(/^"|"$/g, ""))
     .map((l) => l.split(" -> ").pop()!)
     .filter(Boolean);
-  const logLines = log.stdout
+  const logLines = (log.ok ? log.stdout : "")
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean);

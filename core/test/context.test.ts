@@ -242,6 +242,54 @@ describe("assemble", () => {
       .rejects.toThrow(/duplicate extra manifest entry source "AGENTS\.md"/);
   });
 
+  it("rejects extra entries colliding with the draft, qa, or a workspace source id", async () => {
+    const entry = (source: string) => ({ source, chars: 1, tokens: 1, included: true, truncated: false, redactions: 0 });
+    await expect(
+      assemble({ draft: "", qa: [] }, [fixedSource("selection", 80, { fragments: [] })], { budget: 10, estimateTokens: fakeEstimate, redact: noRedact, extraEntries: [entry("selection")] }),
+    ).rejects.toThrow(/extra manifest entry source "selection" collides/);
+    await expect(
+      assemble({ draft: "", qa: [] }, [], { budget: 10, estimateTokens: fakeEstimate, redact: noRedact, extraEntries: [entry("draft")] }),
+    ).rejects.toThrow(/extra manifest entry source "draft" collides/);
+    await expect(
+      assemble({ draft: "", qa: [] }, [], { budget: 10, estimateTokens: fakeEstimate, redact: noRedact, extraEntries: [entry("qa")] }),
+    ).rejects.toThrow(/extra manifest entry source "qa" collides/);
+  });
+
+  it("still collects every source after the budget is spent and keeps details on budget omissions", async () => {
+    let collected = 0;
+    const eater: ContextSource = {
+      id: "selection",
+      priority: SOURCE_PRIORITIES.selection,
+      collect: async () => ({
+        fragments: [{ source: "x", priority: 0, content: "a".repeat(40), tokens: 10, provenance: { kind: "selection", truncated: false, chars: 40 } }],
+      }),
+    };
+    const later: ContextSource = {
+      id: "git-diff",
+      priority: SOURCE_PRIORITIES["git-diff"],
+      collect: async () => {
+        collected++;
+        return { fragments: [{ source: "x", priority: 0, content: "diff text", tokens: 3, provenance: { kind: "git-diff", truncated: false, chars: 9 } }], details: { files: 1, dropped: 0 } };
+      },
+    };
+    const bundle = await assemble({ draft: "", qa: [] }, [later, eater], { budget: 5, estimateTokens: fakeEstimate, redact: noRedact });
+    expect(collected).toBe(1);
+    const entry = bundle.manifest.sources.find((s) => s.source === "git-diff");
+    expect(entry).toMatchObject({ included: false, omittedReason: "budget", chars: 0, tokens: 0, redactions: 0, details: { files: 1, dropped: 0 } });
+    expect(bundle.fragments.map((f) => f.source)).toEqual(["selection"]);
+  });
+
+  it("omits a source of empty fragments with empty under a non-zero budget", async () => {
+    const source = fixedSource("open-editors", SOURCE_PRIORITIES["open-editors"], {
+      fragments: [{ source: "x", priority: 0, content: "", tokens: 0, provenance: { kind: "open-editor", truncated: false, chars: 0 } }],
+    });
+    const bundle = await assemble({ draft: "", qa: [] }, [source], { budget: 10, estimateTokens: fakeEstimate, redact: noRedact });
+    const entry = bundle.manifest.sources.find((s) => s.source === "open-editors");
+    expect(entry?.included).toBe(false);
+    expect(entry?.omittedReason).toBe("empty");
+    expect(bundle.fragments).toHaveLength(0);
+  });
+
   it("merges extra entries after the source entries, sorted by id, without consuming the budget", async () => {
     const source = fixedSource("open-editors", SOURCE_PRIORITIES["open-editors"], {
       fragments: [{ source: "x", priority: 0, content: "ok", tokens: 1, provenance: { kind: "open-editor", truncated: false, chars: 2 } }],
