@@ -13,6 +13,7 @@ Every entry has a contract version and a change log.
 | #35 | merged | ticket/35-jsonl-repository | 621906d336f7aaaf7d68165a11a01a1d15d52a4e | `npm run typecheck && npm test && npm run build` -> 187 passed | PASS |
 | #39 | merged | ticket/39-model-profiles | 986b610b2f5bf0ee0b18a3a803c51771fee789ff | `npm run typecheck && npm test && npm run build` -> 227 passed | PASS |
 | #42 | merged | ticket/42-feedback-errors | 507ee22d48d26de29a5cf3e88982040105b40e65 | `npm run typecheck && npm test && npm run build` -> 295 passed | PASS |
+| #36 | merged | ticket/36-context-assembler | 495b52853631580933232fea1a3941c94adb5510 | `npm run typecheck && npm test && npm run build` -> 322 passed | PASS |
 
 Source branch: `lane-1/control-plane`.
 Setup commit: `098e887` (`chore: set up lane 1 worktrees and extension tests`).
@@ -21,6 +22,7 @@ Lane base for ticket #41: `9ed943f7e352c4c56653ed5e003607a3d79d2a34`.
 Lane base for ticket #35: `6b1384bc0453247d9d2212a16b9bcc7f77a9077c`.
 Lane base for ticket #39: `ed0c1d7cb40aee3fe68e633d75b2896839ae124b`.
 Lane base for ticket #42: `35c6a3b`.
+Lane base for ticket #36: `0c62960`.
 
 <a id="contract-40"></a>
 
@@ -682,6 +684,160 @@ Lane base for ticket #42: `35c6a3b`.
 - Change log:
   - v1: initial contract merged in #42.
 
+<a id="contract-36"></a>
+
+## Contract: #36 Context assembler and manifest - v1
+
+- State: merged.
+- Commit: `495b52853631580933232fea1a3941c94adb5510`.
+- Base: `0c62960`.
+- Exports from `core/src/context.ts` (re-exported from `core/src/index.ts`):
+  - `type OmitReason = "budget" | "empty" | "excluded" | "unsupported" | "error"`
+  - `type ContextKind = "selection" | "active-file" | "open-editor" | "git-diff" | "test-command" | "diagnostic" | "symbol" | "reference" | "definition" | "workspace-symbol" | "text-search" | "session"`
+  - `type ContextSourceId = "draft" | "qa" | "session-slice" | "selection" | "active-editor" | "open-editors" | "git-diff" | "diagnostics" | "symbols" | "references" | "definitions" | "workspace-symbols" | "test-command"`
+  - `const SOURCE_PRIORITIES: Record<ContextSourceId, number>` with the reserved table below.
+  - `interface ContextProvenance { kind: ContextKind; path?: string; range?: Range; truncated: boolean; reason?: string; chars: number; redactions?: number; folderUri?: string }`
+  - `interface ContextFragment { source: string; priority: number; content: string; tokens: number; provenance: ContextProvenance }`
+  - `interface ContextSourceResult { fragments: ContextFragment[]; omittedReason?: OmitReason; details?: Record<string, string | number | boolean> }`
+  - `interface ContextSource { id: string; priority: number; maxTokens?: number; collect(signal?: AbortSignal): Promise<ContextSourceResult> }`
+  - `interface ContextInput { draft: string; qa: Array<{ question: string; answer: string }> }`
+  - `interface ContextSourceEntry { source: string; chars: number; tokens: number; included: boolean; truncated: boolean; omittedReason?: OmitReason; redactions: number; details?: Record<string, string | number | boolean> }`
+  - `interface ContextManifest { sources: ContextSourceEntry[]; totalTokens: number; budget: number }`
+  - `interface ContextBundle { draft: string; qa: Array<{ question: string; answer: string }>; fragments: ContextFragment[]; manifest: ContextManifest }`
+  - `interface RedactResult { text: string; count: number }`
+  - `interface AssembleOptions { budget: number; estimateTokens: (text: string) => number; redact: (text: string) => RedactResult; extraEntries?: ContextSourceEntry[]; signal?: AbortSignal }`
+  - `function estimateTokens(text: string): number` = `Math.ceil(text.length / 4)`.
+  - `function assemble(input: ContextInput, sources: ContextSource[], options: AssembleOptions): Promise<ContextBundle>`.
+- Exports from `extension/src/exec.ts`:
+  - `type ExecResult = { ok: true; stdout: string } | { ok: false; code?: string; stderr: string }`
+  - `type ExecFileLike = (command: string, args: string[], options: { cwd: string; timeout: number; maxBuffer: number }, callback: (error: (Error & { code?: string | number }) | null, stdout: string, stderr: string) => void) => void`
+  - `function git(cwd: string, args: string[], exec?: ExecFileLike): Promise<ExecResult>`
+- Exports from `extension/src/contextSources.ts`:
+  - `interface ContextSourceDeps { folder?: vscode.WorkspaceFolder; policy: IncludePolicy; git?: (cwd: string, args: string[]) => Promise<ExecResult>; readFile?: (uri: vscode.Uri) => Thenable<Uint8Array> }`
+  - `createSelectionSource(deps): ContextSource`
+  - `createActiveEditorSource(deps): ContextSource`
+  - `createOpenEditorsSource(deps): ContextSource`
+  - `createGitDiffSource(deps): ContextSource`
+  - `createTestCommandSource(deps): ContextSource`
+  - `activePathFor(uri: vscode.Uri, folder?: vscode.WorkspaceFolder): string`
+  - `resolveContextFolder(draft: string, activeUri?: vscode.Uri): Promise<vscode.WorkspaceFolder | undefined>`
+- Reserved source ids and priorities:
+  | Source id | Priority |
+  |---|---|
+  | `draft` | 100 |
+  | `qa` | 90 |
+  | `session-slice` | 85 |
+  | `selection` | 80 |
+  | `active-editor` | 70 |
+  | `open-editors` | 60 |
+  | `git-diff` | 50 |
+  | `diagnostics` | 45 |
+  | `symbols` | 40 |
+  | `references` | 39 |
+  | `definitions` | 38 |
+  | `workspace-symbols` | 37 |
+  | `test-command` | 30 |
+- Manifest entry fields:
+  - `source`: the source id, or the extra-entry id such as an instruction file.
+  - `chars`: final included characters after redaction and truncation.
+  - `tokens`: final included tokens from the injected estimator.
+  - `included`: true when at least one workspace fragment remains.
+  - `truncated`: true when the source cap or total budget truncated or dropped a fragment.
+  - `omittedReason`: set only when `included` is false. One of the `OmitReason` values.
+  - `redactions`: number of secret matches replaced for the included fragments, without double counting.
+  - `details`: flat source-specific record of string, number, or boolean values.
+- Invariants:
+  - `draft` and `qa` are first-class bundle fields, not `ContextSource` implementations. A source id `draft` or `qa` throws.
+  - Duplicate source ids throw. Duplicate extra-entry ids throw. An extra entry that collides with `draft`, `qa`, or a collected source id throws.
+  - Sources are sorted by priority descending, then id ascending. The input array is not mutated.
+  - `draft` and `qa` are redacted before estimation and returned redacted. They are never truncated. Their manifest entries come first.
+  - Workspace budget is `max(0, budget - draftTokens - qaTokens)`.
+  - Sources are collected in sorted order. Every source is collected, even after the workspace budget reaches 0. The caller signal is passed to every `collect`.
+  - A source that throws is omitted with `error`; the bundle continues. An abort rejects the whole assemble with no partial bundle.
+  - A source that returns no fragments is omitted with its `omittedReason` or `empty`.
+  - Redaction runs before token estimation and budgeting. A fragment with `provenance.redactions` defined is treated as already redacted and is not redacted again.
+  - The per-source `maxTokens` cap is applied across the source's fragments in order, before the total budget.
+  - The source cap and total budget are token caps. A fragment that crosses a cap is truncated at a line boundary; if no line boundary fits, it is cut at `cap * 4` characters and trimmed to fit. The source is marked truncated. Later fragments or sources are dropped.
+  - `chars` is the final included size, not the pre-truncation size. `tokens` is `estimateTokens(final content)`.
+  - `manifest.totalTokens` = draftTokens + qaTokens + included workspace source tokens. It excludes `extraEntries`. It may exceed `manifest.budget` when the draft/QA floor exceeds the budget; the caller rejects that bundle with `context-too-large`.
+  - `manifest.sources` order is draft, qa, workspace sources in priority/id order, then extra entries sorted by source id.
+  - `fragments` contains only the final included workspace fragments, in source order. Draft, Q&A, and extra entries are not fragments.
+  - Extra entries do not consume the bundle budget and are not in `totalTokens`. #48 truncates its own text; #13 places it in the system prompt.
+  - A source order change does not change the output.
+  - `estimateTokens("")` is 0, four characters is 1, five characters is 2.
+- Errors and omission reasons:
+  - `budget`: the source had content but the source cap or total budget left no room.
+  - `empty`: no content.
+  - `excluded`: #41's exclusion policy rejected the file or the diff section.
+  - `unsupported`: no git, not a repo, no folder, or an unsupported collector context.
+  - `error`: the source threw.
+  - Duplicate/reserved ids are contract errors, not omissions.
+  - Abort rejects with `Object.assign(new Error("cancelled"), { code: "cancelled" })`, or `signal.reason` when it is an Error.
+- Basic sources:
+  - `selection`: active editor selection; no editor or empty selection -> `empty`; path via `activePathFor`; `shouldInclude(path, "selection", policy)`; untitled selection with path `""` is allowed; range = document offsets; kind `selection`; priority 80.
+  - `active-editor`: full active document when the selection is empty; a non-empty selection makes it `empty`; untitled/virtual -> `excluded`; `shouldInclude(path, "active-file", policy)`; kind `active-file`; priority 70.
+  - `open-editors`: other open text documents; excludes the active document, untitled/virtual, excluded paths, and whitespace-only content; one fragment per document; kind `open-editor`; priority 60; details `{ files: number }`.
+  - `git-diff`: `git diff HEAD --no-ext-diff --unified=3`; no folder or git failure -> `unsupported`; empty stdout -> `empty`; split into `diff --git` sections; use the `+++ b/` path or the header path; strip quotes and normalize backslashes; drop sections where `shouldInclude(path, "workspace", policy)` is false; all dropped -> `excluded`; kind `git-diff`; priority 50; details `{ files: included, dropped }`.
+  - `test-command`: reads `package.json` `scripts.test`; never executes it; no folder -> `unsupported`; missing file, invalid JSON, or no string/empty script -> `empty`; content is the script string; kind `test-command`; path `package.json`; priority 30; details `{ script: "test" }`.
+  - The basic sources set no `maxTokens`; the assembler's total budget controls them.
+  - The test command is not gated by `includeCode` because it is a script name, not a code excerpt.
+  - Every basic source records `folderUri` in provenance when a folder exists.
+  - `resolveContextFolder` checks the draft path references against each workspace folder with `vscode.workspace.fs.stat`, returns the first folder that owns one, else the active editor's folder, else `undefined`.
+  - `activePathFor` returns `""` for non-file/untitled URIs, a workspace-relative POSIX path for a file in the folder, and a `..` path for a file outside it; #41 rejects the outside path.
+- `exec.ts` and `workspace.ts`:
+  - `git` uses `execFile` with `cwd`, a 5000 ms timeout, and a 1 MB buffer. No shell.
+  - Success returns `{ ok: true, stdout }`. Failure returns `{ ok: false, code?: string, stderr }`; a non-zero numeric exit code is not included in `code`.
+  - `workspace.ts` uses the result union; `gitRecentFiles` handles status and log independently, so one failing command does not discard the other.
+  - `workspace.ts` reuses `EXCLUDE_GLOB` from `privacy.ts`; there is no third glob copy.
+- Tests:
+  - `core/test/context.test.ts`: `npx vitest run core/test/context.test.ts` -> 24 passed.
+  - `extension/test/exec.test.ts`: `npx vitest run extension/test/exec.test.ts` -> 3 passed.
+  - Full suite: `npm test` -> 322 passed.
+- Test seams:
+  - `assemble(input, sources, options)`: `core/test/context.test.ts`.
+  - `estimateTokens`: `core/test/context.test.ts`.
+  - `SOURCE_PRIORITIES`/`ContextSourceId`: `core/test/context.test.ts` and the collector code.
+  - `git(cwd, args, fakeExec)`: `extension/test/exec.test.ts`.
+  - Fake sources with fixed priorities and ids: `core/test/context.test.ts`.
+  - Abort rejects: `core/test/context.test.ts`.
+  - No `vscode` mock. The optional collector behavior test was deleted because it used `vi.mock("vscode")`, which the lane rule allows only for a thin adapter test named in a ticket.
+- Edge modes covered:
+  - No sources, zero budget, empty draft/Q&A, one source larger than the budget.
+  - Draft+Q&A exceed the budget: both full, `totalTokens > budget`, workspace sources omitted `budget`.
+  - Draft+Q&A exactly at the budget: workspace budget 0, all workspace sources omitted `budget`.
+  - Source exactly at its cap/budget and one token over.
+  - Source cap across multiple fragments; later fragments dropped.
+  - Priority ties, duplicate/reserved ids, extra-entry collisions, source order changes.
+  - Every omission reason; a throwing source isolated as `error`; details preserved on omissions.
+  - Abort before, during, and after a collect; no partial bundle.
+  - Redaction before estimation; already-redacted counts not double-counted.
+  - CRLF preservation, line-boundary truncation, mid-line fallback, zero cap, empty fragment.
+  - Extra entries after sources, sorted by id, excluded from `totalTokens` and `fragments`.
+- Assumptions:
+  - `ContextSourceResult.details` is the carrier for #38's `sourcePath`/`bytesRead`/`turnsKept` and #48's file facts. The brief's `collect` return shape omitted it, but the manifest `details` needs a producer.
+  - The assembler collects every source even after the budget is spent so the manifest can explain each omission and the abort signal reaches every `collect`.
+  - The test-command source is not gated by `includeCode`; it is a script name, not a code excerpt.
+  - `ContextSourceDeps.git` is a two-argument subset of `typeof git`; the helper's optional third fake executor is not exposed through the deps.
+  - Open editors skips whitespace-only documents, slightly stronger than literal emptiness.
+  - Git diff drops a section with no parseable path; a section with unquoted spaces (Git normally quotes them) is not vetted and is dropped. Git C-style escapes are not unescaped; no reachable privacy failure because the exclusion list uses exact names.
+  - A fragment whose first line is empty and whose next line exceeds the cap truncates to `""`; the source is recorded as `budget`. This is a narrow edge.
+  - The collectors have no behavior test after the vscode-mock test was removed. They are thin and reviewed by reading.
+  - The `assemble` ordering/cap/truncation/omit/abort seams were green-first after one large first green. This is a process deviation, disclosed, not a contract change.
+- Consumers:
+  - #37: implement the reserved diagnostics/symbols/references/definitions/workspace-symbols sources with the reserved ids/priorities, return `ContextSourceResult` fragments with `provenance.kind`, and use `ContextSource.maxTokens` only when a token cap is intended (the #37 count caps are separate).
+  - #38: implement `session-slice` at priority 85; use `estimateTokens`, `SOURCE_PRIORITIES`, `ContextFragment`, and the `details` carrier for `sourcePath`, `bytesRead`, `turnsKept`.
+  - #46: call `assemble` with the real budget and redactor, map `Question` records into `qa`, surface `manifest` to the deep prompt, and reject `manifest.totalTokens > manifest.budget` as `context-too-large`.
+  - #48: supply `extraEntries` with unique source strings and flat `details`; #36 sorts them after the source entries and excludes them from `totalTokens`.
+  - #13: place #48's instruction text in the system prompt; the extra entries are manifest-only.
+- Open gaps:
+  - #37 sources, #38 session source, and #48 extra-entry producer are not implemented here.
+  - The panel does not build a bundle yet. #46 owns that integration.
+  - The leading-empty-line truncation edge and the Git C-escape limitation are recorded assumptions, not fixed.
+  - The collectors have no behavior test after the lane's no-vscode-mock rule; #37's thin `LanguageApi` adapter test is the allowed platform seam.
+  - The `manifest.totalTokens > budget` rejection is the caller's job; the assembler returns the bundle.
+- Change log:
+  - v1: initial contract merged in #36.
+
 ## Contract changes
 
 | Date | Contract | From | To | Consumers notified |
@@ -692,6 +848,7 @@ Lane base for ticket #42: `35c6a3b`.
 | 2026-11-16 | #39 model profiles | none | v1 | #42, #26, #46, #10, #12, #45, #38, #6, #22, #27 |
 | 2026-11-16 | #39 model profiles | v1 | v1.1 | #42, #43, #46; additive `claudeCliRunner` effort parameter, no break |
 | 2026-11-16 | #42 feedback errors | none | v1 | #27, #43, #46, #47, #10, #12, #22 |
+| 2026-11-16 | #36 context assembler | none | v1 | #37, #38, #46, #48, #13 |
 
 ## Dispatch notes
 
