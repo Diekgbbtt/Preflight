@@ -145,7 +145,7 @@ Lane base for ticket #38: `d34bd22`.
 
 <a id="contract-41"></a>
 
-## Contract: #41 Privacy and consent boundary - v1
+## Contract: #41 Privacy and consent boundary - v1.1
 
 - State: merged.
 - Commit: `bf2bb83575f7007a9537c5802e5146587990fcc0`.
@@ -159,6 +159,7 @@ Lane base for ticket #38: `d34bd22`.
   - `type IncludeKind = "selection" | "active-file" | "open-editor" | "workspace" | "diagnostic" | "session"`
   - `interface IncludePolicy { includeCode: IncludeCode; activePath?: string }`
   - `function shouldInclude(path: string, kind: IncludeKind, policy: IncludePolicy): boolean`
+  - `function isOutsideWorkspace(path: string): boolean` (the shared workspace-boundary predicate; #37 imports it instead of keeping a second copy)
   - `interface RedactionResult { text: string; count: number }`
   - `function redact(text: string): RedactionResult`
   - `function consentedIncludeCode(setting: IncludeCode, consent: ConsentRecord | null): IncludeCode`
@@ -256,10 +257,10 @@ Lane base for ticket #38: `d34bd22`.
   - #23: owns the split-secret and private-key-body gaps.
 - Open gaps:
   - Split-line secrets and private-key bodies are not redacted. #23 owns the fix.
-  - The `EXCLUDE_GLOB` string is duplicated in `extension/src/workspace.ts`. #36 owns the cleanup.
-  - `clearHistory` is documented but not implemented until #35.
+  - `clearHistory` is documented but implemented by #35 (merged).
 - Change log:
   - v1: initial contract merged in #41.
+  - v1.1: exported `isOutsideWorkspace` for #37 (additive); `workspace.ts` now reuses `EXCLUDE_GLOB` from this contract (#36 cleanup).
 
 <a id="contract-35"></a>
 
@@ -862,7 +863,7 @@ Lane base for ticket #38: `d34bd22`.
   - `interface LanguageCapabilities { documentSymbols: boolean; workspaceSymbols: boolean; definitions: boolean; references: boolean; diagnostics: boolean }`.
   - `const MAX_DIAGNOSTICS = 200`, `MAX_DOCUMENT_SYMBOLS = 100`, `MAX_WORKSPACE_SYMBOLS = 50`, `MAX_DEFINITIONS = 20`, `MAX_REFERENCES = 50`, `MAX_TEXT_SEARCH_MATCHES = 50`.
   - `function withTimeout<T>(promise, ms, signal?): Promise<T>`.
-  - `function isOutsideWorkspace(path: string): boolean`.
+  - `isOutsideWorkspace` is imported from #41's `privacy.ts`; this module no longer defines a second copy.
   - `function buildDiagnosticsFragment(diagnostics, folderUri?): ContextFragment | null`.
   - `function buildSymbolsFragment(symbols, folderUri?): ContextFragment | null`.
   - `function buildWorkspaceSymbolsFragment(symbols, folderUri?): ContextFragment | null`.
@@ -954,7 +955,7 @@ Lane base for ticket #38: `d34bd22`.
   - The diagnostics source returns `excluded` when open documents exist but all fail `shouldInclude`.
   - `rg` is not installed on this machine. The real text-search fallback omits `unsupported` until it is installed; no grep substitute.
   - LSP parity is not measured. The doc records the manual steps and the reason; the user must run them.
-  - `isOutsideWorkspace` is exported from the pure module and imported by the adapter. `privacy.ts` has a separate pre-existing private copy; it is out of this ticket's file list.
+  - The workspace-boundary helper is #41's `isOutsideWorkspace`; this module and the adapter import it from `./privacy`.
 - Consumers:
   - #46: wire `createLanguageSources` into the assembler with the adapter, the resolved folder/policy, the active uri/path/position, open documents, the query, and the cached `probe`. The deep prompt receives the fragments; #36 redacts and budgets them.
   - #36: no change; the language sources use the reserved ids/priorities and return `ContextSourceResult`.
@@ -964,7 +965,7 @@ Lane base for ticket #38: `d34bd22`.
   - LSP parity is not measured. The user must run `docs/lsp-parity.md` in a real VS Code window for TypeScript, Python, and Rust.
   - `rg` is not installed on this machine. Install ripgrep to exercise the real text-search fallback; until then it omits `unsupported`.
   - The probe makes five provider calls per uncached version; large workspaces may want a cheaper provider-availability check.
-  - The `privacy.ts` private `isOutsideWorkspace` is a separate pre-existing copy; a later cleanup can share one helper.
+  - No separate workspace-boundary copy remains; #41 exports the shared helper.
 - Change log:
   - v1: initial contract merged in #37.
 
@@ -1094,6 +1095,7 @@ Lane base for ticket #38: `d34bd22`.
 |---|---|---|---|---|
 | 2026-11-16 | #40 review schema | none | v1 | #26, #27, #35, #36, #38, #39, #42, #45, #13, #46 |
 | 2026-11-16 | #41 privacy boundary | none | v1 | #36, #38, #13, #46 |
+| 2026-11-16 | #41 privacy boundary | v1 | v1.1 | #36, #37, #38, #13, #46; additive `isOutsideWorkspace` export |
 | 2026-11-16 | #35 JSONL repository | none | v1 | #38, #43, #45, #46, #15 |
 | 2026-11-16 | #39 model profiles | none | v1 | #42, #26, #46, #10, #12, #45, #38, #6, #22, #27 |
 | 2026-11-16 | #39 model profiles | v1 | v1.1 | #42, #43, #46; additive `claudeCliRunner` effort parameter, no break |
