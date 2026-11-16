@@ -264,7 +264,7 @@ function result(
 ): Analysis {
   const score = dimensions.target + dimensions.action + dimensions.scope + dimensions.done;
   findings.sort((a, b) => (a.range?.start ?? Infinity) - (b.range?.start ?? Infinity));
-  return { level, score, dimensions, findings, questions, shouldClarify, skipped };
+  return { level, score, dimensions, findings, questions, shouldClarify, skipped, hardBlock: findings.some((f) => f.severity === "error") };
 }
 
 function buildQuestions(

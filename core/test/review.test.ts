@@ -242,6 +242,15 @@ describe("buildReviewRequest", () => {
   });
 });
 
+describe("analyze hardBlock", () => {
+  it("is true only when a finding has severity error", () => {
+    const a = analyze("Deploy with the API key sk-1234567890abcdefghij");
+    expect(a.findings.some((f) => f.severity === "error")).toBe(true);
+    expect(a.hardBlock).toBe(true);
+    expect(analyze("Add a test for login in src/login.ts").hardBlock).toBe(false);
+  });
+});
+
 describe("parseCliOutput", () => {
   it("reads result, tokens and cost from claude -p JSON", () => {
     const r = parseCliOutput(

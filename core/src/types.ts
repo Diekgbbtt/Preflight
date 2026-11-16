@@ -34,18 +34,24 @@ export interface Dimensions {
 
 export type Level = "trivial" | "clear" | "needs-work" | "vague";
 
-export interface Analysis {
-  level: Level;
-  /** 0–100, sum of the dimensions. */
-  score: number;
-  dimensions: Dimensions;
+/** The rule-based part of a review: what the rules found, plus the flags derived from them. */
+export interface RuleReport {
   findings: Finding[];
   /** At most three clarifying questions, most important first. */
   questions: string[];
-  /** True when the prompt should not be sent as is. */
-  shouldClarify: boolean;
   /** True when the prompt contains the [preflight:skip] marker. */
   skipped: boolean;
+  /** True when at least one finding has severity error. */
+  hardBlock: boolean;
+}
+
+export interface Analysis extends RuleReport {
+  level: Level;
+  /** 0-100, sum of the dimensions. */
+  score: number;
+  dimensions: Dimensions;
+  /** True when the prompt should not be sent as is. */
+  shouldClarify: boolean;
 }
 
 /** What the checker may know about the user's project. All optional. */
