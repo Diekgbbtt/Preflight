@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { analyze, extractJson, hashPrompt, parseCliOutput, parseDeepReview, parseQuickReview, parseScore, review, type ModelRunner, type ScoreMeta } from "../src";
+import { analyze, buildReviewRequest, extractJson, hashPrompt, parseCliOutput, parseDeepReview, parseQuickReview, parseScore, review, DEEP_REPLY_SCHEMA, QUICK_REPLY_SCHEMA, RUBRIC_TEXT, type ModelRunner, type ScoreMeta } from "../src";
 
 describe("hashPrompt", () => {
   it.each([
@@ -213,6 +213,32 @@ describe("review", () => {
 
   it("throws on replies without JSON", () => {
     expect(() => extractJson("sorry, no")).toThrow();
+  });
+});
+
+describe("buildReviewRequest", () => {
+  const prompt = "Improve the app";
+
+  it("includes the shared rubric and the mode reply schema once in the system prompt", () => {
+    for (const mode of ["quick", "deep"] as const) {
+      const req = buildReviewRequest(prompt, mode, "sonnet");
+      expect(req.system.match(new RegExp(RUBRIC_TEXT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))).toHaveLength(1);
+      const schema = mode === "quick" ? QUICK_REPLY_SCHEMA : DEEP_REPLY_SCHEMA;
+      expect(req.system.match(new RegExp(schema.slice(0, 20).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))).toHaveLength(1);
+      expect(req.system).toContain(schema);
+    }
+  });
+
+  it("keeps the rubric out of the user message", () => {
+    const req = buildReviewRequest(prompt, "quick", "sonnet");
+    expect(req.user).not.toContain(RUBRIC_TEXT);
+    expect(req.user).toContain(`<prompt>\n${prompt}\n</prompt>`);
+  });
+
+  it("keeps the analysis notes and project notes in the user message", () => {
+    const req = buildReviewRequest(prompt, "deep", "sonnet", { analysis: analyze(prompt), projectNotes: "Files: a.ts" });
+    expect(req.user).toContain("Rule-based checks already found:");
+    expect(req.user).toContain("Files: a.ts");
   });
 });
 

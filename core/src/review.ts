@@ -1,4 +1,5 @@
 import type { Analysis, Range } from "./types";
+import { DEEP_REPLY_SCHEMA, PROMPT_VERSION, QUICK_REPLY_SCHEMA, RUBRIC_TEXT, RUBRIC_VERSION } from "./schema";
 
 export type ReviewMode = "quick" | "deep";
 
@@ -36,28 +37,23 @@ export interface Review {
   usage: { inputTokens: number; outputTokens: number; costUsd: number };
 }
 
-const RUBRIC = `A good prompt for a coding agent states:
-1. Target: the files, functions or parts of the app involved.
-2. Action: the concrete change, not "improve" or "fix it".
-3. Scope: how much should change, one task at a time, what must stay the same.
-4. Done: expected behaviour or a test that shows the task is finished.
-5. Context the agent cannot guess: error messages, constraints, libraries to use or avoid.`;
-
 const QUICK_SYSTEM = `You review prompts that a user is about to send to an AI coding agent. You do not do the task.
-${RUBRIC}
+${RUBRIC_TEXT}
 
 Find what is missing or ambiguous that would make the agent guess. Only flag real gaps; a short prompt can be complete.
 Reply with JSON only, no prose, in this shape:
-{"verdict":"ready"|"needs-work","issues":[{"quote":"exact words from the prompt or empty","problem":"max 15 words","suggestion":"max 20 words"}],"questions":["max 3 short questions to the user"]}
-At most 3 issues.`;
+${QUICK_REPLY_SCHEMA}
+At most 3 issues.
+Set rubric version ${RUBRIC_VERSION}.`;
 
 const DEEP_SYSTEM = `You coach a student on how to write prompts for an AI coding agent. You do not do the task.
-${RUBRIC}
+${RUBRIC_TEXT}
 
 Review the prompt. For each issue, explain briefly why it matters to the agent, so the user learns.
 Then write an improved version of the prompt. Never invent facts the user did not give: put unknown details in square brackets as placeholders, e.g. [which page?] or [expected result]. Keep the user's intent and wording where possible.
 Reply with JSON only, no prose, in this shape:
-{"verdict":"ready"|"needs-work","issues":[{"quote":"exact words from the prompt or empty","problem":"what is missing and why it matters","suggestion":"how to fix it"}],"questions":["max 3 questions to the user"],"improvedPrompt":"..."}`;
+${DEEP_REPLY_SCHEMA}
+At most 3 issues and 3 questions. Set prompt version ${PROMPT_VERSION}.`;
 
 export interface ReviewContext {
   analysis?: Analysis;

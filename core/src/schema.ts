@@ -9,6 +9,20 @@ export const RUBRIC_VERSION = "v1";
 /** Version of the quick and deep review prompt prose. Bump when the prose changes. */
 export const PROMPT_VERSION = "v1";
 
+/** Shared scoring rubric with anchors for quick and deep review. The only copy of the rubric. */
+export const RUBRIC_TEXT = `Score the prompt on four dimensions, 0-25 each, in steps of 5.
+
+target (where): 0 = no target at all; 5 = only a vague area such as "the app"; 10 = a named area of the wrong kind; 15 = names a file, function or component but may not be the right one; 20 = names the right place with a small ambiguity; 25 = the exact file, function or component.
+action (what): 0 = no action; 5 = only vague verbs such as "improve it"; 10 = a verb but no object; 15 = verb plus object but still ambiguous; 20 = a concrete change with one small gap; 25 = the exact change to make.
+scope (how much): 0 = no bound at all; 5 = a whole-project rewrite; 10 = broad, several areas at once; 15 = one task with unclear edges; 20 = one task with mostly clear edges; 25 = one task, clear edges, and what must not change is stated.
+done (how we know): 0 = no success criteria; 5 = only restates the problem; 10 = a hope such as "should work"; 15 = describes what is wrong but not the goal; 20 = the expected behaviour for the main case; 25 = the expected behaviour or a test that proves it is done.`;
+
+/** Quick review reply shape. The rubric and this schema are the only scoring references in the system prompt. */
+export const QUICK_REPLY_SCHEMA = `{"dimensions":{"target":0-25,"action":0-25,"scope":0-25,"done":0-25},"confidence":0-1,"issues":[{"quote":"exact words from the prompt or empty","problem":"max 15 words","suggestion":"max 20 words"}],"questions":["max 3 short questions to the user"]}`;
+
+/** Deep review reply shape. The rubric and this schema are the only scoring references in the system prompt. */
+export const DEEP_REPLY_SCHEMA = `{"dimensions":{"target":0-25,"action":0-25,"scope":0-25,"done":0-25},"confidence":0-1,"issues":[{"quote":"exact words from the prompt or empty","problem":"what is missing and why it matters","suggestion":"how to fix it"}],"questions":[{"question":"...","why":"why the agent needs it","options":["max 3 choices"]}],"improvedPrompt":"...","assumptions":["..."],"contextGaps":["..."]}`;
+
 export function hashPrompt(text: string): string {
   return createHash("sha256").update(text.trim().replace(/\r\n/g, "\n"), "utf8").digest("hex");
 }
