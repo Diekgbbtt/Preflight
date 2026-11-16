@@ -1,5 +1,26 @@
+import { randomUUID } from "node:crypto";
 import * as vscode from "vscode";
-import { analyze, claudeCliRunner, review, type Analysis, type Review, type ReviewMode } from "@prompt-preflight/core";
+import {
+  ACTION_LABELS,
+  analyze,
+  checkHealth,
+  claudeCliRunner,
+  createProvider,
+  feedbackLogMessage,
+  feedbackMessage,
+  isRetryable,
+  mapError,
+  resolveProfile,
+  review,
+  type Analysis,
+  type FeedbackAction,
+  type FeedbackError,
+  type FeedbackErrorCode,
+  type ModelProvider,
+  type Review,
+  type ReviewMode,
+} from "@prompt-preflight/core";
+import { readModelConfig } from "./modelSettings";
 import { sendPrompt } from "./send";
 import type { StudyLog } from "./studyLog";
 import type { WorkspaceIndex } from "./workspace";
@@ -114,7 +135,7 @@ export class PromptPanel implements vscode.WebviewViewProvider {
   }
 
   // Tier 3: detailed feedback on request.
-  private async runReview(mode: ReviewMode): Promise<void> {
+  private async runReview(mode: ReviewMode, attempt = 0): Promise<void> {
     const text = this.text;
     if (!text.trim()) return;
     this.running[mode]?.abort();
@@ -123,14 +144,32 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     if (mode === "quick") this.lastQuickText = text;
     this.post({ type: "reviewing", mode });
 
-    const model = this.cfg().get<string>(mode === "quick" ? "quickModel" : "deepModel", mode === "quick" ? "haiku" : "sonnet");
-    const run = claudeCliRunner(this.cfg().get<string>("claudePath", "claude"), this.workspace.root);
+    const config = readModelConfig();
+    const profile = resolveProfile(config, mode);
+    let provider: ModelProvider;
+    try {
+      provider = createProvider(profile, config);
+    } catch (e) {
+      this.reportError(mode, text, mapError(e));
+      return;
+    }
+
+    // Pre-review health check: profile validation plus CLI presence. Fails
+    // before the model call, so a failing check leaves no spinner for long.
+    const health = await checkHealth(provider, profile, config.claudePath);
+    if (!health.ok) {
+      if (ctrl.signal.aborted) return; // superseded by newer input
+      this.reportError(mode, text, health.error);
+      return;
+    }
+
+    const run = claudeCliRunner(config.claudePath, this.workspace.root, profile.thinkingEffort);
     try {
       const r: Review = await review(
         text,
         mode,
         run,
-        model,
+        profile.model,
         { analysis: this.analysis, projectNotes: this.workspace.notes() },
         ctrl.signal,
       );
@@ -142,11 +181,32 @@ export class PromptPanel implements vscode.WebviewViewProvider {
       this.post({ type: "review", mode, text, review: r });
     } catch (e) {
       if (ctrl.signal.aborted) return; // superseded by newer input
-      if (mode === "quick") this.lastQuickText = ""; // allow a retry
-      this.post({ type: "review", mode, text, error: (e as Error).message });
+      const error = mapError(e);
+      // One automatic retry, only for a transient timeout; the manual Retry
+      // action comes from showFeedbackError on the final failure.
+      if (isRetryable(error) && attempt === 0) return void this.runReview(mode, 1);
+      this.reportError(mode, text, error);
     } finally {
       if (this.running[mode] === ctrl) delete this.running[mode];
     }
+  }
+
+  /**
+   * Degraded reporting: post the fixed message and error code to the webview
+   * (which clears the loading state), keep the rule analysis, and surface one
+   * action. No improved prompt and no review stats on failure.
+   */
+  private reportError(mode: ReviewMode, text: string, error: FeedbackError): void {
+    if (mode === "quick") this.lastQuickText = ""; // allow a later pause to retry
+    this.post({
+      type: "review",
+      mode,
+      text,
+      error: feedbackMessage(error).message,
+      errorCode: error.code as FeedbackErrorCode,
+      action: error.action as FeedbackAction,
+    });
+    showFeedbackError(error, () => void this.runReview(mode));
   }
 
   // Tier 4: hand the prompt to the coding agent.
@@ -231,4 +291,36 @@ export class PromptPanel implements vscode.WebviewViewProvider {
 </body>
 </html>`;
   }
+}
+
+/**
+ * User-facing feedback error surfacing (#42): one fixed message, one action,
+ * no stack trace. Logs only the correlation id and the error code; never the
+ * message, cause, prompt, or stderr.
+ */
+export function showFeedbackError(error: FeedbackError, retry?: () => void): void {
+  console.error(feedbackLogMessage(error, randomUUID()));
+  const label = ACTION_LABELS[error.action];
+  void vscode.window.showWarningMessage(feedbackMessage(error).message, label).then((choice) => {
+    if (choice !== label) return;
+    switch (error.action) {
+      case "open-settings":
+        void vscode.commands.executeCommand("workbench.action.openSettings", "promptPreflight");
+        break;
+      case "install-cli":
+        void vscode.env.openExternal(vscode.Uri.parse("https://code.claude.com/docs/en/overview"));
+        break;
+      case "fix-permissions":
+        void vscode.commands.executeCommand("workbench.action.openSettings", "promptPreflight.claudePath");
+        break;
+      case "reduce-context":
+        void vscode.commands.executeCommand("workbench.action.openSettings", "promptPreflight.context.includeCode");
+        break;
+      case "retry":
+        retry?.();
+        break;
+      case "dismiss":
+        break;
+    }
+  });
 }

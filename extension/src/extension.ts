@@ -1,10 +1,11 @@
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 import * as vscode from "vscode";
-import type { Config, ProfileValidation, SendRecord } from "@prompt-preflight/core";
-import { createProvider, resolveProfile } from "@prompt-preflight/core";
+import type { Config, SendRecord } from "@prompt-preflight/core";
+import { checkHealth, createProvider, mapError, resolveProfile } from "@prompt-preflight/core";
 import { CONSENT_VERSION, consentKey, consentMessage, parseConsent, type IncludeCode } from "./privacy";
-import { PromptPanel } from "./panel";
+import { PromptPanel, showFeedbackError } from "./panel";
+import { readModelConfig } from "./modelSettings";
 import { JsonlRepository } from "./repository";
 import { StudyLog } from "./studyLog";
 import { WorkspaceIndex } from "./workspace";
@@ -22,10 +23,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Fire and forget: activation never waits on the answer.
   void ensureConsent(context);
-  const config = readConfig();
+  const config = readModelConfig();
   probeEffortSupport(config);
-  const settingsIssue = validateModelSettings(config);
-  if (settingsIssue) void vscode.window.showWarningMessage(settingsIssue);
+  void checkActivationHealth(config);
 
   context.subscriptions.push(
     workspace,
@@ -71,43 +71,28 @@ export function activate(context: vscode.ExtensionContext): void {
 
 export function deactivate(): void {}
 
-/** Reads the six model settings into a plain Config object for core. */
-function readConfig(): Config {
-  const c = vscode.workspace.getConfiguration("promptPreflight");
-  return {
-    provider: c.get<"claude" | "codex">("provider", "claude"),
-    model: c.get("model", "sonnet"),
-    thinkingEffort: c.get<"low" | "medium" | "high">("thinkingEffort", "medium"),
-    quickModel: c.get("quickModel", "haiku"),
-    deepModel: c.get("deepModel", "sonnet"),
-    claudePath: c.get("claudePath", "claude"),
-  };
-}
-
 /**
- * Pure settings validation: resolves both modes and runs each profile through
- * its provider's validateProfile. Returns the first failure prefixed with the
- * mode, or null when both are valid. No model call and no CLI presence check;
- * #42 owns health.
+ * Activation health check for the quick profile: profile validation plus a
+ * cheap CLI presence probe. Non-blocking and non-modal: it runs after
+ * activation completes and reports through showFeedbackError, never a modal.
+ * A first-call auth problem is not detectable here; the review path maps it.
  */
-function validateModelSettings(config: Config): string | null {
-  for (const mode of ["quick", "deep"] as const) {
-    const profile = resolveProfile(config, mode);
-    let result: ProfileValidation;
-    try {
-      result = createProvider(profile, config).validateProfile(profile);
-    } catch (e) {
-      return `${mode}: ${(e as Error).message}`;
-    }
-    if (!result.ok) return `${mode}: ${result.message}`;
+async function checkActivationHealth(config: Config): Promise<void> {
+  try {
+    const profile = resolveProfile(config, "quick");
+    const provider = createProvider(profile, config);
+    const result = await checkHealth(provider, profile, config.claudePath);
+    if (!result.ok) showFeedbackError(result.error, () => void checkActivationHealth(readModelConfig()));
+  } catch (e) {
+    showFeedbackError(mapError(e), () => void checkActivationHealth(readModelConfig()));
   }
-  return null;
 }
 
 /**
  * Read-only probe that confirms the installed CLI still exposes --effort.
  * Runs once at activation for Claude profiles only and never sends a model
- * call. A failed probe is silent here; missing-CLI health belongs to #42.
+ * call. A failed probe is silent here; missing-CLI health belongs to the
+ * activation health check.
  */
 function probeEffortSupport(config: Config): void {
   if (config.provider !== "claude") return;
