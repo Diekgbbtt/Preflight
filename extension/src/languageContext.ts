@@ -419,25 +419,29 @@ export function createDiagnosticsSource(deps: LanguageSourceDeps): ContextSource
 /**
  * Probes which language providers answer for one document. Runs every port
  * method under the timeout and turns each result into a boolean; a timeout
- * or a throw is false. The full lists are discarded: the probe never
- * collects symbols into a fragment. An empty uri means no document: null.
+ * or a throw, synchronous or not, is false. The full lists are discarded:
+ * the probe never collects symbols into a fragment. An empty uri means no
+ * document: null. The signal rejects the whole probe on abort.
  */
 export async function probeCapabilities(api: LanguageApi, uri: string, timeoutMs = MAX_TIMEOUT_MS, signal?: AbortSignal): Promise<LanguageCapabilities | null> {
   if (uri === "") return null;
-  const answers: Array<[keyof LanguageCapabilities, Promise<unknown>]> = [
-    ["documentSymbols", api.documentSymbols(uri)],
-    ["workspaceSymbols", api.workspaceSymbols("probe")],
-    ["definitions", api.definitions(uri, { line: 0, character: 0 })],
-    ["references", api.references(uri, { line: 0, character: 0 })],
-    ["diagnostics", api.diagnostics(uri)],
+  // The wrapper turns a synchronous provider throw into a rejection so the
+  // catch below still records `false` for that capability.
+  const calls: Array<[keyof LanguageCapabilities, () => Promise<unknown>]> = [
+    ["documentSymbols", () => api.documentSymbols(uri)],
+    ["workspaceSymbols", () => api.workspaceSymbols("probe")],
+    ["definitions", () => api.definitions(uri, { line: 0, character: 0 })],
+    ["references", () => api.references(uri, { line: 0, character: 0 })],
+    ["diagnostics", () => api.diagnostics(uri)],
   ];
   const capabilities = { documentSymbols: false, workspaceSymbols: false, definitions: false, references: false, diagnostics: false };
   await Promise.all(
-    answers.map(async ([key, pending]) => {
+    calls.map(async ([key, run]) => {
       try {
-        const value = await withTimeout(pending, timeoutMs, signal);
+        const value = await withTimeout(Promise.resolve().then(run), timeoutMs, signal);
         capabilities[key] = value !== null && value !== undefined;
-      } catch {
+      } catch (error) {
+        if (signal?.aborted) throw cancelledError();
         capabilities[key] = false; // a timeout or a throw means the provider is unavailable
       }
     }),

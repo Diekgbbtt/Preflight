@@ -402,6 +402,37 @@ describe("probeCapabilities", () => {
       diagnostics: true,
     });
   });
+
+  it("marks a provider false when it throws synchronously instead of escaping", async () => {
+    const api: LanguageApi = {
+      ...okApi(),
+      documentSymbols: () => {
+        throw new Error("sync boom");
+      },
+    };
+    await expect(probeCapabilities(api, "file:///w/a.ts")).resolves.toEqual({
+      documentSymbols: false,
+      workspaceSymbols: true,
+      definitions: true,
+      references: true,
+      diagnostics: true,
+    });
+  });
+
+  it("threads the signal so an abort rejects the whole probe", async () => {
+    const controller = new AbortController();
+    const api: LanguageApi = {
+      ...okApi(),
+      documentSymbols: () =>
+        new Promise(() => {
+          controller.signal.addEventListener("abort", () => {
+            throw Object.assign(new Error("cancelled"), { code: "cancelled" });
+          });
+        }),
+    };
+    controller.abort();
+    await expect(probeCapabilities(api, "file:///w/a.ts", 10_000, controller.signal)).rejects.toMatchObject({ code: "cancelled" });
+  });
 });
 
 describe("searchFallback", () => {
