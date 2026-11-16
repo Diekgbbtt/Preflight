@@ -33,10 +33,6 @@ export interface RedactionResult {
   count: number;
 }
 
-// One character no SECRETS pattern can match. Used to mark replaced spans so a
-// later pattern cannot match or double-count them.
-const SENTINEL = "\u0000";
-
 // Marker wrapped around each replaced span during the sequential pass. No
 // SECRETS pattern can match it, and its leading space stops the
 // password-assignment value part (`[^\s"']{6,}`) from re-matching it. The
