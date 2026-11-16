@@ -288,7 +288,12 @@ function changedFromPatch(file: string, state: ParserState): string | undefined 
 /** Marks a tool call's result; records errors and test results with final status. */
 function applyResult(state: ParserState, callIndex: number, ok: boolean, output: string, at: string | undefined): void {
   const call = state.toolCalls[callIndex];
-  if (!call) return;
+  if (!call) {
+    // A failed result whose call is unknown (e.g. cut by the byte window)
+    // still shows as an error; never invent a tool call for it.
+    if (!ok) state.errors.push({ message: firstLine(output) || "tool call failed", status: "error", at });
+    return;
+  }
   call.status = ok ? "ok" : "error";
   if (state.isTestOf[callIndex]) {
     state.testStatus.set(call.summary, { status: ok ? "passed" : "failed", at: call.at });
@@ -488,7 +493,8 @@ export function parseClaudeSession(text: string): ParsedSession {
           };
           registerCall(state, call, plan.index, isTestCall(name, described, input));
           if (typeof b.id === "string") state.pending.set(b.id, state.toolCalls.length - 1);
-          messageFiles.push(...changedFromInput(input, state));
+          // Only mutation tools contribute changed files; reads stay summary-only.
+          if (FILE_TOOLS.has(name)) messageFiles.push(...changedFromInput(input, state));
           hadCalls = true;
         }
         // thinking blocks are ignored.
@@ -534,6 +540,36 @@ export function parseCodexSession(text: string): ParsedSession {
       if (typeof payload.timestamp === "string" && !state.startedAt) state.startedAt = payload.timestamp;
       continue;
     }
+    // Exec event messages carry command runs when the public format emits them.
+    if (entry.type === "event_msg") {
+      const eventType = payload.type;
+      if (eventType === "exec_command_begin") {
+        const name = typeof payload.name === "string" && payload.name ? payload.name : "exec";
+        const input: Record<string, unknown> = { command: payload.command };
+        const described = describeInput(input);
+        const ownerIndex = Math.max(0, state.turns.length - 1);
+        const call: ToolCall = {
+          name,
+          status: "unknown",
+          summary: oneLine(`${name}${described ? ` ${described}` : ""}`),
+          at: state.endedAt,
+        };
+        registerCall(state, call, ownerIndex, isTestCall(name, described, input));
+        if (typeof payload.call_id === "string") state.pending.set(payload.call_id, state.toolCalls.length - 1);
+        continue;
+      }
+      if (eventType === "exec_command_end") {
+        const callIndex = typeof payload.call_id === "string" ? state.pending.get(payload.call_id) : undefined;
+        const exit = typeof payload.exit_code === "number" ? payload.exit_code : undefined;
+        const ok = exit === undefined ? payload.is_error !== true : exit === 0;
+        const output = resultText(payload.output ?? payload.aggregated_output);
+        applyResult(state, callIndex ?? -1, ok, output, state.endedAt);
+        if (callIndex !== undefined && typeof payload.call_id === "string") state.pending.delete(payload.call_id);
+        continue;
+      }
+      // Unknown event_msg types are skipped.
+      continue;
+    }
     if (entry.type !== "response_item") continue;
 
     const itemType = payload.type;
@@ -563,8 +599,9 @@ export function parseCodexSession(text: string): ParsedSession {
       let described: string | undefined;
       if (input) {
         described = describeInput(input);
-        changedFromInput(input, state);
-      } else if (typeof argsRaw === "string") {
+        // Only mutation tools contribute changed files; reads stay summary-only.
+        if (FILE_TOOLS.has(name)) changedFromInput(input, state);
+      } else if (typeof argsRaw === "string" && FILE_TOOLS.has(name)) {
         described = patchFileFrom(argsRaw);
         if (described) changedFromPatch(described, state);
       }
@@ -575,7 +612,7 @@ export function parseCodexSession(text: string): ParsedSession {
         at: state.endedAt,
       };
       registerCall(state, call, ownerIndex, isTestCall(name, described, input ?? {}));
-      if (described) state.turnFiles[ownerIndex]?.push(displayPath(described, state.cwd));
+      if (described && FILE_TOOLS.has(name)) state.turnFiles[ownerIndex]?.push(displayPath(described, state.cwd));
       if (typeof payload.call_id === "string") state.pending.set(payload.call_id, state.toolCalls.length - 1);
       continue;
     }
@@ -798,8 +835,9 @@ function emptySlice(
 
 /**
  * Reads at most the last `maxBytes` of one session file and derives the
- * bounded slice. Never reads the whole file with readFile; a partial first
- * line after the seek and a partial final line are dropped, never parsed.
+ * bounded slice. Never reads the whole file with readFile; a seek that opens
+ * mid-line drops the partial first line, a seek on a line boundary keeps it,
+ * and a partial final line is dropped, never parsed.
  */
 export async function readSlice(
   filePath: string,
@@ -820,12 +858,31 @@ export async function readSlice(
   const want = size - start;
 
   let windowText: string;
+  let total = 0;
   try {
     const handle = await open(filePath, "r");
     try {
+      // Short reads are possible: loop until the window is filled or EOF.
       const buf = Buffer.alloc(want);
-      const { bytesRead } = await handle.read(buf, 0, want, start);
-      windowText = buf.toString("utf8", 0, bytesRead);
+      while (total < want) {
+        const { bytesRead } = await handle.read(buf, total, want - total, start + total);
+        if (bytesRead <= 0) break;
+        total += bytesRead;
+      }
+      // When the window starts mid-line the byte before it is not a newline;
+      // reading it keeps a seek that lands exactly on a line boundary intact.
+      let boundaryIsNewline = false;
+      if (start > 0) {
+        const one = Buffer.alloc(1);
+        const peek = await handle.read(one, 0, 1, start - 1);
+        if (peek.bytesRead === 1) boundaryIsNewline = one[0] === 0x0a;
+      }
+      windowText = buf.toString("utf8", 0, total);
+      if (start > 0 && !boundaryIsNewline) {
+        const nl = windowText.indexOf("\n");
+        if (nl < 0) return emptySlice(filePath, provider, "empty", total, true);
+        windowText = windowText.slice(nl + 1);
+      }
     } finally {
       await handle.close();
     }
@@ -833,26 +890,24 @@ export async function readSlice(
     return emptySlice(filePath, provider, "error", 0, false);
   }
 
-  // A window that opens mid-line loses everything up to the first newline.
-  if (start > 0) {
-    const nl = windowText.indexOf("\n");
-    if (nl < 0) return emptySlice(filePath, provider, "empty", want, true);
-    windowText = windowText.slice(nl + 1);
-  }
   // A final line without a trailing newline may be mid-write: drop, never parse.
   if (!windowText.endsWith("\n")) {
     const last = windowText.lastIndexOf("\n");
     windowText = last < 0 ? "" : windowText.slice(0, last + 1);
   }
-  if (windowText.trim() === "") return emptySlice(filePath, provider, "empty", want, start > 0);
+  if (windowText.trim() === "") return emptySlice(filePath, provider, "empty", total, start > 0);
 
   const parsed = provider === "claude" ? parseClaudeSession(windowText) : parseCodexSession(windowText);
-  if (parsed.turns.length === 0) {
-    return emptySlice(filePath, provider, "empty", want, start > 0, parsed);
+  if (parsed.turns.length === 0 && parsed.errors.length === 0 && parsed.testResults.length === 0) {
+    return emptySlice(filePath, provider, "empty", total, start > 0, parsed);
   }
 
   const cwdPath = sessionCwdPath(parsed.folderUri);
   const activeRel = activeRelativePath(options.activeFileUri, cwdPath);
+
+  // Which parsed turn owns which tool call (matched through timestamps).
+  const owners = parsed.toolCalls.map((call) => ownerTurnIndex(parsed, call));
+  const ownerIndexes = new Set(owners);
 
   // Apply the code policy per turn, then redact everything that stays.
   let redactions = 0;
@@ -881,39 +936,16 @@ export async function readSlice(
     const appliedText = options.redact(clean.text);
     redactions += appliedText.count;
     clean.text = appliedText.text;
-    if (clean.text || (clean.code && clean.code.length > 0)) {
+    // A turn without text or code still counts when it owns a tool call.
+    if (clean.text || (clean.code && clean.code.length > 0) || ownerIndexes.has(index)) {
       policyTurns.push(clean);
       originOf.push(index);
     }
   });
 
-  // Cap by turns, then drop the oldest until the token cap is met.
-  let kept = policyTurns.slice(-caps.maxTurns);
-  let droppedTurns = parsed.turns.length - policyTurns.length + (policyTurns.length - kept.length);
+  // Redact the one-line status records; they are kept regardless of turns.
   const turnTokens = (turn: Turn): number =>
     estimateTokens(turn.text) + (turn.code ?? []).reduce((sum, code) => sum + estimateTokens(code), 0);
-  const keptTokens = (): number => kept.reduce((sum, turn) => sum + turnTokens(turn), 0);
-  while (kept.length > 1 && keptTokens() > caps.maxTokens) {
-    kept.shift();
-    droppedTurns++;
-  }
-  if (kept.length === 1 && keptTokens() > caps.maxTokens) {
-    // One turn alone exceeds the cap: an empty bounded slice is the only safe answer.
-    return emptySlice(filePath, provider, "empty", want, true, parsed, {
-      droppedTurns: parsed.turns.length,
-      droppedToolCalls: parsed.toolCalls.length,
-      droppedFiles: 0,
-      redactions,
-    });
-  }
-
-  // Retain the tool calls owned by kept turns, matched through timestamps.
-  const firstKept = kept.length > 0 ? originOf[policyTurns.length - kept.length] : parsed.turns.length;
-  const owners = parsed.toolCalls.map((call) => ownerTurnIndex(parsed, call));
-  const retainedCalls = parsed.toolCalls.filter((_call, index) => owners[index] >= firstKept);
-  const droppedToolCalls = parsed.toolCalls.length - retainedCalls.length;
-
-  // Redact and keep the one-line status records.
   const errors: SessionError[] = parsed.errors.map((error) => {
     const applied = options.redact(error.message);
     redactions += applied.count;
@@ -924,6 +956,49 @@ export async function readSlice(
     redactions += applied.count;
     return { ...result, name: applied.text };
   });
+  const fixedTokens =
+    errors.reduce((sum, error) => sum + estimateTokens(error.message), 0) +
+    testResults.reduce((sum, result) => sum + estimateTokens(result.name), 0);
+  const callTokens = (call: ToolCall): number => estimateTokens(call.summary);
+
+  // Cap by turns and tokens across ALL retained content: dropping a turn
+  // drops the tool calls it owns.
+  const budgetFor = (keptTurns: Turn[]): { calls: ToolCall[]; tokens: number } => {
+    const firstKept = keptTurns.length > 0 ? originOf[policyTurns.length - keptTurns.length] : parsed.turns.length;
+    const calls = parsed.toolCalls.filter((_call, index) => owners[index] >= firstKept);
+    const tokens =
+      keptTurns.reduce((sum, turn) => sum + turnTokens(turn), 0) +
+      calls.reduce((sum, call) => sum + callTokens(call), 0) +
+      fixedTokens;
+    return { calls, tokens };
+  };
+
+  let kept = policyTurns.slice(-caps.maxTurns);
+  let droppedTurns = parsed.turns.length - policyTurns.length + (policyTurns.length - kept.length);
+  let retainedCalls: ToolCall[] = [];
+  while (kept.length > 1) {
+    const budget = budgetFor(kept);
+    if (budget.tokens <= caps.maxTokens) {
+      retainedCalls = budget.calls;
+      break;
+    }
+    kept.shift();
+    droppedTurns++;
+  }
+  if (kept.length === 1) {
+    const budget = budgetFor(kept);
+    if (budget.tokens > caps.maxTokens) {
+      // One turn alone exceeds the cap: an empty bounded slice is the only safe answer.
+      return emptySlice(filePath, provider, "empty", total, true, parsed, {
+        droppedTurns: parsed.turns.length,
+        droppedToolCalls: parsed.toolCalls.length,
+        droppedFiles: 0,
+        redactions,
+      });
+    }
+    retainedCalls = budget.calls;
+  }
+  const droppedToolCalls = parsed.toolCalls.length - retainedCalls.length;
 
   // Normalize changed files against the session cwd, POSIX, sorted.
   const changedFiles = new Set<string>();
@@ -936,7 +1011,7 @@ export async function readSlice(
 
   const tokens =
     kept.reduce((sum, turn) => sum + turnTokens(turn), 0) +
-    retainedCalls.reduce((sum, call) => sum + estimateTokens(call.summary), 0) +
+    retainedCalls.reduce((sum, call) => sum + callTokens(call), 0) +
     errors.reduce((sum, error) => sum + estimateTokens(error.message), 0) +
     testResults.reduce((sum, result) => sum + estimateTokens(result.name), 0);
 
@@ -955,7 +1030,7 @@ export async function readSlice(
     truncated: start > 0 || droppedTurns > 0,
     provenance: {
       sourcePath: filePath,
-      bytesRead: want,
+      bytesRead: total,
       turnsKept: kept.length,
       truncated: start > 0 || droppedTurns > 0,
       droppedTurns,
@@ -1007,7 +1082,7 @@ export function formatSessionSlice(slice: SessionSlice): string {
     lines.push("turns:");
     for (const turn of slice.turns) {
       const at = turn.at ? ` @${turn.at}` : "";
-      lines.push(`- [${turn.role}]${at} ${turn.text}`);
+      lines.push(`- [${turn.role}]${at}${turn.text ? ` ${turn.text}` : ""}`);
       for (const code of turn.code ?? []) {
         lines.push(`  code (${turn.codePath ?? "unknown path"}):`);
         for (const line of code.split("\n")) lines.push(`  ${line}`);
@@ -1042,7 +1117,6 @@ export function formatSessionSlice(slice: SessionSlice): string {
 /** Inputs of the session-slice context source. Everything impure is injected. */
 export interface SessionSliceSourceDeps {
   folderUri: string;
-  draft: string;
   homeDir?: string;
   candidates?: SessionCandidate[];
   sends: Array<Event<SendRecord>>;
@@ -1050,8 +1124,9 @@ export interface SessionSliceSourceDeps {
   promptHash?: string;
   clock: Clock;
   caps?: SessionCaps;
-  /** #39's profile; capabilities ride along because ModelProfile alone has none. */
-  profile?: ModelProfile & { capabilities?: ModelCapabilities };
+  profile?: ModelProfile;
+  /** #39's model capabilities; ModelProfile alone has none. */
+  capabilities?: ModelCapabilities;
   includeCode: IncludeCode;
   activeFileUri?: string;
   redact(text: string): { text: string; count: number };
@@ -1075,7 +1150,7 @@ export function createSessionSliceSource(deps: SessionSliceSourceDeps): ContextS
     async collect(signal?: AbortSignal): Promise<ContextSourceResult> {
       if (signal?.aborted) throw abortError(signal);
       const caps: SessionCaps = { ...(deps.caps ?? DEFAULT_SESSION_CAPS) };
-      const maxContext = deps.profile?.capabilities?.maxContextTokens ?? 0;
+      const maxContext = deps.capabilities?.maxContextTokens ?? 0;
       if (Number.isFinite(maxContext) && maxContext > 0) caps.maxTokens = Math.min(caps.maxTokens, maxContext);
 
       const candidates = deps.candidates ?? (await discoverCandidates(deps.folderUri, deps.homeDir ?? os.homedir()));
@@ -1101,11 +1176,17 @@ export function createSessionSliceSource(deps: SessionSliceSourceDeps): ContextS
         activeFileUri: deps.activeFileUri,
         redact: deps.redact,
       });
-      const details = {
+      const details: Record<string, string | number | boolean> = {
         sourcePath: slice.provenance.sourcePath,
         bytesRead: slice.provenance.bytesRead,
         turnsKept: slice.provenance.turnsKept,
+        truncated: slice.truncated,
+        redactions: slice.provenance.redactions,
+        droppedTurns: slice.provenance.droppedTurns,
+        droppedToolCalls: slice.provenance.droppedToolCalls,
+        droppedFiles: slice.provenance.droppedFiles,
       };
+      if (slice.provenance.reason) details.reason = slice.provenance.reason;
       const reason = slice.provenance.reason;
       if (reason === "unsupported") return { fragments: [], omittedReason: "unsupported", details };
       if (reason === "error") return { fragments: [], omittedReason: "error", details };

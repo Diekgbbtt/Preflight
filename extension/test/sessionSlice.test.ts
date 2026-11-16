@@ -2,13 +2,15 @@ import { readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_SESSION_CAPS, createSessionSliceSource, discoverCandidates, parseClaudeSession, parseCodexSession, readSlice, type SessionSliceSourceDeps } from "../src/sessionSlice";
+import { DEFAULT_SESSION_CAPS, createSessionSliceSource, discoverCandidates, formatSessionSlice, parseClaudeSession, parseCodexSession, readSlice, type SessionSliceSourceDeps } from "../src/sessionSlice";
 import type { SessionCandidate } from "../src/sessionLocator";
 import { redact } from "../src/privacy";
 
 const claudeFixture = readFileSync(new URL("./fixtures/claude/session-basic.jsonl", import.meta.url), "utf8");
 const codexFixture = readFileSync(new URL("./fixtures/codex/session-basic.jsonl", import.meta.url), "utf8");
+const codexExecFixture = readFileSync(new URL("./fixtures/codex/session-exec-events.jsonl", import.meta.url), "utf8");
 
 const CWD = "/Users/alice/proj";
 const at = (n: number) => `2026-01-02T10:00:${String(n).padStart(2, "0")}.000Z`;
@@ -136,6 +138,14 @@ describe("parseCodexSession", () => {
     const parsed = parseCodexSession(text);
     expect(parsed.sessionId).toBe("s2");
     expect(parsed.turns).toEqual([]);
+  });
+
+  it("parses exec_command_begin/end event messages", () => {
+    const parsed = parseCodexSession(codexExecFixture);
+    expect(parsed.sessionId).toBe("sess-codex-2");
+    expect(parsed.toolCalls).toEqual([{ name: "exec", status: "error", summary: "exec npm test", at: "2026-01-02T12:00:05.000Z" }]);
+    expect(parsed.testResults).toEqual([{ name: "exec npm test", status: "failed", at: "2026-01-02T12:00:05.000Z" }]);
+    expect(parsed.errors).toEqual([{ message: "1 failed, 1 passed", status: "error", at: "2026-01-02T12:00:10.000Z" }]);
   });
 });
 
@@ -384,6 +394,92 @@ describe("readSlice", () => {
     const slice = await readSlice(file, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, options);
     expect(slice.turns.map((t) => t.text)).toEqual(["認証を追加してください", "理解しました"]);
   });
+
+  it("keeps the first complete line when the seek lands on a line boundary", async () => {
+    const lines = [
+      JSON.stringify({ type: "user", sessionId: "sess-old", timestamp: at(0), cwd: CWD, message: { role: "user", content: "old turn" } }),
+      JSON.stringify({ type: "user", sessionId: "sess-x", timestamp: at(1), cwd: CWD, message: { role: "user", content: "fresh turn" } }),
+      JSON.stringify({ type: "assistant", sessionId: "sess-x", timestamp: at(2), cwd: CWD, message: { role: "assistant", content: [{ type: "text", text: "answer" }] } }),
+    ];
+    const text = lines.join("\n") + "\n";
+    // Seek exactly at the start of the second line: the byte before it is a newline.
+    const firstLen = Buffer.byteLength(lines[0], "utf8") + 1;
+    const maxBytes = Buffer.byteLength(text, "utf8") - firstLen;
+    const file = await write("boundary.jsonl", text);
+    const slice = await readSlice(file, "claude", { ...DEFAULT_SESSION_CAPS, maxBytes }, { now: () => 0 }, options);
+    expect(slice.provenance.bytesRead).toBe(maxBytes);
+    expect(slice.turns.map((t) => t.text)).toEqual(["fresh turn", "answer"]);
+  });
+
+  it("records only mutation tools as changed files", async () => {
+    const lines = [
+      JSON.stringify({ type: "assistant", sessionId: "sess-x", timestamp: at(0), cwd: CWD, message: { role: "assistant", content: [{ type: "tool_use", id: "r1", name: "Read", input: { file_path: `${CWD}/src/read-only.ts` } }] } }),
+      JSON.stringify({ type: "assistant", sessionId: "sess-x", timestamp: at(1), cwd: CWD, message: { role: "assistant", content: [{ type: "tool_use", id: "w1", name: "Write", input: { file_path: `${CWD}/src/written.ts` } }] } }),
+    ];
+    const file = await write("readonly.jsonl", lines.join("\n") + "\n");
+    const slice = await readSlice(file, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, options);
+    expect(slice.changedFiles).toEqual(["src/written.ts"]);
+    expect(slice.provenance.droppedFiles).toBe(0);
+    expect(slice.toolCalls.some((c) => c.summary === "Read src/read-only.ts")).toBe(true);
+  });
+
+  it("caps tokens across turns, tool calls and status records", async () => {
+    const lines = [
+      JSON.stringify({ type: "user", sessionId: "sess-x", timestamp: at(0), cwd: CWD, message: { role: "user", content: "a" } }),
+      JSON.stringify({ type: "assistant", sessionId: "sess-x", timestamp: at(1), cwd: CWD, message: { role: "assistant", content: [{ type: "text", text: "b" }, { type: "tool_use", id: "t1", name: "Bash", input: { command: "x".repeat(196) } }] } }),
+    ];
+    const file = await write("cap.jsonl", lines.join("\n") + "\n");
+    const slice = await readSlice(file, "claude", { ...DEFAULT_SESSION_CAPS, maxTokens: 51 }, { now: () => 0 }, options);
+    expect(slice.tokens).toBeLessThanOrEqual(51);
+    expect(slice.turns).toHaveLength(1);
+    expect(slice.toolCalls).toHaveLength(1);
+    expect(slice.provenance.droppedTurns).toBe(1);
+  });
+
+  it("keeps a turn that owns a retained tool call even without text", async () => {
+    const lines = [
+      JSON.stringify({ type: "user", sessionId: "sess-x", timestamp: at(0), cwd: CWD, message: { role: "user", content: "hello" } }),
+      JSON.stringify({ type: "assistant", sessionId: "sess-x", timestamp: at(1), cwd: CWD, message: { role: "assistant", content: [{ type: "tool_use", id: "w1", name: "Write", input: { file_path: `${CWD}/src/new.ts` } }] } }),
+    ];
+    const file = await write("toolonly.jsonl", lines.join("\n") + "\n");
+    const slice = await readSlice(file, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, options);
+    expect(slice.turns).toHaveLength(2);
+    expect(slice.turns[1]).toMatchObject({ role: "assistant", text: "" });
+    expect(slice.toolCalls).toHaveLength(1);
+    expect(formatSessionSlice(slice)).toContain("[assistant]");
+  });
+
+  it("retains tool calls owned by an empty turn inside the token window", async () => {
+    const lines = [
+      JSON.stringify({ type: "user", sessionId: "sess-x", timestamp: at(0), cwd: CWD, message: { role: "user", content: "word ".repeat(100) } }),
+      JSON.stringify({ type: "assistant", sessionId: "sess-x", timestamp: at(1), cwd: CWD, message: { role: "assistant", content: [{ type: "tool_use", id: "w1", name: "Write", input: { file_path: `${CWD}/src/new.ts` } }] } }),
+      JSON.stringify({ type: "user", sessionId: "sess-x", timestamp: at(2), cwd: CWD, message: { role: "user", content: "tail" } }),
+    ];
+    const file = await write("toolonly-cap.jsonl", lines.join("\n") + "\n");
+    const slice = await readSlice(file, "claude", { ...DEFAULT_SESSION_CAPS, maxTokens: 50 }, { now: () => 0 }, options);
+    expect(slice.toolCalls).toHaveLength(1);
+    expect(slice.turns).toHaveLength(2);
+    expect(slice.provenance.droppedTurns).toBe(1);
+    expect(slice.tokens).toBeLessThanOrEqual(50);
+  });
+
+  it("records an error for a failed result whose call predates the window", async () => {
+    const lines = [
+      JSON.stringify({ type: "user", sessionId: "sess-x", timestamp: at(0), cwd: CWD, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "gone", content: "Error: boom", is_error: true }] } }),
+      JSON.stringify({ type: "user", sessionId: "sess-x", timestamp: at(1), cwd: CWD, message: { role: "user", content: "after the failure" } }),
+    ];
+    const file = await write("orphan.jsonl", lines.join("\n") + "\n");
+    const slice = await readSlice(file, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, options);
+    expect(slice.errors).toEqual([{ message: "Error: boom", status: "error", at: at(0) }]);
+    expect(slice.toolCalls).toEqual([]);
+  });
+
+  it("derives a slice with exec event failures from codex events", async () => {
+    const slice = await readSlice(fileURLToPath(new URL("./fixtures/codex/session-exec-events.jsonl", import.meta.url)), "codex", DEFAULT_SESSION_CAPS, { now: () => 0 }, options);
+    expect(slice.toolCalls[0]).toMatchObject({ name: "exec", status: "error", summary: "exec npm test" });
+    expect(slice.testResults[0]).toMatchObject({ name: "exec npm test", status: "failed" });
+    expect(slice.errors[0]).toMatchObject({ message: "1 failed, 1 passed", status: "error" });
+  });
 });
 
 describe("createSessionSliceSource", () => {
@@ -399,7 +495,6 @@ describe("createSessionSliceSource", () => {
 
   const deps = (over: Partial<SessionSliceSourceDeps> = {}): SessionSliceSourceDeps => ({
     folderUri: FOLDER,
-    draft: "review my draft",
     sends: [],
     clock,
     includeCode: "off",
@@ -426,7 +521,31 @@ describe("createSessionSliceSource", () => {
     expect(fragment.content).toContain("sess-x");
     expect(fragment.content).toContain("hello");
     expect(fragment.content).not.toContain('"type":"user"');
-    expect(result.details).toMatchObject({ sourcePath: file, turnsKept: 2 });
+    expect(result.details).toMatchObject({
+      sourcePath: file,
+      turnsKept: 2,
+      truncated: false,
+      redactions: 0,
+      droppedTurns: 0,
+      droppedToolCalls: 0,
+      droppedFiles: 0,
+    });
+    expect(typeof result.details?.bytesRead).toBe("number");
+    await fs.rm(base, { recursive: true, force: true });
+  });
+
+  it("caps maxTokens by the injected capabilities", async () => {
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-cap-"));
+    const file = path.join(base, "sess-x.jsonl");
+    await fs.writeFile(file, claudeTurns([{ role: "user", text: "hello" }, { role: "assistant", text: "hi there" }]));
+    const result = await createSessionSliceSource(
+      deps({
+        candidates: [{ ...candidate, filePath: file }],
+        profile: { provider: "claude", model: "sonnet", thinkingEffort: "high" },
+        capabilities: { structuredOutput: true, thinkingEffort: true, maxContextTokens: 100, cost: { inputPerMTok: 0, outputPerMTok: 0 }, supportsInstructionFiles: false },
+      }),
+    ).collect();
+    expect(result.fragments).toHaveLength(1);
     await fs.rm(base, { recursive: true, force: true });
   });
 
