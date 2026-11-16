@@ -3,7 +3,8 @@
 // into a derived SessionSlice, and applies the privacy policy and redaction.
 // No vscode import, no picker, and no raw transcript leaves this module.
 import * as path from "node:path";
-import { pathToFileURL } from "node:url";
+import { open, readdir, stat } from "node:fs/promises";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { ContextSource } from "@prompt-preflight/core";
 import { canonicalFolderUri, type SessionCandidate, type SessionProvider } from "./sessionLocator";
 import type { IncludeCode } from "./privacy";
@@ -555,4 +556,128 @@ export function parseCodexSession(text: string): ParsedSession {
     // Unknown response_item and event_msg types are skipped.
   }
   return finish(state);
+}
+
+// ---------------------------------------------------------------------------
+// Discovery
+// ---------------------------------------------------------------------------
+
+/** True for a Node error meaning the path simply does not exist. */
+function isNotFound(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+
+/** Reads the session_meta payload of a Codex rollout from its first bytes. */
+async function readCodexMeta(filePath: string): Promise<{ id?: string; timestamp?: string; cwd?: string }> {
+  const handle = await open(filePath, "r");
+  try {
+    const buf = Buffer.alloc(8192);
+    const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+    const head = buf.toString("utf8", 0, bytesRead);
+    for (const line of head.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const value: unknown = JSON.parse(trimmed);
+        if (value && typeof value === "object" && (value as Record<string, unknown>).type === "session_meta") {
+          const payload = asObject((value as Record<string, unknown>).payload) ?? {};
+          return {
+            id: typeof payload.id === "string" ? payload.id : undefined,
+            timestamp: typeof payload.timestamp === "string" ? payload.timestamp : undefined,
+            cwd: typeof payload.cwd === "string" ? payload.cwd : undefined,
+          };
+        }
+      } catch {
+        // Corrupt first line: keep scanning within the head window.
+      }
+    }
+  } finally {
+    await handle.close();
+  }
+  return {};
+}
+
+/** Collects .jsonl files under a directory tree; a missing tree yields nothing. */
+async function walkJsonl(dir: string): Promise<string[]> {
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    if (isNotFound(error)) return [];
+    throw error;
+  }
+  const out: string[] = [];
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...(await walkJsonl(full)));
+    else if (entry.isFile() && entry.name.endsWith(".jsonl")) out.push(full);
+  }
+  return out;
+}
+
+/**
+ * Discovers Claude and Codex session candidates for one workspace folder.
+ * Claude sessions live under the encoded project directory; Codex sessions
+ * are found recursively and matched by the cwd in their session metadata.
+ * A missing provider directory yields nothing; a permission error throws.
+ */
+export async function discoverCandidates(folderUri: string, homeDir: string): Promise<SessionCandidate[]> {
+  const folder = canonicalFolderUri(folderUri);
+  if (!folder.startsWith("file:")) return [];
+  let folderPath: string;
+  try {
+    folderPath = fileURLToPath(folder);
+  } catch {
+    return [];
+  }
+
+  const candidates: SessionCandidate[] = [];
+
+  // Claude: one directory per workspace, path separators encoded as "-".
+  const encoded = folderPath.split(path.sep).join("-");
+  const claudeDir = path.join(homeDir, ".claude", "projects", encoded);
+  let claudeEntries;
+  try {
+    claudeEntries = await readdir(claudeDir, { withFileTypes: true });
+  } catch (error) {
+    if (!isNotFound(error)) throw error;
+    claudeEntries = [];
+  }
+  for (const entry of claudeEntries) {
+    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+    const filePath = path.join(claudeDir, entry.name);
+    const st = await stat(filePath);
+    candidates.push({
+      sessionId: entry.name.slice(0, -".jsonl".length),
+      provider: "claude",
+      folderUri: folder,
+      filePath,
+      mtimeMs: st.mtimeMs,
+    });
+  }
+
+  // Codex: rollout files nested under date directories, matched by cwd.
+  const codexFiles = await walkJsonl(path.join(homeDir, ".codex", "sessions"));
+  for (const filePath of codexFiles) {
+    const meta = await readCodexMeta(filePath);
+    if (!meta.cwd) continue;
+    let uri: string;
+    try {
+      uri = canonicalFolderUri(pathToFileURL(meta.cwd).href);
+    } catch {
+      continue;
+    }
+    if (uri !== folder) continue;
+    const st = await stat(filePath);
+    candidates.push({
+      sessionId: meta.id ?? path.basename(filePath, ".jsonl"),
+      provider: "codex",
+      folderUri: folder,
+      filePath,
+      mtimeMs: st.mtimeMs,
+      ...(meta.timestamp ? { startedAt: meta.timestamp } : {}),
+    });
+  }
+
+  return candidates;
 }

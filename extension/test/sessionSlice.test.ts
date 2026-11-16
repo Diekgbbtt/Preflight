@@ -1,6 +1,9 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
-import { parseClaudeSession, parseCodexSession } from "../src/sessionSlice";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { discoverCandidates, parseClaudeSession, parseCodexSession } from "../src/sessionSlice";
 
 const claudeFixture = readFileSync(new URL("./fixtures/claude/session-basic.jsonl", import.meta.url), "utf8");
 const codexFixture = readFileSync(new URL("./fixtures/codex/session-basic.jsonl", import.meta.url), "utf8");
@@ -125,5 +128,66 @@ describe("parseCodexSession", () => {
     const parsed = parseCodexSession(text);
     expect(parsed.sessionId).toBe("s2");
     expect(parsed.turns).toEqual([]);
+  });
+});
+
+describe("discoverCandidates", () => {
+  let home: string | null = null;
+
+  afterEach(async () => {
+    if (home) await fs.rm(home, { recursive: true, force: true });
+    home = null;
+  });
+
+  const setup = async (): Promise<string> => {
+    home = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-sess-"));
+    return home;
+  };
+
+  it("finds Claude sessions under the encoded project directory", async () => {
+    const dir = await setup();
+    const projectDir = path.join(dir, ".claude", "projects", "-Users-alice-proj");
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(path.join(projectDir, "sess-a.jsonl"), claudeFixture);
+    await fs.writeFile(path.join(projectDir, "notes.txt"), "ignored");
+    const candidates = await discoverCandidates("file:///Users/alice/proj", dir);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({ sessionId: "sess-a", provider: "claude", folderUri: "file:///Users/alice/proj" });
+    expect(candidates[0].filePath.endsWith("sess-a.jsonl")).toBe(true);
+    expect(candidates[0].mtimeMs).toBeGreaterThan(0);
+  });
+
+  it("returns an empty list for a missing Claude project directory", async () => {
+    const dir = await setup();
+    expect(await discoverCandidates("file:///Users/alice/proj", dir)).toEqual([]);
+  });
+
+  it("finds Codex sessions nested under date directories by cwd metadata", async () => {
+    const dir = await setup();
+    const sessionDir = path.join(dir, ".codex", "sessions", "2026", "01", "02");
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.writeFile(path.join(sessionDir, "rollout-2026-01-02T11-00-00-sess-codex-1.jsonl"), codexFixture);
+    const candidates = await discoverCandidates("file:///Users/alice/proj", dir);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({ sessionId: "sess-codex-1", provider: "codex", folderUri: "file:///Users/alice/proj" });
+    expect(candidates[0].startedAt).toBe("2026-01-02T11:00:00.000Z");
+  });
+
+  it("skips Codex sessions whose cwd does not match the folder", async () => {
+    const dir = await setup();
+    const sessionDir = path.join(dir, ".codex", "sessions", "2026", "01", "02");
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.writeFile(path.join(sessionDir, "rollout-other.jsonl"), codexFixture);
+    expect(await discoverCandidates("file:///Users/alice/other", dir)).toEqual([]);
+  });
+
+  it("returns an empty list for a missing Codex sessions tree", async () => {
+    const dir = await setup();
+    expect(await discoverCandidates("file:///Users/alice/proj", dir)).toEqual([]);
+  });
+
+  it("returns an empty list for a non-file folder URI", async () => {
+    const dir = await setup();
+    expect(await discoverCandidates("untitled:Untitled-1", dir)).toEqual([]);
   });
 });
