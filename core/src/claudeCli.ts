@@ -107,7 +107,7 @@ function execClaude(
               new Error(`Claude Code CLI not found at "${opts.claudePath}". Install it or set promptPreflight.claudePath.`),
             );
           }
-          const failure = new Error(stderr.trim() || err.message);
+          const failure: Error & { code?: string | number } = new Error(stderr.trim() || err.message);
           if (code !== undefined) failure.code = code;
           return reject(failure);
         }
