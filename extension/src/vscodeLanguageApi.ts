@@ -6,6 +6,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import {
   MAX_TEXT_SEARCH_MATCHES,
+  isOutsideWorkspace,
   probeCapabilities,
   type LanguageApi,
   type LanguageCapabilities,
@@ -22,11 +23,6 @@ import { rg, type ExecResult } from "./exec";
 export interface VscodeLanguageApiOptions {
   cwd?: string;
   rg?: typeof rg;
-}
-
-/** True when the path cannot be resolved inside a workspace folder. */
-function isOutsideWorkspace(path: string): boolean {
-  return path.startsWith("/") || /^[A-Za-z]:\//.test(path) || path.split("/").includes("..");
 }
 
 export function createVscodeLanguageApi(options: VscodeLanguageApiOptions = {}): LanguageApi & {
