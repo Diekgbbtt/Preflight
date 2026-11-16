@@ -89,6 +89,74 @@ describe("JsonlRepository", () => {
     expect(events.filter((e) => e.seq === 2).length).toBe(2);
   });
 
+  it("matches drafts.jsonl byDraft on the envelope id and other files on the payload draftId", async () => {
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-idx-"));
+    dir = base;
+    const drafts = new JsonlRepository<{ text: string }>(path.join(base, "drafts.jsonl"));
+    await drafts.append({ id: "d1", ts: "2026-01-01T00:00:00.000Z", text: "a" });
+    await drafts.append({ id: "d2", ts: "2026-01-01T00:00:01.000Z", text: "b" });
+    expect((await drafts.byDraft("d1")).map((e) => e.id)).toEqual(["d1"]);
+    expect(await drafts.byDraft("nope")).toEqual([]);
+
+    const sends = new JsonlRepository<{ draftId: string; promptHash: string }>(path.join(base, "sends.jsonl"));
+    await sends.append({ id: "s1", ts: "2026-01-01T00:00:02.000Z", draftId: "d1", promptHash: "h1" });
+    await sends.append({ id: "s2", ts: "2026-01-01T00:00:03.000Z", draftId: "d2", promptHash: "h2" });
+    expect((await sends.byDraft("d1")).map((e) => e.id)).toEqual(["s1"]);
+    expect(await sends.byDraft("unknown")).toEqual([]);
+  });
+
+  it("indexes bySession on the payload sessionId and skips a missing session id", async () => {
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-idx-"));
+    dir = base;
+    const sends = new JsonlRepository<{ draftId: string; promptHash: string; sessionId?: string }>(
+      path.join(base, "sends.jsonl"),
+    );
+    await sends.append({ id: "s1", ts: "2026-01-01T00:00:00.000Z", draftId: "d1", promptHash: "h", sessionId: "sess1" });
+    await sends.append({ id: "s2", ts: "2026-01-01T00:00:01.000Z", draftId: "d1", promptHash: "h" });
+    expect((await sends.bySession("sess1")).map((e) => e.id)).toEqual(["s1"]);
+    expect(await sends.bySession("sessX")).toEqual([]);
+
+    const drafts = new JsonlRepository<{ text: string }>(path.join(base, "drafts.jsonl"));
+    await drafts.append({ id: "d1", ts: "2026-01-01T00:00:02.000Z", text: "a" });
+    expect(await drafts.bySession("sess1")).toEqual([]);
+  });
+
+  it("preserves both versions of a duplicated id, ordered by seq", async () => {
+    const file = await tempFile();
+    const repo = new JsonlRepository<{ text: string }>(file);
+    await repo.append({ id: "d1", ts: "2026-01-01T00:00:00.000Z", text: "v1" });
+    await repo.append({ id: "d1", ts: "2026-01-01T00:00:01.000Z", text: "v2" });
+    const { events } = await repo.list();
+    expect(events.map((e) => [e.seq, e.text])).toEqual([[1, "v1"], [2, "v2"]]);
+    expect((await repo.byDraft("d1")).length).toBe(2);
+  });
+
+  it("orders events ascending by seq and is stable for equal seq after reload", async () => {
+    const file = await tempFile();
+    const a = JSON.stringify({ schemaVersion: 1, seq: 2, id: "a", ts: "2026-01-01T00:00:00.000Z", text: "a" });
+    const b = JSON.stringify({ schemaVersion: 1, seq: 2, id: "b", ts: "2026-01-01T00:00:00.000Z", text: "b" });
+    const c = JSON.stringify({ schemaVersion: 1, seq: 1, id: "c", ts: "2026-01-01T00:00:00.000Z", text: "c" });
+    await fs.writeFile(file, [c, a, b, ""].join("\n"), "utf8");
+    const repo = new JsonlRepository<{ text: string }>(file);
+    const { events, skipped } = await repo.list();
+    expect(skipped).toBe(0);
+    expect(events.map((e) => e.seq)).toEqual([1, 2, 2]);
+    expect(events.slice(1).map((e) => e.id)).toEqual(["a", "b"]);
+  });
+
+  it("skips and counts an event with an unknown future schema version; its seq still raises the next append", async () => {
+    const file = await tempFile();
+    const v2 = JSON.stringify({ schemaVersion: 2, seq: 4, id: "x", ts: "2026-01-01T00:00:00.000Z", data: true });
+    const good = JSON.stringify({ schemaVersion: 1, seq: 1, id: "a", ts: "2026-01-01T00:00:00.000Z", text: "a" });
+    await fs.writeFile(file, good + "\n" + v2 + "\n", "utf8");
+    const repo = new JsonlRepository<{ text: string }>(file);
+    const { events, skipped } = await repo.list();
+    expect(events.map((e) => e.id)).toEqual(["a"]);
+    expect(skipped).toBe(1);
+    const stored = await repo.append({ id: "b", ts: "2026-01-01T00:00:01.000Z", text: "b" });
+    expect(stored.seq).toBe(5);
+  });
+
   it("reloads every event in new repository instances on the same paths", async () => {
     const base = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-reload-"));
     dir = base;

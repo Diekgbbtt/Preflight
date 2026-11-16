@@ -167,11 +167,18 @@ export class JsonlRepository<T> implements Repository<T> {
   }
 
   private indexEvent(event: Event<T>): void {
-    const draftId = (event as { draftId?: unknown }).draftId;
-    if (typeof draftId === "string") {
-      const list = this.byDraftIndex.get(draftId) ?? [];
+    const draftsFile = path.basename(this.filePath) === "drafts.jsonl";
+    if (draftsFile) {
+      const list = this.byDraftIndex.get(event.id) ?? [];
       list.push(event);
-      this.byDraftIndex.set(draftId, list);
+      this.byDraftIndex.set(event.id, list);
+    } else {
+      const draftId = (event as { draftId?: unknown }).draftId;
+      if (typeof draftId === "string") {
+        const list = this.byDraftIndex.get(draftId) ?? [];
+        list.push(event);
+        this.byDraftIndex.set(draftId, list);
+      }
     }
     const sessionId = (event as { sessionId?: unknown }).sessionId;
     if (typeof sessionId === "string") {
