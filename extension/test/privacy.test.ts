@@ -6,7 +6,9 @@ import {
   redact,
   shouldInclude,
   consentMessage,
+  consentedIncludeCode,
   EXCLUDE_GLOB,
+  type ConsentRecord,
   type IncludeKind,
   type IncludePolicy,
 } from "../src/privacy";
@@ -155,8 +157,13 @@ describe("shouldInclude", () => {
 
   it("workspace includes every non-excluded path", () => {
     expect(shouldInclude("src/app.ts", "workspace", ws)).toBe(true);
+    expect(shouldInclude("src/app.ts", "session", ws)).toBe(true);
     expect(shouldInclude("docs/readme.md", "diagnostic", ws)).toBe(true);
     expect(shouldInclude("", "workspace", ws)).toBe(false);
+  });
+
+  it("active-file excludes a session excerpt from another file", () => {
+    expect(shouldInclude("src/other.ts", "session", active)).toBe(false);
   });
 
   it("excludes secret file names under both active-file and workspace", () => {
@@ -197,6 +204,13 @@ describe("shouldInclude", () => {
     expect(shouldInclude("src/../../etc/passwd", "selection", ws)).toBe(false);
   });
 
+  it("rejects windows drive-letter paths under both workspace and selection", () => {
+    for (const path of ["C:/Users/x/app.ts", "C:\\Users\\x\\app.ts"]) {
+      expect(shouldInclude(path, "workspace", ws)).toBe(false);
+      expect(shouldInclude(path, "selection", ws)).toBe(false);
+    }
+  });
+
   it("normalizes windows separators and leading ./", () => {
     expect(shouldInclude("src\\app.ts", "workspace", active)).toBe(true);
     expect(shouldInclude("./src/app.ts", "workspace", active)).toBe(true);
@@ -224,6 +238,7 @@ describe("consentMessage", () => {
   it("states that code is gated and redacted", () => {
     expect(message).toContain("includeCode");
     expect(message.toLowerCase()).toContain("redact");
+    expect(message.toLowerCase()).toContain("until");
   });
 
   it("discloses unencrypted local persistence and clearHistory", () => {
@@ -245,5 +260,28 @@ describe("EXCLUDE_GLOB", () => {
     for (const dir of ["dist", "out", "build", ".venv", "venv", "__pycache__", ".next", "target"]) {
       expect(EXCLUDE_GLOB).toContain(dir);
     }
+  });
+});
+
+describe("consentedIncludeCode", () => {
+  const accepted: ConsentRecord = { version: 1, decision: "accepted", decidedAt: "2026-01-01T00:00:00.000Z" };
+  const declined: ConsentRecord = { version: 1, decision: "declined", decidedAt: "2026-01-01T00:00:00.000Z" };
+
+  it("returns the setting for each value when consent is accepted", () => {
+    expect(consentedIncludeCode("off", accepted)).toBe("off");
+    expect(consentedIncludeCode("active-file", accepted)).toBe("active-file");
+    expect(consentedIncludeCode("workspace", accepted)).toBe("workspace");
+  });
+
+  it("returns off for declined consent", () => {
+    expect(consentedIncludeCode("off", declined)).toBe("off");
+    expect(consentedIncludeCode("active-file", declined)).toBe("off");
+    expect(consentedIncludeCode("workspace", declined)).toBe("off");
+  });
+
+  it("returns off when no consent record exists", () => {
+    expect(consentedIncludeCode("off", null)).toBe("off");
+    expect(consentedIncludeCode("active-file", null)).toBe("off");
+    expect(consentedIncludeCode("workspace", null)).toBe("off");
   });
 });

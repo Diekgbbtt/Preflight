@@ -90,7 +90,7 @@ function isExcludedPath(path: string): boolean {
 
 /** True when the path cannot be resolved inside a workspace folder. */
 function isOutsideWorkspace(path: string): boolean {
-  return path.startsWith("/") || path.split("/").includes("..");
+  return path.startsWith("/") || /^[A-Za-z]:\//.test(path) || path.split("/").includes("..");
 }
 
 /**
@@ -137,11 +137,23 @@ export const CODEX_DATA_URL = "https://openai.com/policies/privacy-policy/";
 export function consentMessage(): string {
   return [
     "Prompt Preflight sends your draft and its Q&A answers to the selected model provider (Claude Code, or Codex once supported).",
-    `Code excerpts, diagnostics and session code are sent only when promptPreflight.context.includeCode allows it, after secret redaction. Provider data handling: Claude: ${CLAUDE_DATA_URL} - Codex: ${CODEX_DATA_URL}.`,
+    `Code excerpts, diagnostics and session code are sent only when promptPreflight.context.includeCode allows it, after secret redaction; code inclusion stays off until you accept this notice, and a dismissed notice leaves it off until you accept. Provider data handling: Claude: ${CLAUDE_DATA_URL} - Codex: ${CODEX_DATA_URL}.`,
     "Drafts, Q&A, reviews, session slices inside review records, and send records are stored unencrypted under context.globalStorageUri and stay on this machine; they leave it only inside a model request.",
     "promptPreflight.clearHistory deletes those stored records.",
     "The study log is opt-in, separate, and is not deleted by clearHistory.",
   ].join(" ");
+}
+
+/**
+ * Effective includeCode after consent. Returns the setting only for an accepted
+ * consent; declined consent or no record yet returns "off".
+ *
+ * Consumers (#36 assembler, #38 session slice) must pass this effective value
+ * into IncludePolicy.includeCode, never the raw setting, so code inclusion is
+ * gated on an accepted consent even before the setting itself is changed.
+ */
+export function consentedIncludeCode(setting: IncludeCode, consent: ConsentRecord | null): IncludeCode {
+  return consent?.decision === "accepted" ? setting : "off";
 }
 
 /** Single glob for vscode.workspace.findFiles that skips dependency, git and build directories. */
