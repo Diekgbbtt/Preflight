@@ -225,10 +225,8 @@ describe("exceedsBudget", () => {
   });
 });
 
-import { checkHealth } from "../src/errors";
-import { createProvider } from "../src/model";
-import type { HealthExecutor, ModelProvider } from "../src/errors";
-import type { ModelProvider as Provider } from "../src/model";
+import { checkHealth, type HealthExecutor } from "../src/errors";
+import { createProvider, type ModelProvider as Provider } from "../src/model";
 
 const config = {
   provider: "claude" as const,
@@ -312,7 +310,7 @@ describe("checkHealth", () => {
       },
       complete: provider.complete,
     };
-    const result = await checkHealth(throwing as ModelProvider, profile, "claude", exec);
+    const result = await checkHealth(throwing as Provider, profile, "claude", exec);
     expect(result.ok).toBe(false);
     expect(calls).toEqual([]);
   });
