@@ -24,12 +24,14 @@ export {
   type EventInput,
   type ListResult,
   type Repository,
-  type SendRecord,
-  type IdGenerator,
-  type Clock,
-  type MigrationStep,
-  type MigrationResult,
 };
+export type {
+  SendRecord,
+  IdGenerator,
+  Clock,
+  MigrationStep,
+  MigrationResult,
+} from "@prompt-preflight/core";
 
 /**
  * Append-only JSONL repository for one file. One JSON object per line, UTF-8,

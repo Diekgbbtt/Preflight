@@ -1,6 +1,8 @@
+import * as path from "node:path";
 import * as vscode from "vscode";
 import { CONSENT_VERSION, consentKey, consentMessage, parseConsent, type IncludeCode } from "./privacy";
 import { PromptPanel } from "./panel";
+import { JsonlRepository, type SendRecord } from "./repository";
 import { StudyLog } from "./studyLog";
 import { WorkspaceIndex } from "./workspace";
 
@@ -8,6 +10,12 @@ export function activate(context: vscode.ExtensionContext): void {
   const workspace = new WorkspaceIndex();
   const log = new StudyLog(context.globalStorageUri);
   const panel = new PromptPanel(context.extensionUri, workspace, log);
+
+  const storage = context.globalStorageUri.fsPath;
+  const drafts = new JsonlRepository<Record<string, unknown>>(path.join(storage, "drafts.jsonl"));
+  const questions = new JsonlRepository<Record<string, unknown>>(path.join(storage, "questions.jsonl"));
+  const reviews = new JsonlRepository<Record<string, unknown>>(path.join(storage, "reviews.jsonl"));
+  const sends = new JsonlRepository<SendRecord>(path.join(storage, "sends.jsonl"));
 
   // Fire and forget: activation never waits on the answer.
   void ensureConsent(context);
@@ -34,6 +42,21 @@ export function activate(context: vscode.ExtensionContext): void {
         void vscode.window.showInformationMessage(
           log.enabled ? "No study log yet. Send a prompt first." : "Study logging is off. Enable promptPreflight.studyLog.enabled.",
         );
+      }
+    }),
+    vscode.commands.registerCommand("promptPreflight.clearHistory", async () => {
+      const answer = await vscode.window.showInformationMessage(
+        "Delete all stored drafts, questions, reviews and send records? Settings and the study log are kept.",
+        { modal: true },
+        "Delete",
+      );
+      if (answer !== "Delete") return;
+      try {
+        const results = await Promise.all([drafts.clear(), questions.clear(), reviews.clear(), sends.clear()]);
+        const deleted = results.reduce((sum, r) => sum + r.deleted, 0);
+        void vscode.window.showInformationMessage(`Deleted ${deleted} stored event${deleted === 1 ? "" : "s"}.`);
+      } catch {
+        void vscode.window.showErrorMessage("Prompt Preflight could not clear the stored history.");
       }
     }),
   );

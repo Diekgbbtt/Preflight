@@ -20,7 +20,8 @@
     "commands": [
       { "command": "promptPreflight.focus", "title": "Open", "category": "Prompt Preflight" },
       { "command": "promptPreflight.checkSelection", "title": "Check Selected Text", "category": "Prompt Preflight" },
-      { "command": "promptPreflight.openStudyLog", "title": "Open Study Log", "category": "Prompt Preflight" }
+      { "command": "promptPreflight.openStudyLog", "title": "Open Study Log", "category": "Prompt Preflight" },
+      { "command": "promptPreflight.clearHistory", "title": "Clear History", "category": "Prompt Preflight" }
     ],
     "menus": {
       "editor/context": [{ "command": "promptPreflight.checkSelection", "when": "editorHasSelection", "group": "9_cutcopypaste" }]
