@@ -110,5 +110,89 @@ describe("assemble", () => {
     expect(diff?.included).toBe(false);
     expect(diff?.omittedReason).toBe("budget");
   });
+
+  it("applies the per-source maxTokens cap across the source's fragments in order", async () => {
+    const frag = (content: string) => ({
+      fragments: [
+        { source: "x", priority: 0, content, tokens: 0, provenance: { kind: "open-editor" as const, truncated: false, chars: 0 } },
+        { source: "x", priority: 0, content: "second file body", tokens: 0, provenance: { kind: "open-editor" as const, truncated: false, chars: 0 } },
+      ],
+    });
+    const source = fixedSource("open-editors", SOURCE_PRIORITIES["open-editors"], frag("w".repeat(24)), 5);
+    const bundle = await assemble({ draft: "", qa: [] }, [source], { budget: 100, estimateTokens: fakeEstimate, redact: noRedact });
+    const entry = bundle.manifest.sources.find((s) => s.source === "open-editors");
+    expect(entry?.included).toBe(true);
+    expect(entry?.truncated).toBe(true);
+    expect(entry?.tokens).toBe(5);
+    // Second fragment is dropped because the source cap is spent.
+    expect(bundle.fragments).toHaveLength(1);
+    expect(bundle.fragments[0].content).toBe("w".repeat(20));
+  });
+
+  it("truncates a source exactly one token over its cap at a line boundary", async () => {
+    const lines = ["short line", "another line", "third line\n"];
+    const source = fixedSource("open-editors", SOURCE_PRIORITIES["open-editors"], {
+      fragments: [{ source: "x", priority: 0, content: lines.join("\n"), tokens: 99, provenance: { kind: "open-editor", truncated: false, chars: 0 } }],
+    }, 4);
+    const bundle = await assemble({ draft: "", qa: [] }, [source], { budget: 100, estimateTokens: fakeEstimate, redact: noRedact });
+    const fragment = bundle.fragments.find((f) => f.source === "open-editors");
+    // Whole lines that fit within 4 tokens (16 chars): "short line\nanother line" = 23 chars -> 6 tokens, too many.
+    // "short line" alone = 10 chars -> 3 tokens. Next line would cross. Cut after the full line.
+    expect(fragment?.content).toBe("short line");
+    expect(fragment?.tokens).toBe(3);
+    expect(fragment?.provenance.truncated).toBe(true);
+    expect(fragment?.provenance.chars).toBe(10);
+  });
+
+  it("keeps CRLF endings when truncating at a line boundary", async () => {
+    const source = fixedSource("open-editors", SOURCE_PRIORITIES["open-editors"], {
+      fragments: [{ source: "x", priority: 0, content: "first\r\nsecond\r\n", tokens: 99, provenance: { kind: "open-editor", truncated: false, chars: 0 } }],
+    }, 3);
+    const bundle = await assemble({ draft: "", qa: [] }, [source], { budget: 100, estimateTokens: fakeEstimate, redact: noRedact });
+    // "first\r" -> "first\r" is 6 chars = 2 tokens; adding "second\r" would make 14 chars = 4 tokens, over the cap.
+    expect(bundle.fragments[0].content).toBe("first\r");
+    expect(bundle.fragments[0].tokens).toBe(2);
+  });
+
+  it("cuts mid-line when no line boundary fits, and omits a source whose cap is zero", async () => {
+    const long = "x".repeat(100);
+    const source = fixedSource("open-editors", SOURCE_PRIORITIES["open-editors"], {
+      fragments: [{ source: "x", priority: 0, content: long, tokens: 99, provenance: { kind: "open-editor", truncated: false, chars: 0 } }],
+    }, 4);
+    const bundle = await assemble({ draft: "", qa: [] }, [source], { budget: 100, estimateTokens: fakeEstimate, redact: noRedact });
+    expect(bundle.fragments[0].content).toBe("x".repeat(16));
+    expect(bundle.fragments[0].tokens).toBe(4);
+    expect(bundle.fragments[0].provenance.truncated).toBe(true);
+
+    const zero = fixedSource("git-diff", SOURCE_PRIORITIES["git-diff"], {
+      fragments: [{ source: "x", priority: 0, content: "text", tokens: 1, provenance: { kind: "git-diff", truncated: false, chars: 4 } }],
+    }, 0);
+    const zeroBundle = await assemble({ draft: "", qa: [] }, [zero], { budget: 100, estimateTokens: fakeEstimate, redact: noRedact });
+    const entry = zeroBundle.manifest.sources.find((s) => s.source === "git-diff");
+    expect(entry?.included).toBe(false);
+    expect(entry?.omittedReason).toBe("budget");
+    expect(zeroBundle.fragments).toHaveLength(0);
+  });
+
+  it("truncates one token over the total budget", async () => {
+    const source = fixedSource("open-editors", SOURCE_PRIORITIES["open-editors"], {
+      fragments: [{ source: "x", priority: 0, content: "y".repeat(20), tokens: 5, provenance: { kind: "open-editor", truncated: false, chars: 20 } }],
+    });
+    const bundle = await assemble({ draft: "", qa: [] }, [source], { budget: 5, estimateTokens: fakeEstimate, redact: noRedact });
+    const entry = bundle.manifest.sources.find((s) => s.source === "open-editors");
+    expect(entry?.tokens).toBe(5);
+    expect(entry?.truncated).toBe(false);
+    expect(bundle.fragments[0].content).toBe("y".repeat(20));
+
+    const over = fixedSource("git-diff", SOURCE_PRIORITIES["git-diff"], {
+      fragments: [{ source: "x", priority: 0, content: "z".repeat(24), tokens: 6, provenance: { kind: "git-diff", truncated: false, chars: 24 } }],
+    });
+    const overBundle = await assemble({ draft: "", qa: [] }, [over], { budget: 5, estimateTokens: fakeEstimate, redact: noRedact });
+    const diffEntry = overBundle.manifest.sources.find((s) => s.source === "git-diff");
+    expect(diffEntry?.included).toBe(true);
+    expect(diffEntry?.truncated).toBe(true);
+    expect(diffEntry?.tokens).toBe(5);
+    expect(diffEntry?.chars).toBe(20);
+  });
 });
 
