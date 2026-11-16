@@ -37,23 +37,32 @@ export interface RedactionResult {
 // later pattern cannot match or double-count them.
 const SENTINEL = "\u0000";
 
+// Marker wrapped around each replaced span during the sequential pass. No
+// SECRETS pattern can match it, and its leading space stops the
+// password-assignment value part (`[^\s"']{6,}`) from re-matching it. The
+// counter keeps every marker unique, so a genuine NUL or an unrelated byte in
+// the input is preserved untouched.
+let markerCounter = 0;
+const markerFor = (n: number) => `[ [preflight-redacted-${n}] ]`;
+
 /**
  * Replaces every SECRETS match with `[redacted]` and reports how many were replaced.
  * Patterns are applied sequentially to the updated text with fresh regex clones,
  * so shared global regex state and cross-pattern double counting are impossible.
- * Never logs the matches or the original text.
+ * Every marker is replaced with `[redacted]` at the end. Never logs the matches
+ * or the original text.
  */
 export function redact(text: string): RedactionResult {
   let masked = text;
   let count = 0;
   for (const pattern of SECRETS) {
     const re = new RegExp(pattern.source, pattern.flags);
-    masked = masked.replace(re, () => {
-      count++;
-      return SENTINEL;
-    });
+    masked = masked.replace(re, () => markerFor(count++));
   }
-  return { text: masked.split(SENTINEL).join("[redacted]"), count };
+  return {
+    text: masked.replace(/\[ \[preflight-redacted-\d+\] \]/g, "[redacted]"),
+    count,
+  };
 }
 
 /** How much code context may be included in a model call. */
@@ -70,8 +79,20 @@ export interface IncludePolicy {
 }
 
 // Excluded names, matched case-insensitively. Secret-bearing file names by
-// basename, plus dependency and git directories by segment.
-const EXCLUDED_DIR_SEGMENTS = new Set(["node_modules", ".git"]);
+// basename, plus dependency, git and build directories by segment, matching
+// the EXCLUDE_GLOB disclosure for selections too.
+const EXCLUDED_DIR_SEGMENTS = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "out",
+  "build",
+  ".venv",
+  "venv",
+  "__pycache__",
+  ".next",
+  "target",
+]);
 const EXCLUDED_BASENAMES = new Set(["credentials.json", "id_rsa", "id_ed25519"]);
 
 /** True when the workspace-relative path names an excluded secret-bearing file or directory. */

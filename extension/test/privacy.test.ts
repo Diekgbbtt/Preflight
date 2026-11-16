@@ -122,6 +122,13 @@ describe("redact", () => {
     expect(result.text).not.toContain("ghp_");
     expect(result.text).not.toContain("github_pat_");
   });
+
+  it("preserves a pre-existing NUL character unchanged", () => {
+    const text = "a\u0000b";
+    const result = redact(text);
+    expect(result.text).toBe("a\u0000b");
+    expect(result.count).toBe(0);
+  });
 });
 
 describe("shouldInclude", () => {
@@ -183,6 +190,12 @@ describe("shouldInclude", () => {
         expect(shouldInclude(path, "workspace", policy)).toBe(false);
       }
     }
+  });
+
+  it("excludes build directories, even as an explicit selection", () => {
+    expect(shouldInclude("dist/app.js", "selection", ws)).toBe(false);
+    expect(shouldInclude("build/notes.md", "workspace", ws)).toBe(false);
+    expect(shouldInclude("venv/lib/x.py", "selection", active)).toBe(false);
   });
 
   it("exclusion wins over an explicit selection", () => {
