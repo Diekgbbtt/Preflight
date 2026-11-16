@@ -66,5 +66,49 @@ describe("assemble", () => {
     expect(bundle.manifest.totalTokens).toBe(11);
     expect(bundle.manifest.totalTokens).toBeGreaterThan(bundle.manifest.budget);
   });
+
+  it("orders by priority descending then id ascending and allocates the budget in that order", async () => {
+    const frag = (content: string) => ({
+      fragments: [{ source: "wrong", priority: 0, content, tokens: 0, provenance: { kind: "open-editor" as const, truncated: false, chars: 0 } }],
+    });
+    const a = fixedSource("open-editors", SOURCE_PRIORITIES["open-editors"], frag("aaaa"));
+    const b = fixedSource("selection", SOURCE_PRIORITIES.selection, frag("bbbb"));
+    const c = fixedSource("git-diff", SOURCE_PRIORITIES["git-diff"], frag("cccc"));
+    const bundle = await assemble({ draft: "", qa: [] }, [c, a, b], {
+      budget: 5,
+      estimateTokens: fakeEstimate,
+      redact: noRedact,
+    });
+    // selection (80) first: 1 token, fits. open-editors (60) next: 1 token, fits, 2 remaining.
+    // git-diff (50) last: 1 token, fits, 1 remaining... budget 5 - draft 0 = 5; each frag "aaaa" = 1 token.
+    expect(bundle.fragments.map((f) => f.source)).toEqual(["selection", "open-editors", "git-diff"]);
+    expect(bundle.manifest.sources.map((s) => s.source)).toEqual(["draft", "qa", "selection", "open-editors", "git-diff"]);
+    // The assembler overwrites the fragment source and priority from the owning source.
+    expect(bundle.fragments[0]).toMatchObject({ source: "selection", priority: 80 });
+    expect(bundle.manifest.totalTokens).toBe(3);
+  });
+
+  it("truncates the last source that fits and omits later sources with budget", async () => {
+    const frag = (content: string) => ({
+      fragments: [{ source: "wrong", priority: 0, content, tokens: 0, provenance: { kind: "open-editor" as const, truncated: false, chars: 0 } }],
+    });
+    const big = fixedSource("open-editors", SOURCE_PRIORITIES["open-editors"], frag("w".repeat(40)));
+    const later = fixedSource("git-diff", SOURCE_PRIORITIES["git-diff"], frag("z".repeat(8)));
+    const bundle = await assemble({ draft: "", qa: [] }, [later, big], {
+      budget: 6,
+      estimateTokens: fakeEstimate,
+      redact: noRedact,
+    });
+    const editors = bundle.manifest.sources.find((s) => s.source === "open-editors");
+    const diff = bundle.manifest.sources.find((s) => s.source === "git-diff");
+    expect(editors?.included).toBe(true);
+    expect(editors?.truncated).toBe(true);
+    expect(editors?.tokens).toBe(6);
+    expect(editors?.chars).toBe(24);
+    expect(editors?.omittedReason).toBeUndefined();
+    expect(bundle.fragments.find((f) => f.source === "open-editors")?.provenance.truncated).toBe(true);
+    expect(diff?.included).toBe(false);
+    expect(diff?.omittedReason).toBe("budget");
+  });
 });
 
