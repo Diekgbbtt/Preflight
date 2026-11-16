@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 import * as vscode from "vscode";
-import type { Config, SendRecord } from "@prompt-preflight/core";
+import type { Config, ProfileValidation, SendRecord } from "@prompt-preflight/core";
 import { createProvider, resolveProfile } from "@prompt-preflight/core";
 import { CONSENT_VERSION, consentKey, consentMessage, parseConsent, type IncludeCode } from "./privacy";
 import { PromptPanel } from "./panel";
@@ -93,7 +93,12 @@ function readConfig(): Config {
 function validateModelSettings(config: Config): string | null {
   for (const mode of ["quick", "deep"] as const) {
     const profile = resolveProfile(config, mode);
-    const result = createProvider(profile, config).validateProfile(profile);
+    let result: ProfileValidation;
+    try {
+      result = createProvider(profile, config).validateProfile(profile);
+    } catch (e) {
+      return `${mode}: ${(e as Error).message}`;
+    }
     if (!result.ok) return `${mode}: ${result.message}`;
   }
   return null;
