@@ -15,6 +15,7 @@ Every entry has a contract version and a change log.
 | #42 | merged | ticket/42-feedback-errors | 507ee22d48d26de29a5cf3e88982040105b40e65 | `npm run typecheck && npm test && npm run build` -> 295 passed | PASS |
 | #36 | merged | ticket/36-context-assembler | 495b52853631580933232fea1a3941c94adb5510 | `npm run typecheck && npm test && npm run build` -> 322 passed | PASS |
 | #37 | merged | ticket/37-language-context | 96ce4605b489049d8c6919c8bcbd429ff2cc66f3 | `npm run typecheck && npm test && npm run build` -> 442 passed | PASS |
+| #38 | merged | ticket/38-session-slice | e366d25df10a700bae886d3af3d342afe959455d | `npm run typecheck && npm test && npm run build` -> 518 passed | PASS |
 
 Source branch: `lane-1/control-plane`.
 Setup commit: `098e887` (`chore: set up lane 1 worktrees and extension tests`).
@@ -25,6 +26,7 @@ Lane base for ticket #39: `ed0c1d7cb40aee3fe68e633d75b2896839ae124b`.
 Lane base for ticket #42: `35c6a3b`.
 Lane base for ticket #36: `0c62960`.
 Lane base for ticket #37: `99b7392`.
+Lane base for ticket #38: `d34bd22`.
 
 <a id="contract-40"></a>
 
@@ -966,6 +968,126 @@ Lane base for ticket #37: `99b7392`.
 - Change log:
   - v1: initial contract merged in #37.
 
+<a id="contract-38"></a>
+
+## Contract: #38 Current session slice reader - v1
+
+- State: merged.
+- Commit: `e366d25df10a700bae886d3af3d342afe959455d`.
+- Base: `d34bd22`.
+- Exports from `extension/src/sessionLocator.ts`:
+  - `type SessionProvider = "claude" | "codex"`.
+  - `interface SessionCandidate { sessionId: string; provider: SessionProvider; folderUri: string; filePath: string; mtimeMs: number; startedAt?: string; turnCount?: number }`.
+  - `interface LocatorInput { sendId?: string; folderUri: string; promptHash?: string; sends: Array<Event<SendRecord>>; candidates: SessionCandidate[]; clock: Clock }`.
+  - `type SessionLocation = { kind: "found"; candidate: SessionCandidate } | { kind: "ambiguous"; candidates: SessionCandidate[] } | { kind: "none" }`.
+  - `const SEND_MATCH_WINDOW_MS = 1800000`, `SESSION_AGE_WINDOW_MS = 86400000`, `AMBIGUITY_WINDOW_MS = 120000`.
+  - `function canonicalFolderUri(uri: string): string`.
+  - `function locateSession(input: LocatorInput): SessionLocation`.
+- Exports from `extension/src/sessionSlice.ts`:
+  - `interface SessionCaps { maxTurns: number; maxTokens: number; maxBytes: number }`.
+  - `const DEFAULT_SESSION_CAPS = { maxTurns: 10, maxTokens: 8000, maxBytes: 5000000 }`.
+  - `interface Turn { role: "user" | "assistant"; text: string; at?: string; code?: string[]; codePath?: string }` (`codePath` is the additive field required by #41's per-file code policy).
+  - `interface ToolCall { name: string; status: "ok" | "error" | "unknown"; summary: string; at?: string }`.
+  - `interface SessionError { message: string; status: "error" | "resolved" | "unknown"; at?: string }`.
+  - `interface TestResult { name: string; status: "passed" | "failed" | "skipped" | "unknown"; at?: string }`.
+  - `interface SessionProvenance { sourcePath: string; bytesRead: number; turnsKept: number; truncated: boolean; droppedTurns: number; droppedToolCalls: number; droppedFiles: number; redactions: number; reason?: "unsupported" | "empty" | "error" }`.
+  - `interface SessionSlice { sessionId: string; provider: SessionProvider; folderUri: string; startedAt: string | null; endedAt: string | null; turns: Turn[]; toolCalls: ToolCall[]; errors: SessionError[]; testResults: TestResult[]; changedFiles: string[]; tokens: number; truncated: boolean; provenance: SessionProvenance }`.
+  - `interface ParsedSession { sessionId?: string; folderUri?: string; startedAt?: string; endedAt?: string; turns: Turn[]; toolCalls: ToolCall[]; errors: SessionError[]; testResults: TestResult[]; changedFiles: string[] }`.
+  - `function parseClaudeSession(text: string): ParsedSession`.
+  - `function parseCodexSession(text: string): ParsedSession`.
+  - `interface SliceOptions { includeCode: IncludeCode; activeFileUri?: string; redact(text: string): { text: string; count: number } }`.
+  - `function readSlice(filePath: string, provider: SessionProvider, caps: SessionCaps, clock: Clock, options: SliceOptions): Promise<SessionSlice>`.
+  - `async function discoverCandidates(folderUri: string, homeDir: string): Promise<SessionCandidate[]>`.
+  - `function formatSessionSlice(slice: SessionSlice): string`.
+  - `interface SessionSliceSourceDeps { folderUri: string; homeDir?: string; candidates?: SessionCandidate[]; sends: Array<Event<SendRecord>>; sendId?: string; promptHash?: string; clock: Clock; caps?: SessionCaps; capabilities?: ModelCapabilities; includeCode: IncludeCode; activeFileUri?: string; redact(text: string): { text: string; count: number } }`.
+  - `function createSessionSliceSource(deps: SessionSliceSourceDeps): ContextSource` with id `session-slice` and priority 85.
+- Locator:
+  - `sends` is folded by envelope `id` to the highest `seq`.
+  - Path 1: the latest send with `id === sendId`. If it has no `sessionId`, fall through to path 2. If it has one, a candidate with that `sessionId` and the canonical send folder URI wins. If absent, `none`; never link a different session.
+  - Path 2: only when `promptHash` is present. Sends with the canonical input folder URI, a matching `promptHash`, and `Date.parse(ts) >= clock.now() - 30 minutes`. The latest by `ts`, then `seq`. A candidate for its `sessionId`/folder wins; a missing candidate or missing `sessionId` falls through to path 3.
+  - Path 3: candidates with the canonical input folder and `mtimeMs >= clock.now() - 24 hours`. None -> `none`. The latest mtime. If at least two candidates are within 2 minutes of it, return `ambiguous` sorted by mtime descending and `sessionId` ascending. Otherwise `found` the latest.
+  - `canonicalFolderUri` round-trips file URIs through `fileURLToPath`/`pathToFileURL` and strips one trailing separator; non-file URIs pass through.
+  - The locator is pure, uses only the injected `Clock`, and has no filesystem access.
+- Discovery:
+  - Claude sessions live under `~/.claude/projects/<encoded-workspace-path>/*.jsonl`. On POSIX the absolute workspace path has its path separators replaced by `-`; the current environment encodes `/Users/diekgbbtt/preFlight` as `-Users-diekgbbtt-preFlight` (verified against directory names only). The Windows drive/separator encoding is a recorded gap, not guessed.
+  - Codex sessions live under `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. Discovery searches recursively and filters by the `session_meta` `cwd` metadata, not a flat directory.
+  - `discoverCandidates(folderUri, homeDir)` takes an injected home directory. Missing provider directories -> `[]`; permission errors throw so the source/assembler can record `error`. Tests use fixture home directories; the real home is never read in tests.
+  - `SessionCandidate` carries `sessionId`, `provider`, canonical `folderUri`, `filePath`, `mtimeMs`, and optional `startedAt`/`turnCount`.
+  - The tests use synthetic fixtures only; no real session content is copied into the repository.
+- Bounded read:
+  - `readSlice` stats the file, starts at `max(0, size - maxBytes)`, reads with `fs.open`/`fs.read` in a loop until the window is filled or EOF, and records the actual `bytesRead`.
+  - A seek that lands mid-line drops the partial first line. A seek that lands on a line boundary keeps the first complete line. A final line without a trailing newline is dropped. No `readFile` of the whole file. No partial line is parsed.
+  - 5 MB exactly is read in full with `truncated` false from the byte window; one byte over starts mid-window and sets `truncated` true.
+- Parsers:
+  - `parseClaudeSession` and `parseCodexSession` take complete-line text, skip empty/corrupt/malformed lines, and never throw.
+  - Claude public format: `type: user|assistant`, `message.role`, `message.content` (string or blocks), `timestamp`, `cwd`, `sessionId`. Text blocks become turns; `tool_use`/`tool_result` pairs become tool calls with ok/error status; failed results become `SessionError`s; test commands become `TestResult`s with final status; mutation tool inputs (`file_path`/`path`/`notebook_path`) become changed files; fenced code is extracted into `Turn.code` with a `codePath` and removed from the turn text; thinking blocks are ignored.
+  - Codex public format: `session_meta` (id/timestamp/cwd), `response_item` messages (`input_text`/`output_text`), `function_call`/`function_call_output`, and `event_msg` `exec_command_begin`/`exec_command_end` when present. Unknown event types are skipped. The synthetic fixtures record the assumed fields.
+  - Consecutive same-role messages merge into one turn. Tool calls are matched to turns by timestamp for retention. Errors resolve when a later tool call succeeds. Test results dedupe by command name and keep the final status. A tool-only assistant turn is retained so its calls are not lost.
+  - Code without a resolvable path is dropped in every mode (fail-closed). Mixed-path fences split into code-only turns with their own `codePath`.
+- Slice:
+  - Last `caps.maxTurns` turns, then drop the oldest turns while the total token estimate (turn text + retained code + retained tool-call summaries + error messages + test-result names) exceeds `caps.maxTokens`.
+  - `tokens` is the final estimate over the retained content. One turn alone over the cap returns an empty slice with `truncated: true` and the drop counts.
+  - `changedFiles` is resolved against the session cwd, workspace-relative POSIX, sorted; absolute/`..` paths are dropped and counted in `droppedFiles`.
+  - `provenance` records `sourcePath`, actual `bytesRead`, `turnsKept`, `truncated`, `droppedTurns`, `droppedToolCalls`, `droppedFiles`, `redactions`, and `reason` when the slice is empty/unsupported/error.
+  - `truncated` is true when the byte window starts after 0, when any turn is dropped, or when any tool call is dropped.
+  - Errors and test results are global and are not dropped by the turn cap. If they alone exceed `maxTokens`, the reader returns the empty truncated slice. The documented behavior is in the code comment.
+  - Unknown provider -> empty slice with `reason: "unsupported"`. Missing/unreadable file -> `reason: "error"`. Empty/unparseable -> `reason: "empty"`. No throw.
+- Privacy:
+  - `includeCode: off` keeps turn text and changed-file paths but drops every code excerpt.
+  - `includeCode: active-file` keeps code only when the turn's `codePath` resolves to the same workspace-relative path as `activeFileUri` and #41's `shouldInclude(path, "active-file", { includeCode: "active-file", activePath })` passes. No active file -> drop all code.
+  - `includeCode: workspace` keeps code only when `shouldInclude(path, "workspace", { includeCode: "workspace" })` passes.
+  - `redact` is applied to turn text, code, tool-call summaries, error messages, and test-result names before the budget and before returning. Summed counts go to `provenance.redactions`. The reader never logs the original text or a secret.
+  - The slice never contains the raw transcript. #38 does not write files and does not persist anything.
+- Session-slice source:
+  - `createSessionSliceSource` returns a `ContextSource` with id `session-slice`, priority 85.
+  - It uses `deps.candidates` when supplied; otherwise `discoverCandidates(deps.folderUri, deps.homeDir ?? os.homedir())`.
+  - It calls `locateSession`. `none` -> `empty` with `details: { resolved: "none" }`. `ambiguous` -> `empty` with `details: { ambiguous: n }`; the caller owns the picker and can call `locateSession` directly for the candidates. `found` -> `readSlice`.
+  - `caps.maxTokens` is capped to `deps.capabilities.maxContextTokens` when that is positive and finite. The source does not use a `ModelProfile` field; the capability comes from #39's provider.
+  - On a slice reason `unsupported`/`error`/`empty`, the source returns the matching `omittedReason` with details. On success it formats the slice and returns one fragment with `kind: "session"`, `truncated`, `chars`, `redactions` copied from the slice, `folderUri`, and `tokens = estimateTokens(formattedContent)` (not `slice.tokens`).
+  - `details` contains `sourcePath`, `bytesRead`, `turnsKept`, `truncated`, `redactions`, `droppedTurns`, `droppedToolCalls`, `droppedFiles`, and `reason` when present.
+- Tests:
+  - `extension/test/sessionLocator.test.ts`: `npx vitest run extension/test/sessionLocator.test.ts` -> 18 passed.
+  - `extension/test/sessionSlice.test.ts`: `npx vitest run extension/test/sessionSlice.test.ts` -> 58 passed.
+  - Full suite: `npm test` -> 518 passed.
+- Test seams:
+  - `locateSession`: `extension/test/sessionLocator.test.ts`, including `hashPrompt` from #40 for the prompt hash.
+  - `discoverCandidates`: `extension/test/sessionSlice.test.ts` with fixture home directories.
+  - `readSlice`: `extension/test/sessionSlice.test.ts` with fixture/temp files.
+  - `parseClaudeSession`/`parseCodexSession`: `extension/test/sessionSlice.test.ts` with synthetic fixtures.
+  - `createSessionSliceSource`: `extension/test/sessionSlice.test.ts` with fake candidates/sends/clock/redact.
+  - No real home, no vscode mock, no internal module mocks.
+- Edge modes covered:
+  - Missing provider dirs, permission denied discovery, empty/corrupt/binary files, trailing partial lines, 5 MB exact/one over, mid-line and line-boundary seeks.
+  - sendId path with a missing linked file -> none; send versions folded by seq; hash window 30 minutes; missing hash candidate -> recency; 24-hour recency; 2-minute ambiguity and sort; clock skew; multi-root/canonical URIs.
+  - 10/11 turns; one turn over the token cap -> empty truncated; token cap including calls/errors/tests; tool-only turns; orphan failed results; changed files only from mutation tools; outside paths dropped.
+  - includeCode off/active/workspace; excluded code paths; code without a path dropped; secrets in turn text, code, tool summaries, errors, and tests redacted and counted; non-English text preserved.
+  - Codex nested date directories; Codex `event_msg` exec begin/end; unknown event types skipped.
+- Assumptions:
+  - The Claude POSIX encoding is path separators -> `-`. The Windows encoding is not measured and is a recorded gap.
+  - The Codex layout and JSONL field names are the public rollout format; the synthetic fixtures record the assumed fields. Additional real-world fields are ignored defensively.
+  - `Turn.codePath` is an additive field required by #41's per-file code policy. It is the workspace-relative path of the code in that turn.
+  - `SessionSliceSourceDeps.capabilities` is the #39 provider's `ModelCapabilities`; `ModelProfile` alone has no capabilities. The source uses `capabilities.maxContextTokens`.
+  - Consecutive same-role messages merge into one turn. Tool calls are retained by timestamp ownership. Errors resolve on a later successful call. Test results dedupe by command name and keep the final status.
+  - The source returns `empty` with `details` on ambiguity; the caller owns the picker. #38 does not import `vscode`.
+  - Claude discovery does not populate `startedAt`/`turnCount`; the candidate fields are optional and `readSlice` fills the slice's start/end from the window. The caller can read the candidate for the picker.
+  - A live session's trailing partial line is never parsed; the freshest write can lag by one line. This is the required partial-line rule.
+  - The `readSlice` `clock` parameter is currently unused; it is kept in the published signature for the time-based slice consumers/tests.
+  - A send id with no matching `SendRecord` falls through to path 2/3; the ticket defines the no-`sessionId` and missing-file cases only.
+- Consumers:
+  - #46: create the session-slice source with the resolved folder, the draft, the send records, the send id, the prompt hash, the clock, the provider capabilities, the includeCode policy, the active file URI, and #41's `redact`. Use `locateSession` directly when the source reports ambiguity and the picker is needed. Store the derived slice in the review record; never the transcript.
+  - #47: render the slice fields and provenance in the deep review view.
+  - #13: use the slice in the deep prompt; the fragment is already redacted and #36 will not double-count it.
+  - #18: use the slice as bounded session context in the codebase-access experiment.
+  - #1: the token estimate and usage fields can inform agent usage reporting.
+- Open gaps:
+  - LSP parity is still not measured (#37 follow-up) and `rg` is not installed on this machine; both are recorded in the #37 contract.
+  - The Windows Claude encoding is not measured.
+  - Claude discovery leaves `startedAt`/`turnCount` undefined; the picker caller can enrich them.
+  - A live session's newest line can lag by one write because trailing partial lines are dropped.
+  - The parser field names for the Codex `event_msg` exec events are the assumed public fields; real-world extra fields are ignored.
+- Change log:
+  - v1: initial contract merged in #38.
+
 ## Contract changes
 
 | Date | Contract | From | To | Consumers notified |
@@ -978,6 +1100,7 @@ Lane base for ticket #37: `99b7392`.
 | 2026-11-16 | #42 feedback errors | none | v1 | #27, #43, #46, #47, #10, #12, #22 |
 | 2026-11-16 | #36 context assembler | none | v1 | #37, #38, #46, #48, #13 |
 | 2026-11-16 | #37 language context | none | v1 | #46, #18, #4, #36 |
+| 2026-11-16 | #38 session slice | none | v1 | #46, #47, #13, #18, #1 |
 
 ## Dispatch notes
 
