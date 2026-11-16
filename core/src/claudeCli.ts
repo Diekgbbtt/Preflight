@@ -92,3 +92,41 @@ export function parseCliOutput(stdout: string): ModelResponse {
     costUsd: out.total_cost_usd ?? 0,
   };
 }
+
+/**
+ * Legacy runner kept for the existing panel path. It stays a ModelRunner and
+ * gains --effort medium once the shared spawn runner lands.
+ */
+export function claudeCliRunner(claudePath = "claude", cwd?: string): ModelRunner {
+  return (req: ModelRequest, signal?: AbortSignal) =>
+    new Promise<ModelResponse>((resolve, reject) => {
+      const args = [
+        "-p",
+        "--model", req.model,
+        "--output-format", "json",
+        "--tools", "",
+        "--setting-sources", "",
+        "--system-prompt", req.system,
+      ];
+      const child = execFile(
+        claudePath,
+        args,
+        { cwd, signal, timeout: DEFAULT_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
+        (err, stdout, stderr) => {
+          if (err) {
+            const hint = (err as NodeJS.ErrnoException).code === "ENOENT"
+              ? `Claude Code CLI not found at "${claudePath}". Install it or set promptPreflight.claudePath.`
+              : stderr.trim() || err.message;
+            return reject(new Error(hint));
+          }
+          try {
+            resolve(parseCliOutput(stdout));
+          } catch (e) {
+            reject(e);
+          }
+        },
+      );
+      // Prompt goes over stdin so it can't be mistaken for a flag and has no length limit.
+      child.stdin?.end(req.user);
+    });
+}
