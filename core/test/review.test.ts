@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { analyze, extractJson, hashPrompt, parseCliOutput, parseScore, review, type ModelRunner, type ScoreMeta } from "../src";
+import { analyze, extractJson, hashPrompt, parseCliOutput, parseQuickReview, parseScore, review, type ModelRunner, type ScoreMeta } from "../src";
 
 describe("hashPrompt", () => {
   it.each([
@@ -59,6 +59,65 @@ describe("parseScore", () => {
     expect(parseScore(good, prompt, meta)?.confidence).toBe(0.8);
     const badConfidence = res('{"dimensions":{"target":20,"action":25,"scope":15,"done":20},"confidence":1.5}');
     expect(parseScore(badConfidence, prompt, meta)?.confidence).toBeUndefined();
+  });
+});
+
+describe("parseQuickReview", () => {
+  const prompt = "Improve the app";
+  const meta: ScoreMeta = { source: "quick", provider: "stub", model: "sonnet", thinkingEffort: "low", scoredAt: "2026-01-01T00:00:00.000Z" };
+
+  it("keeps score, issues and questions from a valid reply", () => {
+    const text = JSON.stringify({
+      dimensions: { target: 5, action: 10, scope: 15, done: 5 },
+      confidence: 0.9,
+      issues: [{ quote: "the app", problem: "Too broad", suggestion: "Name a page" }],
+      questions: ["Which page?"],
+    });
+    const r = parseQuickReview(text, prompt, meta);
+    expect(r.score?.score).toBe(35);
+    expect(r.score?.level).toBe("vague");
+    expect(r.issues).toEqual([{ quote: "the app", range: { start: 8, end: 15 }, problem: "Too broad", suggestion: "Name a page" }]);
+    expect(r.questions).toEqual(["Which page?"]);
+  });
+
+  it("drops a quote that is not a substring of the prompt but keeps the issue", () => {
+    const text = JSON.stringify({
+      dimensions: { target: 25, action: 25, scope: 25, done: 25 },
+      issues: [{ quote: "not in the prompt", problem: "Missing", suggestion: "Fix" }],
+    });
+    const r = parseQuickReview(text, prompt, meta);
+    expect(r.issues[0]).toEqual({ quote: undefined, range: undefined, problem: "Missing", suggestion: "Fix" });
+  });
+
+  it("caps issues and questions at 3 and drops empty problems", () => {
+    const issue = (p: string) => ({ problem: p, suggestion: "Fix" });
+    const text = JSON.stringify({
+      dimensions: { target: 25, action: 25, scope: 25, done: 25 },
+      issues: [issue("a"), issue(""), issue("c"), issue("d")],
+      questions: ["1", 2, "3", "4"],
+    });
+    const r = parseQuickReview(text, prompt, meta);
+    expect(r.issues.map((i) => i.problem)).toEqual(["a", "c", "d"]);
+    expect(r.questions).toEqual(["1", "3", "4"]);
+  });
+
+  it("returns score null and empty lists without throwing on malformed text", () => {
+    for (const text of ["sorry, no", '{"dimensions":{"target":30}}', "{", '{"dimensions":null}']) {
+      const r = parseQuickReview(text, prompt, meta);
+      expect(r, text).toEqual({ score: null, issues: [], questions: [] });
+    }
+  });
+
+  it("keeps issues when only the score is invalid", () => {
+    const text = JSON.stringify({
+      dimensions: { target: "25", action: 25, scope: 25, done: 25 },
+      issues: [{ problem: "Still an issue", suggestion: "Fix" }],
+      questions: ["What?"],
+    });
+    const r = parseQuickReview(text, prompt, meta);
+    expect(r.score).toBeNull();
+    expect(r.issues.map((i) => i.problem)).toEqual(["Still an issue"]);
+    expect(r.questions).toEqual(["What?"]);
   });
 });
 

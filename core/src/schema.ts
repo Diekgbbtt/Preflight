@@ -42,6 +42,12 @@ export interface ScoreMeta {
   scoredAt: string;
 }
 
+export interface QuickReview {
+  score: ScoreReport | null;
+  issues: ReviewIssue[];
+  questions: string[];
+}
+
 const DIMENSION_KEYS = ["target", "action", "scope", "done"] as const;
 
 /**
@@ -93,4 +99,45 @@ export function parseScore(text: string, prompt: string, meta: ScoreMeta): Score
     report.confidence = raw!.confidence;
   }
   return report;
+}
+
+const MAX_ISSUES = 3;
+const MAX_QUESTIONS = 3;
+
+/** Keep at most 3 issues with a non-empty problem. A quote survives only when it occurs in the prompt. */
+function parseIssues(raw: unknown, prompt: string): ReviewIssue[] {
+  const list = Array.isArray(raw) ? raw : [];
+  const out: ReviewIssue[] = [];
+  for (const item of list) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const i = item as Record<string, unknown>;
+    const problem = i.problem == null ? "" : String(i.problem);
+    if (!problem) continue;
+    const suggestion = i.suggestion == null ? "" : String(i.suggestion);
+    const quote = typeof i.quote === "string" ? i.quote : "";
+    const at = quote ? prompt.indexOf(quote) : -1;
+    out.push({
+      quote: at >= 0 ? quote : undefined,
+      range: at >= 0 ? { start: at, end: at + quote.length } : undefined,
+      problem,
+      suggestion,
+    });
+    if (out.length >= MAX_ISSUES) break;
+  }
+  return out;
+}
+
+/** Keep only strings, at most max. */
+function parseStringList(raw: unknown, max: number): string[] {
+  return (Array.isArray(raw) ? raw : []).filter((x): x is string => typeof x === "string").slice(0, max);
+}
+
+export function parseQuickReview(text: string, prompt: string, meta: ScoreMeta): QuickReview {
+  const raw = asObject(text);
+  if (!raw) return { score: null, issues: [], questions: [] };
+  return {
+    score: parseScore(text, prompt, meta),
+    issues: parseIssues(raw.issues, prompt),
+    questions: parseStringList(raw.questions, MAX_QUESTIONS),
+  };
 }
