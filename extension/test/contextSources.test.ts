@@ -7,13 +7,19 @@ import type { ContextSourceDeps } from "../src/contextSources";
 
 // Mutable fake vscode surface, hoisted so the mock factory can read it.
 const h = vi.hoisted(() => {
+  type Pos = { line: number; character: number };
+  type FakeDoc = {
+    uri: { scheme: string; fsPath: string };
+    getText: (range?: { start: Pos; end: Pos }) => string;
+    offsetAt: (pos: Pos) => number;
+  };
   const state = {
     activeTextEditor: undefined as unknown,
-    textDocuments: [] as Array<{ uri: { scheme: string; fsPath: string }; getText: (range?: { start: number; end: number }) => string }>,
+    textDocuments: [] as FakeDoc[],
     workspaceFolders: [] as Array<{ uri: { fsPath: string; toString: () => string }; name: string; index: number }>,
     existingFiles: new Set<string>(),
     readFileError: false,
-    asRelativePath: (uri: { fsPath: string; rel?: string }) => uri.rel ?? uri.fsPath,
+    asRelativePath: (uri: { fsPath: string; rel?: string }, includeFolder?: boolean) => uri.rel ?? uri.fsPath,
     getWorkspaceFolder: (uri: { fsPath: string }) =>
       state.workspaceFolders.find((f) => uri.fsPath.startsWith(f.uri.fsPath + "/") || uri.fsPath === f.uri.fsPath),
     stat: async (uri: { fsPath: string }) => {
@@ -77,7 +83,7 @@ const sel = (start: { line: number; character: number }, end: { line: number; ch
   active: end,
 });
 
-const baseDeps = (over: Partial<ContextSourceDeps> = {}): ContextSourceDeps => ({ folder, policy: { includeCode: "workspace" }, ...over });
+const baseDeps = (over: Partial<ContextSourceDeps> = {}): ContextSourceDeps => ({ folder: folder as never, policy: { includeCode: "workspace" }, ...over });
 
 afterEach(() => {
   h.activeTextEditor = undefined;
@@ -243,7 +249,7 @@ describe("resolveContextFolder", () => {
     h.workspaceFolders = [folder, other];
     h.existingFiles = new Set(["/other/src/app.ts"]);
     const resolved = await resolveContextFolder("please fix src/app.ts");
-    expect(resolved).toBe(other);
+    expect(resolved?.uri.fsPath).toBe("/other");
   });
 
   it("falls back to the active editor folder and to undefined", async () => {
