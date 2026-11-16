@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseDeepReview, parseQuickReview, type ScoreMeta } from "../src";
+import { parseDeepReview, parseQuickReview, type ModelUsage, type ScoreMeta } from "../src";
 
 interface Expected {
   score: number | null;
@@ -26,7 +26,8 @@ const cases: Case[] = readFileSync(join(__dirname, "review-corpus.jsonl"), "utf8
   .map((l) => JSON.parse(l));
 
 const meta: ScoreMeta = { source: "quick", provider: "stub", model: "stub-model", thinkingEffort: "low", scoredAt: "2026-01-01T00:00:00.000Z" };
-const deepMeta = { ...meta, source: "deep" as const, usage: { inputTokens: 100, outputTokens: 20, costUsd: 0.001 }, latency: 42 };
+const usage = { inputTokens: 100, outputTokens: 20, costUsd: 0.001 };
+const deepMeta: ScoreMeta & { usage: ModelUsage; latency: number } = { ...meta, source: "deep", usage, latency: 42 };
 
 describe("review corpus", () => {
   it.each(cases.map((c) => [c.id, c] as const))("%s", (id, c) => {

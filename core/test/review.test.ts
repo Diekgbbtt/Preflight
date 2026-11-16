@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { analyze, buildReviewRequest, extractJson, hashPrompt, parseCliOutput, parseDeepReview, parseQuickReview, parseScore, review, DEEP_REPLY_SCHEMA, QUICK_REPLY_SCHEMA, RUBRIC_TEXT, type ModelRunner, type ScoreMeta } from "../src";
+import { analyze, buildReviewRequest, extractJson, hashPrompt, parseCliOutput, parseDeepReview, parseQuickReview, parseScore, review, DEEP_REPLY_SCHEMA, QUICK_REPLY_SCHEMA, RUBRIC_TEXT, type ModelRunner, type ModelUsage, type ScoreMeta } from "../src";
 
 describe("hashPrompt", () => {
   it.each([
@@ -124,7 +124,7 @@ describe("parseQuickReview", () => {
 describe("parseDeepReview", () => {
   const prompt = "Fix the login bug";
   const usage = { inputTokens: 100, outputTokens: 20, costUsd: 0.001 };
-  const meta = { source: "deep", provider: "stub", model: "sonnet", thinkingEffort: "high", scoredAt: "2026-01-01T00:00:00.000Z", usage, latency: 42 };
+  const meta: ScoreMeta & { usage: ModelUsage; latency: number } = { source: "deep", provider: "stub", model: "sonnet", thinkingEffort: "high", scoredAt: "2026-01-01T00:00:00.000Z", usage, latency: 42 };
 
   it("builds a full DeepReview with versions and injected usage", () => {
     const text = JSON.stringify({
