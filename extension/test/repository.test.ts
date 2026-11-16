@@ -131,6 +131,110 @@ describe("JsonlRepository", () => {
     expect((await repo.byDraft("d1")).length).toBe(2);
   });
 
+  it("grows the file by exactly the new line's bytes and preserves the original prefix", async () => {
+    const file = await tempFile();
+    const prefix = JSON.stringify({ schemaVersion: 1, seq: 1, id: "a", ts: "2026-01-01T00:00:00.000Z", text: "a" }) + "\n";
+    await fs.writeFile(file, prefix, "utf8");
+    const before = await fs.stat(file);
+    const repo = new JsonlRepository<{ text: string }>(file);
+    const stored = await repo.append({ id: "b", ts: "2026-01-01T00:00:01.000Z", text: "b" });
+    const line = JSON.stringify(stored) + "\n";
+    const after = await fs.stat(file);
+    expect(Number(after.size) - Number(before.size)).toBe(Buffer.byteLength(line, "utf8"));
+    const content = await fs.readFile(file, "utf8");
+    expect(content.startsWith(prefix)).toBe(true);
+  });
+
+  it("serializes two concurrent appends and a read queued behind them", async () => {
+    const file = await tempFile();
+    const repo = new JsonlRepository<{ text: string }>(file);
+    const [first, second, list] = await Promise.all([
+      repo.append({ id: "a", ts: "2026-01-01T00:00:00.000Z", text: "a" }),
+      repo.append({ id: "b", ts: "2026-01-01T00:00:01.000Z", text: "b" }),
+      repo.list(),
+    ]);
+    expect(first.seq).toBe(1);
+    expect(second.seq).toBe(2);
+    expect(list.events.map((e) => e.id)).toEqual(["a", "b"]);
+  });
+
+  it("preserves unicode and newline characters inside string values on one line", async () => {
+    const file = await tempFile();
+    const repo = new JsonlRepository<{ text: string }>(file);
+    const text = "héllo 🌍\nsecond line";
+    await repo.append({ id: "d1", ts: "2026-01-01T00:00:00.000Z", text });
+    const { events, skipped } = await repo.list();
+    expect(skipped).toBe(0);
+    expect(events[0]?.text).toBe(text);
+    const content = await fs.readFile(file, "utf8");
+    expect(content.split("\n").length).toBe(2);
+    expect(content).toContain("\\n");
+  });
+
+  it("clears the file, reports valid events, and restarts seq at 1", async () => {
+    const file = await tempFile();
+    const good = JSON.stringify({ schemaVersion: 1, seq: 1, id: "a", ts: "2026-01-01T00:00:00.000Z", text: "a" });
+    await fs.writeFile(file, good + "\n{corrupt\n" + `{"schemaVersion":1,"seq":2,"id":"b"`, "utf8");
+    const repo = new JsonlRepository<{ text: string }>(file);
+    const result = await repo.clear();
+    expect(result.deleted).toBe(1);
+    expect(await fs.stat(file).then(() => true, () => false)).toBe(false);
+    expect(await repo.list()).toEqual({ events: [], skipped: 0 });
+    const stored = await repo.append({ id: "c", ts: "2026-01-01T00:00:01.000Z", text: "c" });
+    expect(stored.seq).toBe(1);
+  });
+
+  it("returns deleted 0 for a missing file", async () => {
+    const file = await tempFile();
+    const repo = new JsonlRepository<{ text: string }>(file);
+    await expect(repo.clear()).resolves.toEqual({ deleted: 0 });
+  });
+
+  it("waits for a queued append during clear and rejects appends started after clear begins", async () => {
+    const file = await tempFile();
+    const repo = new JsonlRepository<{ text: string }>(file);
+    await repo.append({ id: "a", ts: "2026-01-01T00:00:00.000Z", text: "a" });
+
+    let resolveAppend: ((value: void) => void) | undefined;
+    const gate = new Promise<void>((resolve) => (resolveAppend = resolve));
+    const queued = repo.append({ id: "b", ts: "2026-01-01T00:00:01.000Z", text: "b" });
+
+    const clearing = repo.clear();
+    const rejected = repo.append({ id: "c", ts: "2026-01-01T00:00:02.000Z", text: "c" });
+    await expect(rejected).rejects.toThrow("repository is clearing");
+    resolveAppend?.();
+    const result = await clearing;
+    expect(result.deleted).toBe(2);
+    await queued;
+    expect(await repo.list()).toEqual({ events: [], skipped: 0 });
+  });
+
+  it("rejects with the fs error when the directory is read-only", async () => {
+    if (process.getuid?.() === 0) return;
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-ro-"));
+    dir = base;
+    const file = path.join(base, "sub", "drafts.jsonl");
+    await fs.mkdir(path.dirname(file));
+    await fs.chmod(path.dirname(file), 0o555);
+    try {
+      const repo = new JsonlRepository<{ text: string }>(file);
+      await expect(repo.append({ id: "a", ts: "2026-01-01T00:00:00.000Z", text: "a" })).rejects.toThrow(/EACCES|EROFS|EPERM/);
+    } finally {
+      await fs.chmod(path.dirname(file), 0o755);
+    }
+  });
+
+  it("keeps a stored SendRecord with a missing promptHash or sessionId and does not index a missing session", async () => {
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-send-"));
+    dir = base;
+    const sends = new JsonlRepository<Record<string, unknown>>(path.join(base, "sends.jsonl"));
+    await sends.append({ id: "s1", ts: "2026-01-01T00:00:00.000Z", draftId: "d1", folderUri: "file:///x", text: "p", target: "terminal" });
+    const { events, skipped } = await sends.list();
+    expect(skipped).toBe(0);
+    expect(events).toHaveLength(1);
+    expect(await sends.bySession("missing")).toEqual([]);
+  });
+
   it("orders events ascending by seq and is stable for equal seq after reload", async () => {
     const file = await tempFile();
     const a = JSON.stringify({ schemaVersion: 1, seq: 2, id: "a", ts: "2026-01-01T00:00:00.000Z", text: "a" });
