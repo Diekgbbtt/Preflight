@@ -125,10 +125,24 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     this.post({ type: "analysis", text, analysis: this.analysis });
 
     clearTimeout(this.pauseTimer);
-    this.running.quick?.abort();
-    if (!this.cfg().get<boolean>("quickReviewOnPause", true)) return;
+    const abortedQuick = this.running.quick;
+    abortedQuick?.abort();
     const words = text.trim().split(/\s+/).filter(Boolean).length;
-    if (words < 5 || this.analysis.level === "trivial" || text === this.lastQuickText) return;
+    const willStartQuick =
+      this.cfg().get<boolean>("quickReviewOnPause", true) &&
+      words >= 5 &&
+      this.analysis.level !== "trivial" &&
+      text !== this.lastQuickText;
+    if (!willStartQuick) {
+      // An aborted quick review has no replacement run, so it would spin
+      // forever. Close it with a terminal quiet state: no notification and no
+      // log, because this is a supersede cleanup, not a provider error.
+      if (abortedQuick) {
+        if (this.running.quick === abortedQuick) delete this.running.quick;
+        this.post({ type: "review", mode: "quick", text, error: "The request was cancelled." });
+      }
+      return;
+    }
     this.pauseTimer = setTimeout(() => void this.runReview("quick"), this.cfg().get<number>("pauseMs", 1500));
   }
 
@@ -207,8 +221,6 @@ export class PromptPanel implements vscode.WebviewViewProvider {
       mode,
       text,
       error: feedbackMessage(error).message,
-      errorCode: error.code,
-      action: error.action,
     });
     showFeedbackError(error, () => void this.runReview(mode));
   }

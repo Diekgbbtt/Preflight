@@ -244,7 +244,8 @@ describe("parseCliOutput", () => {
 });
 
 describe("claudeCliRunner legacy path", () => {
-  it("spawns the CLI with --effort medium and resolves the response", async () => {    const marker = path.join(FAKE_DIR, "marker-legacy");
+  it("spawns the CLI with --effort medium and resolves the response", async () => {
+    const marker = path.join(FAKE_DIR, "marker-legacy");
     fs.rmSync(marker, { force: true });
     const cliPath = makeCli(`const fs = require("fs");
 fs.writeFileSync(process.env.MARKER, JSON.stringify(process.argv.slice(2)));
