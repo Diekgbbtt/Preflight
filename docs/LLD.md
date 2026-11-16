@@ -4,7 +4,7 @@ Current prototype versus target design. Prose is short. The diagrams carry the c
 
 ## Architecture
 
-Current is a stateless pipeline. Post adds application services, domain objects, and ports.
+Current is a stateless pipeline. Post adds application services, domain objects, and ports. Settings enter as a plain `Config` object at activation. There is no `SettingsService`.
 
 ```mermaid
 flowchart TB
@@ -22,8 +22,10 @@ flowchart TB
     P2 --> SS[SessionService]
     FS --> RE[RuleEngine]
     FS --> CA[ContextAssembler]
+    FS --> DP[buildDeepPrompt]
+    DP --> IF[Instruction files]
     FS --> MP[ModelProvider]
-    FS --> GP[GatePolicy]
+    SS --> GP[GatePolicy]
     PS --> DR[DraftRepository]
     SS --> SR[SessionRepository]
     CA --> WS[Workspace and language sources]
@@ -51,12 +53,17 @@ flowchart LR
     session1 --> deep1["deep1: DeepReview"]
     bundle1["bundle1: ContextBundle"] --> draft1
     bundle1 --> question1
+    bundle1 --> fragment1["fragment1: ContextFragment"]
+    bundle1 --> slice1["slice1: SessionSlice"]
     bundle1 --> manifest1["manifest1: ContextManifest"]
     quick1 --> rule1["rule1: RuleReport"]
     quick1 --> score1["score1: ScoreReport"]
     deep1 --> rule1
     deep1 --> score1
     deep1 --> manifest1
+    deep1 --> profile1["profile1: ModelProfile"]
+    quick1 -.-> error1["error1: FeedbackError"]
+    deep1 -.-> error1
     send1["send1: SendRecord"] --> draft1
     send1 --> session1
   end
@@ -64,7 +71,7 @@ flowchart LR
 
 ## Sequence
 
-Current reviews, then gates on the rule score. Post assembles context, reviews deeply, then applies one gate policy.
+Current reviews, then gates on the rule score. Post assembles context, reviews deeply, then applies one gate policy to a fresh score.
 
 ```mermaid
 sequenceDiagram
@@ -75,6 +82,8 @@ sequenceDiagram
   participant C as Claude
   participant F as FeedbackService
   participant X as ContextAssembler
+  participant D as buildDeepPrompt
+  participant I as Instruction files
   participant M as ModelProvider
   participant G as GatePolicy
   participant S as SessionService
@@ -102,12 +111,18 @@ sequenceDiagram
     P->>F: deep(draft, answers)
     F->>X: build(draft, answers)
     X-->>F: ContextBundle and Manifest
-    F->>M: complete(bundle)
+    F->>I: loadInstructionBlock(draft)
+    I-->>F: block and files
+    F->>D: buildDeepPrompt(bundle, block)
+    D-->>F: system and user
+    F->>M: complete(system, user)
     M-->>F: DeepReview
     F->>S: save(review)
     F-->>P: render
     U->>P: Send
     P->>S: send(draft)
+    S->>F: quick(draft) when stale
+    F-->>S: ScoreReport or null
     S->>G: decide(rule, score, settings)
     G-->>S: allow or confirm
     S-->>P: SendRecord
@@ -116,7 +131,7 @@ sequenceDiagram
 
 ## Activity
 
-Current is linear. Post adds a context loop and an answer loop.
+Current is linear. Post adds a context loop, an answer loop, and a fresh-score step.
 
 ```mermaid
 flowchart TB
@@ -142,10 +157,13 @@ flowchart TB
     P8 --> P9{Questions?}
     P9 -- yes --> P10[Answer]
     P10 --> P5
-    P9 -- no --> P11{GatePolicy}
+    P9 -- no --> P11{Gate sending?}
     P4 -- no --> P11
-    P11 -- allow --> P12[SendRecord]
-    P11 -- confirm --> P13[Confirm]
+    P11 -- no --> P12[SendRecord]
+    P11 -- yes --> P14[Fresh score or 8s quick]
+    P14 --> P15{GatePolicy}
+    P15 -- allow --> P12
+    P15 -- confirm --> P13[Confirm]
     P13 --> P12
   end
 ```
