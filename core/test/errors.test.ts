@@ -102,9 +102,15 @@ describe("mapError", () => {
 });
 
 const allErrors: FeedbackError[] = [
-  "provider-missing", "auth-missing", "quota", "timeout",
-  "invalid-response", "context-too-large", "cancelled", "unknown",
-].map((code) => mapError(code === "provider-missing" ? raw("x", { code: "ENOENT" }) : raw("x")));
+  raw("x", { code: "ENOENT" }), // provider-missing
+  raw("x", { code: 401 }), // auth-missing
+  raw("x", { code: 429 }), // quota
+  raw("x", { killed: true }), // timeout
+  new SyntaxError("x"), // invalid-response
+  raw("maximum context 1000 tokens"), // context-too-large
+  raw("x", { name: "AbortError" }), // cancelled
+  raw("x"), // unknown
+].map((e) => mapError(e));
 
 describe("isFeedbackError", () => {
   it("accepts a mapped FeedbackError", () => {
@@ -125,9 +131,18 @@ describe("isFeedbackError", () => {
 });
 
 describe("isRetryable", () => {
-  it("is true only for timeout", () => {
-    for (const error of allErrors) {
-      expect(isRetryable(error)).toBe(error.code === "timeout");
+  it("covers all eight codes exactly once", () => {
+    expect(new Set(allErrors.map((e) => e.code)).size).toBe(8);
+  });
+
+  it("is true only for timeout, false for the other seven", () => {
+    const byCode = new Map(allErrors.map((e) => [e.code, e] as const));
+    expect(isRetryable(byCode.get("timeout")!)).toBe(true);
+    for (const code of [
+      "provider-missing", "auth-missing", "quota",
+      "invalid-response", "context-too-large", "cancelled", "unknown",
+    ] as const) {
+      expect(isRetryable(byCode.get(code)!)).toBe(false);
     }
   });
 });
@@ -194,26 +209,13 @@ describe("feedbackLogMessage", () => {
 });
 
 describe("exceedsContext", () => {
-  const profile = (max: number) => ({
-    provider: "claude" as const,
-    model: "sonnet",
-    thinkingEffort: "medium" as const,
-    capabilities: {
-      structuredOutput: true,
-      thinkingEffort: true,
-      maxContextTokens: max,
-      cost: { inputPerMTok: 0, outputPerMTok: 0 },
-      supportsInstructionFiles: true,
-    },
-  });
-
   it.each([
     ["exactly at the limit", 100, 100, false],
     ["one token over", 101, 100, true],
     ["unknown window, zero max", 999999, 0, false],
     ["unknown window, negative max", 999999, -5, false],
   ])("%s returns %j", (_name, totalTokens, max, expected) => {
-    expect(exceedsContext(totalTokens, { ...profile(max) })).toBe(expected);
+    expect(exceedsContext(totalTokens, max)).toBe(expected);
   });
 });
 
@@ -258,17 +260,41 @@ describe("checkHealth", () => {
     expect(calls).toEqual([{ command: "/bin/claude", args: ["--version"], timeout: 2000 }]);
   });
 
-  it("fails fast with provider-missing for an invalid profile and never spawns", async () => {
+  it("fails fast with provider-missing for the codex stub and never spawns", async () => {
+    const { exec, calls } = execResult(null);
+    const codexProfile = { provider: "codex" as const, model: "gpt", thinkingEffort: "low" as const };
+    const codexProvider = createProvider(codexProfile, config);
+    const result = await checkHealth(codexProvider, codexProfile, "claude", exec);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("provider-missing");
+      expect(result.error.action).toBe("open-settings");
+      expect(result.error.cause).toBe("Codex provider is not implemented; use Claude.");
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it("fails fast with provider-missing when the profile does not match the provider and never spawns", async () => {
     const { exec, calls } = execResult(null);
     const codexProfile = { provider: "codex" as const, model: "gpt", thinkingEffort: "low" as const };
     const result = await checkHealth(provider, codexProfile, "claude", exec);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe("provider-missing");
-      expect(result.error.action).toBe("open-settings");
       expect(result.error.cause).toBe('Provider "codex" is not claude; the Claude adapter only accepts claude profiles.');
     }
     expect(calls).toEqual([]);
+  });
+
+  it("maps a permission-denied CLI probe to provider-missing with fix-permissions", async () => {
+    const { exec } = execResult(Object.assign(new Error("permission denied"), { code: "EACCES" }));
+    const result = await checkHealth(provider, profile, "claude", exec);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("provider-missing");
+      expect(result.error.action).toBe("fix-permissions");
+      expect(result.error.retryable).toBe(false);
+    }
   });
 
   it("maps a missing CLI to provider-missing with install-cli", async () => {

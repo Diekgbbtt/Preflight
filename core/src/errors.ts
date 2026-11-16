@@ -161,18 +161,14 @@ export function feedbackLogMessage(error: FeedbackError, correlationId: string):
 }
 
 /**
- * Context pre-check (#42): the assembled bundle tokens must fit the profile's
- * model window. Exactly at the limit is allowed; one token over fails. An
- * unknown window (maxContextTokens <= 0) skips the check. Token counting and
- * the bundle manifest belong to #36; #36 calls this predicate.
+ * Context pre-check (#42): the assembled bundle tokens must fit the model
+ * window. The caller passes provider.capabilities.maxContextTokens. Exactly at
+ * the limit is allowed; one token over fails. A zero or negative window means
+ * unknown and skips the check. Token counting and the bundle manifest belong
+ * to #36; #36 calls this predicate.
  */
-export function exceedsContext(totalTokens: number, profile: ModelProfile): boolean {
-  // Assumed shape: the profile arrives bound to its provider capabilities
-  // (#39's ModelProfile itself has no capabilities field). An absent or
-  // non-positive window is unknown and skips the check.
-  const caps = (profile as Partial<Record<"capabilities", { maxContextTokens?: number }>>).capabilities;
-  const max = caps?.maxContextTokens ?? 0;
-  return max > 0 && totalTokens > max;
+export function exceedsContext(totalTokens: number, maxContextTokens: number): boolean {
+  return maxContextTokens > 0 && totalTokens > maxContextTokens;
 }
 
 /** Budget pre-check for #36's manifest: exactly at the budget is allowed. */

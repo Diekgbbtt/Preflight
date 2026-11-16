@@ -13,9 +13,7 @@ import {
   resolveProfile,
   review,
   type Analysis,
-  type FeedbackAction,
   type FeedbackError,
-  type FeedbackErrorCode,
   type ModelProvider,
   type Review,
   type ReviewMode,
@@ -144,48 +142,54 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     if (mode === "quick") this.lastQuickText = text;
     this.post({ type: "reviewing", mode });
 
-    const config = readModelConfig();
-    const profile = resolveProfile(config, mode);
-    let provider: ModelProvider;
+    // The outer finally always clears this attempt's controller, including on
+    // the pre-call paths (provider factory throw, failed health check). A
+    // recursive timeout retry installs a new controller first, so this
+    // finally never deletes the retry's controller.
     try {
-      provider = createProvider(profile, config);
-    } catch (e) {
-      this.reportError(mode, text, mapError(e));
-      return;
-    }
+      const config = readModelConfig();
+      const profile = resolveProfile(config, mode);
+      let provider: ModelProvider;
+      try {
+        provider = createProvider(profile, config);
+      } catch (e) {
+        this.reportError(mode, text, mapError(e));
+        return;
+      }
 
-    // Pre-review health check: profile validation plus CLI presence. Fails
-    // before the model call, so a failing check leaves no spinner for long.
-    const health = await checkHealth(provider, profile, config.claudePath);
-    if (!health.ok) {
-      if (ctrl.signal.aborted) return; // superseded by newer input
-      this.reportError(mode, text, health.error);
-      return;
-    }
+      // Pre-review health check: profile validation plus CLI presence. Fails
+      // before the model call, so a failing check leaves no spinner for long.
+      const health = await checkHealth(provider, profile, config.claudePath);
+      if (!health.ok) {
+        if (ctrl.signal.aborted) return; // superseded by newer input
+        this.reportError(mode, text, health.error);
+        return;
+      }
 
-    const run = claudeCliRunner(config.claudePath, this.workspace.root, profile.thinkingEffort);
-    try {
-      const r: Review = await review(
-        text,
-        mode,
-        run,
-        profile.model,
-        { analysis: this.analysis, projectNotes: this.workspace.notes() },
-        ctrl.signal,
-      );
-      this.draft[mode === "quick" ? "quickReviews" : "deepReviews"]++;
-      this.draft.inputTokens += r.usage.inputTokens;
-      this.draft.outputTokens += r.usage.outputTokens;
-      this.draft.costUsd += r.usage.costUsd;
-      if (mode === "deep") this.improved = r.improvedPrompt;
-      this.post({ type: "review", mode, text, review: r });
-    } catch (e) {
-      if (ctrl.signal.aborted) return; // superseded by newer input
-      const error = mapError(e);
-      // One automatic retry, only for a transient timeout; the manual Retry
-      // action comes from showFeedbackError on the final failure.
-      if (isRetryable(error) && attempt === 0) return void this.runReview(mode, 1);
-      this.reportError(mode, text, error);
+      const run = claudeCliRunner(config.claudePath, this.workspace.root, profile.thinkingEffort);
+      try {
+        const r: Review = await review(
+          text,
+          mode,
+          run,
+          profile.model,
+          { analysis: this.analysis, projectNotes: this.workspace.notes() },
+          ctrl.signal,
+        );
+        this.draft[mode === "quick" ? "quickReviews" : "deepReviews"]++;
+        this.draft.inputTokens += r.usage.inputTokens;
+        this.draft.outputTokens += r.usage.outputTokens;
+        this.draft.costUsd += r.usage.costUsd;
+        if (mode === "deep") this.improved = r.improvedPrompt;
+        this.post({ type: "review", mode, text, review: r });
+      } catch (e) {
+        if (ctrl.signal.aborted) return; // superseded by newer input
+        const error = mapError(e);
+        // One automatic retry, only for a transient timeout; the manual Retry
+        // action comes from showFeedbackError on the final failure.
+        if (isRetryable(error) && attempt === 0) return void this.runReview(mode, 1);
+        this.reportError(mode, text, error);
+      }
     } finally {
       if (this.running[mode] === ctrl) delete this.running[mode];
     }
@@ -203,8 +207,8 @@ export class PromptPanel implements vscode.WebviewViewProvider {
       mode,
       text,
       error: feedbackMessage(error).message,
-      errorCode: error.code as FeedbackErrorCode,
-      action: error.action as FeedbackAction,
+      errorCode: error.code,
+      action: error.action,
     });
     showFeedbackError(error, () => void this.runReview(mode));
   }
