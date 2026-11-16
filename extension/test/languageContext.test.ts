@@ -590,7 +590,7 @@ describe("createDiagnosticsSource", () => {
       "error tsc a.ts:1:1-1:2 one",
       "error tsc a.ts:1:1-1:2 two",
     ]);
-    expect(result.details).toEqual({ files: 1, count: 2 });
+    expect(result.details).toEqual({ files: 1, count: 2, dropped: 0 });
   });
 
   it("skips excluded documents and omits with excluded when all are filtered", async () => {
@@ -599,6 +599,20 @@ describe("createDiagnosticsSource", () => {
       deps({ api, openDocuments: [{ uri: "file:///w/n/x.ts", path: "node_modules/n/x.ts" }] }),
     ).collect();
     expect(result.omittedReason).toBe("excluded");
+  });
+
+  it("counts open documents rejected by shouldInclude in the dropped detail", async () => {
+    const api = baseApi([diag("a.ts", "one")]);
+    const result = await createDiagnosticsSource(
+      deps({
+        api,
+        openDocuments: [
+          { uri: "file:///w/a.ts", path: "a.ts" },
+          { uri: "file:///w/n/x.ts", path: "node_modules/n/x.ts" },
+        ],
+      }),
+    ).collect();
+    expect(result.details).toEqual({ files: 1, count: 1, dropped: 1 });
   });
 
   it("omits with unsupported when the probe is null or diagnostics is false", async () => {
@@ -624,7 +638,7 @@ describe("createDiagnosticsSource", () => {
     ).collect();
     expect(result.fragments[0]?.content.split("\n")).toHaveLength(200);
     expect(result.fragments[0]?.provenance.truncated).toBe(true);
-    expect(result.details).toEqual({ files: 3, count: 200 });
+    expect(result.details).toEqual({ files: 3, count: 200, dropped: 0 });
   });
 
   it("omits with error when the provider throws", async () => {
@@ -694,7 +708,7 @@ describe("createSymbolsSource", () => {
     const result = await createSymbolsSource(deps()).collect();
     expect(result.fragments[0]?.source).toBe("symbols");
     expect(result.fragments[0]?.content).toBe("src/a.ts:1:1 function makeThing");
-    expect(result.details).toEqual({ count: 1 });
+    expect(result.details).toEqual({ count: 1, dropped: 0 });
   });
 
   it("falls back to text search when the probe says no document symbols", async () => {
@@ -702,7 +716,7 @@ describe("createSymbolsSource", () => {
     const result = await createSymbolsSource(deps({ probe, query: "makeThing" })).collect();
     expect(result.fragments[0]?.source).toBe("symbols");
     expect(result.fragments[0]?.provenance.kind).toBe("text-search");
-    expect(result.details).toEqual({ count: 1, textSearch: true });
+    expect(result.details).toEqual({ count: 1, textSearch: true, dropped: 0 });
   });
 
   it("omits with unsupported when the probe fails and no query exists", async () => {
@@ -719,7 +733,7 @@ describe("createSymbolsSource", () => {
     const result = await createSymbolsSource(deps({ api: baseApi(many) })).collect();
     expect(result.fragments[0]?.content.split("\n")).toHaveLength(100);
     expect(result.fragments[0]?.provenance.truncated).toBe(true);
-    expect(result.details).toEqual({ count: 100 });
+    expect(result.details).toEqual({ count: 100, dropped: 0 });
   });
 
   it("omits with error when the provider throws", async () => {
@@ -730,7 +744,7 @@ describe("createSymbolsSource", () => {
   it("uses the text-search fallback with empty provider output and a query", async () => {
     const result = await createSymbolsSource(deps({ api: baseApi([]), query: "makeThing" })).collect();
     expect(result.fragments[0]?.provenance.kind).toBe("text-search");
-    expect(result.details).toEqual({ count: 1, textSearch: true });
+    expect(result.details).toEqual({ count: 1, textSearch: true, dropped: 0 });
   });
   it("omits with unsupported when the fallback reports a missing rg", async () => {
     const probe = async () => ({ ...caps, documentSymbols: false });
@@ -799,21 +813,21 @@ describe("createWorkspaceSymbolsSource", () => {
   it("collects workspace symbols with details", async () => {
     const result = await createWorkspaceSymbolsSource(deps()).collect();
     expect(result.fragments[0]?.content).toBe("src/a.ts:1:1 class Thing");
-    expect(result.details).toEqual({ count: 1 });
+    expect(result.details).toEqual({ count: 1, dropped: 0 });
   });
 
   it("drops pathless symbols and filters excluded paths", async () => {
     const api = baseApi([wsSym("Thing", "src/a.ts"), wsSym("Orphan"), wsSym("Secret", "credentials.json")]);
     const result = await createWorkspaceSymbolsSource(deps({ api })).collect();
     expect(result.fragments[0]?.content).toBe("src/a.ts:1:1 class Thing");
-    expect(result.details).toEqual({ count: 1 });
+    expect(result.details).toEqual({ count: 1, dropped: 2 });
   });
 
   it("falls back to text search when the probe is null and the query exists", async () => {
     const probe = async () => null;
     const result = await createWorkspaceSymbolsSource(deps({ probe })).collect();
     expect(result.fragments[0]?.provenance.kind).toBe("text-search");
-    expect(result.details).toEqual({ count: 1, textSearch: true });
+    expect(result.details).toEqual({ count: 1, textSearch: true, dropped: 0 });
   });
 
   it("omits with empty when the fallback finds nothing", async () => {
@@ -874,21 +888,37 @@ describe("createDefinitionsSource", () => {
   it("collects definitions with details", async () => {
     const result = await createDefinitionsSource(deps()).collect();
     expect(result.fragments[0]?.content).toBe("src/a.ts:3:1 makeThing");
-    expect(result.details).toEqual({ count: 1 });
+    expect(result.details).toEqual({ count: 1, dropped: 0 });
   });
 
   it("drops locations outside the workspace or excluded by policy", async () => {
     const api = baseApi([loc("src/a.ts", "in"), loc("/etc/hosts"), loc("credentials.json"), loc(undefined, "pathless")]);
     const result = await createDefinitionsSource(deps({ api })).collect();
     expect(result.fragments[0]?.content).toBe("src/a.ts:3:1 in");
-    expect(result.details).toEqual({ count: 1 });
+    expect(result.details).toEqual({ count: 1, dropped: 3 });
+  });
+
+  it("returns empty with a dropped count when every result is filtered out, without a fallback", async () => {
+    let searched = false;
+    const api: LanguageApi = {
+      ...baseApi([loc("/etc/hosts"), loc("../outside.ts")]),
+      textSearch: async () => {
+        searched = true;
+        return [];
+      },
+    };
+    const result = await createDefinitionsSource(deps({ api, query: "makeThing" })).collect();
+    expect(result.fragments).toEqual([]);
+    expect(result.omittedReason).toBe("empty");
+    expect(result.details).toEqual({ count: 0, dropped: 2 });
+    expect(searched).toBe(false);
   });
 
   it("falls back to text search on null probe when a query exists, else unsupported", async () => {
     const probe = async () => null;
     const withQuery = await createDefinitionsSource(deps({ probe, query: "makeThing" })).collect();
     expect(withQuery.fragments[0]?.provenance.kind).toBe("text-search");
-    expect(withQuery.details).toEqual({ count: 1, textSearch: true });
+    expect(withQuery.details).toEqual({ count: 1, textSearch: true, dropped: 0 });
     expect((await createDefinitionsSource(deps({ probe })).collect()).omittedReason).toBe("unsupported");
   });
 
@@ -941,7 +971,7 @@ describe("createReferencesSource", () => {
   it("collects references with details", async () => {
     const result = await createReferencesSource(deps()).collect();
     expect(result.fragments[0]?.content).toBe("src/a.ts:2:1");
-    expect(result.details).toEqual({ count: 1 });
+    expect(result.details).toEqual({ count: 1, dropped: 0 });
   });
 
   it("caps at 50 and marks truncated", async () => {
@@ -956,7 +986,7 @@ describe("createReferencesSource", () => {
     const api: LanguageApi = { ...baseApi(), textSearch: async () => [({ uri: "file:///w/src/a.ts", path: "src/a.ts", range: { start: at(0, 0), end: at(0, 1) }, preview: "hit" }) as TextSearchMatch] };
     const result = await createReferencesSource(deps({ api, probe })).collect();
     expect(result.fragments[0]?.provenance.kind).toBe("text-search");
-    expect(result.details).toEqual({ count: 1, textSearch: true });
+    expect(result.details).toEqual({ count: 1, textSearch: true, dropped: 0 });
   });
 
   it("omits with empty on a null probe when no query exists", async () => {

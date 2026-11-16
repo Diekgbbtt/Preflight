@@ -400,7 +400,7 @@ export function createDiagnosticsSource(deps: LanguageSourceDeps): ContextSource
       if (fragment === null) return { fragments: [], omittedReason: "empty" as const };
       return {
         fragments: [fragment],
-        details: { files: included.length, count: fragment.content.split("\n").length },
+        details: { files: included.length, count: fragment.content.split("\n").length, dropped: documents.length - included.length },
       };
     },
   };
@@ -456,10 +456,10 @@ async function capabilityMissing(deps: LanguageSourceDeps, capability: keyof Lan
 }
 
 /** The successful source result: one fragment plus the manifest detail. */
-function collected(fragment: ContextFragment, count: number, textSearch = false): { fragments: ContextFragment[]; details: Record<string, number | boolean> } {
+function collected(fragment: ContextFragment, count: number, dropped = 0, textSearch = false): { fragments: ContextFragment[]; details: Record<string, number | boolean> } {
   return {
     fragments: [fragment],
-    details: textSearch ? { count, textSearch: true } : { count },
+    details: textSearch ? { count, textSearch: true, dropped } : { count, dropped },
   };
 }
 
@@ -493,7 +493,7 @@ function createFallbackSource(
     if (deps.query === undefined || deps.query.trim() === "") return { fragments: [], omittedReason: "empty" as const };
     try {
       const fragment = await searchFallback(deps.api, deps.query, fallbackOptions(deps, id), signal);
-      return fragment === null ? { fragments: [], omittedReason: "empty" as const } : collected(fragment, fragment.content.split("\n").length, true);
+      return fragment === null ? { fragments: [], omittedReason: "empty" as const } : collected(fragment, fragment.content.split("\n").length, 0, true);
     } catch (error) {
       if (signal?.aborted) throw cancelledError();
       if ((error as { code?: unknown } | null)?.code === "ENOENT") return { fragments: [], omittedReason: "unsupported" as const };
@@ -523,10 +523,17 @@ function createFallbackSource(
         return { fragments: [], omittedReason: "error" as const };
       }
       const filtered = filterByPolicy(raw, deps.policy);
-      if (filtered.length === 0) return runFallback(signal);
+      if (filtered.length === 0) {
+        // The provider answered but every result failed the policy: record
+        // the drops and never fall back to text search for hidden data.
+        if (raw.length > 0) {
+          return { fragments: [], omittedReason: "empty" as const, details: { count: 0, dropped: raw.length } };
+        }
+        return runFallback(signal);
+      }
       const fragment = build(filtered, deps.folderUri);
       if (fragment === null) return { fragments: [], omittedReason: "empty" as const };
-      return collected(fragment, fragment.content.split("\n").length);
+      return collected(fragment, fragment.content.split("\n").length, raw.length - filtered.length);
     },
   };
 }
