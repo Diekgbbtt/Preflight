@@ -66,12 +66,16 @@ async function ensureConsent(context: vscode.ExtensionContext): Promise<void> {
 async function disableIncludeCode(): Promise<void> {
   const config = vscode.workspace.getConfiguration("promptPreflight", vscode.window.activeTextEditor?.document.uri);
   const inspected = config.inspect<IncludeCode>("context.includeCode");
-  const scopes: (keyof NonNullable<typeof inspected>)[] = ["workspaceFolderValue", "workspaceValue", "globalValue"];
+  const scopes = [
+    { scope: "workspaceFolderValue" as const, target: vscode.ConfigurationTarget.WorkspaceFolder },
+    { scope: "workspaceValue" as const, target: vscode.ConfigurationTarget.Workspace },
+    { scope: "globalValue" as const, target: vscode.ConfigurationTarget.Global },
+  ];
 
-  for (const scope of scopes) {
+  for (const { scope, target } of scopes) {
     if (inspected?.[scope] === undefined) continue;
     try {
-      await config.update("context.includeCode", "off" as IncludeCode, scope === "globalValue");
+      await config.update("context.includeCode", "off" as IncludeCode, target);
       return;
     } catch {
       break;
@@ -79,7 +83,7 @@ async function disableIncludeCode(): Promise<void> {
   }
 
   try {
-    await config.update("context.includeCode", "off" as IncludeCode, true);
+    await config.update("context.includeCode", "off" as IncludeCode, vscode.ConfigurationTarget.Global);
   } catch {
     void vscode.window.showWarningMessage(
       "Prompt Preflight could not disable code inclusion. Set promptPreflight.context.includeCode to off in Settings.",
