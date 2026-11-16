@@ -905,12 +905,20 @@ export async function readSlice(
   const cwdPath = sessionCwdPath(parsed.folderUri);
   const activeRel = activeRelativePath(options.activeFileUri, cwdPath);
 
+  // Redact tool-call summaries first: they feed the budget, retention and
+  // the formatted output, so no raw summary may survive anywhere downstream.
+  let redactions = 0;
+  const redactedCalls = parsed.toolCalls.map((call) => {
+    const applied = options.redact(call.summary);
+    redactions += applied.count;
+    return { ...call, summary: applied.text };
+  });
+
   // Which parsed turn owns which tool call (matched through timestamps).
-  const owners = parsed.toolCalls.map((call) => ownerTurnIndex(parsed, call));
+  const owners = redactedCalls.map((call) => ownerTurnIndex(parsed, call));
   const ownerIndexes = new Set(owners);
 
   // Apply the code policy per turn, then redact everything that stays.
-  let redactions = 0;
   const policyTurns: Turn[] = [];
   const originOf: number[] = [];
   parsed.turns.forEach((turn, index) => {
@@ -965,7 +973,7 @@ export async function readSlice(
   // drops the tool calls it owns.
   const budgetFor = (keptTurns: Turn[]): { calls: ToolCall[]; tokens: number } => {
     const firstKept = keptTurns.length > 0 ? originOf[policyTurns.length - keptTurns.length] : parsed.turns.length;
-    const calls = parsed.toolCalls.filter((_call, index) => owners[index] >= firstKept);
+    const calls = redactedCalls.filter((_call, index) => owners[index] >= firstKept);
     const tokens =
       keptTurns.reduce((sum, turn) => sum + turnTokens(turn), 0) +
       calls.reduce((sum, call) => sum + callTokens(call), 0) +

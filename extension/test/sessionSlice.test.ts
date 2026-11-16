@@ -463,8 +463,23 @@ describe("readSlice", () => {
     expect(slice.tokens).toBeLessThanOrEqual(50);
   });
 
-  it("records an error for a failed result whose call predates the window", async () => {
+  it("redacts secrets in tool-call summaries before the budget and formatting", async () => {
     const lines = [
+      JSON.stringify({ type: "user", sessionId: "sess-x", timestamp: at(0), cwd: CWD, message: { role: "user", content: "hello" } }),
+      JSON.stringify({ type: "assistant", sessionId: "sess-x", timestamp: at(1), cwd: CWD, message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "deploy with sk-ant-0123456789abcdefghij now" } }] } }),
+    ];
+    const file = await write("secret-call.jsonl", lines.join("\n") + "\n");
+    const slice = await readSlice(file, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, options);
+    expect(slice.toolCalls).toHaveLength(1);
+    expect(slice.toolCalls[0].summary).toContain("[redacted]");
+    expect(slice.toolCalls[0].summary).not.toContain("sk-ant-");
+    expect(slice.provenance.redactions).toBe(1);
+    const formatted = formatSessionSlice(slice);
+    expect(formatted).toContain("[redacted]");
+    expect(formatted).not.toContain("sk-ant-");
+  });
+
+  it("records an error for a failed result whose call predates the window", async () => {    const lines = [
       JSON.stringify({ type: "user", sessionId: "sess-x", timestamp: at(0), cwd: CWD, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "gone", content: "Error: boom", is_error: true }] } }),
       JSON.stringify({ type: "user", sessionId: "sess-x", timestamp: at(1), cwd: CWD, message: { role: "user", content: "after the failure" } }),
     ];
