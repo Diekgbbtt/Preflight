@@ -41,7 +41,18 @@
           "enumDescriptions": ["Start Claude Code in a new terminal with the prompt.", "Copy the prompt, e.g. to paste into the Claude Code chat panel."]
         },
         "promptPreflight.studyLog.enabled": { "type": "boolean", "default": false, "description": "Log prompts, scores, timings and Preflight token use to a local file for the user study." },
-        "promptPreflight.studyLog.participantId": { "type": "string", "default": "", "description": "Participant ID written to the study log." }
+        "promptPreflight.studyLog.participantId": { "type": "string", "default": "", "description": "Participant ID written to the study log." },
+        "promptPreflight.context.includeCode": {
+          "type": "string",
+          "enum": ["off", "active-file", "workspace"],
+          "default": "active-file",
+          "description": "Which code may be sent to the model provider after secret redaction. Your draft and Q&A answers are always sent.",
+          "enumDescriptions": [
+            "No workspace code, diagnostics or session code is sent.",
+            "Only the active file or an explicit selection is sent.",
+            "Every non-excluded workspace file may be sent."
+          ]
+        }
       }
     }
   },
