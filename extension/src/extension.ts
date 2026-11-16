@@ -62,28 +62,50 @@ async function ensureConsent(context: vscode.ExtensionContext): Promise<void> {
   if (record.decision === "declined") await disableIncludeCode();
 }
 
-/** On decline, turn includeCode off where it is currently defined, else globally. */
+/**
+ * On decline, turn includeCode off where it is currently defined, else globally.
+ * Inspects every workspace folder plus the active editor's resource, so a
+ * folder-scoped definition cannot survive in another root of a multi-root
+ * workspace. Folder URIs are deduplicated by their string form.
+ */
 async function disableIncludeCode(): Promise<void> {
-  const config = vscode.workspace.getConfiguration("promptPreflight", vscode.window.activeTextEditor?.document.uri);
-  const inspected = config.inspect<IncludeCode>("context.includeCode");
-  const scopes = [
-    { scope: "workspaceFolderValue" as const, target: vscode.ConfigurationTarget.WorkspaceFolder },
-    { scope: "workspaceValue" as const, target: vscode.ConfigurationTarget.Workspace },
-    { scope: "globalValue" as const, target: vscode.ConfigurationTarget.Global },
-  ];
+  const activeUri = vscode.window.activeTextEditor?.document.uri;
+  const uris: vscode.Uri[] = [];
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    if (!uris.some((u) => u.toString() === folder.uri.toString())) uris.push(folder.uri);
+  }
+  if (activeUri && !uris.some((u) => u.toString() === activeUri.toString())) uris.push(activeUri);
 
-  for (const { scope, target } of scopes) {
-    if (inspected?.[scope] === undefined) continue;
+  const configFor = (uri?: vscode.Uri) => vscode.workspace.getConfiguration("promptPreflight", uri);
+  const OFF = "off" as IncludeCode;
+
+  let updated = false;
+  for (const uri of uris) {
+    const inspected = configFor(uri).inspect<IncludeCode>("context.includeCode");
+    if (inspected?.workspaceFolderValue === undefined) continue;
     try {
-      await config.update("context.includeCode", "off" as IncludeCode, target);
-      return;
+      await configFor(uri).update("context.includeCode", OFF, vscode.ConfigurationTarget.WorkspaceFolder);
+      updated = true;
     } catch {
       break;
     }
   }
+  if (updated) return;
+
+  const inspected = configFor(activeUri).inspect<IncludeCode>("context.includeCode");
+  if (inspected?.workspaceValue !== undefined) {
+    try {
+      await configFor(activeUri).update("context.includeCode", OFF, vscode.ConfigurationTarget.Workspace);
+      return;
+    } catch {
+      // fall through to the global fallback
+    }
+  }
 
   try {
-    await config.update("context.includeCode", "off" as IncludeCode, vscode.ConfigurationTarget.Global);
+    await vscode.workspace
+      .getConfiguration("promptPreflight")
+      .update("context.includeCode", OFF, vscode.ConfigurationTarget.Global);
   } catch {
     void vscode.window.showWarningMessage(
       "Prompt Preflight could not disable code inclusion. Set promptPreflight.context.includeCode to off in Settings.",
