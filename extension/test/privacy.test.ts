@@ -136,6 +136,22 @@ describe("redact", () => {
     expect(result.text).toBe(text);
     expect(result.count).toBe(0);
   });
+
+  it("preserves a pre-existing numbered marker literal next to a secret", () => {
+    const text = "[ [preflight-redacted-1] ] use sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaa";
+    const result = redact(text);
+    expect(result.count).toBe(1);
+    expect(result.text).toContain("[ [preflight-redacted-1] ]");
+    expect(result.text).not.toContain("sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaa");
+  });
+
+  it("preserves a pre-existing colliding marker literal while redacting a secret", () => {
+    const text = "[ [preflight-redacted-0] ] then key sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaa";
+    const result = redact(text);
+    expect(result.count).toBe(1);
+    expect(result.text).toContain("[ [preflight-redacted-0] ]");
+    expect(result.text).not.toContain("sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaa");
+  });
 });
 
 describe("shouldInclude", () => {

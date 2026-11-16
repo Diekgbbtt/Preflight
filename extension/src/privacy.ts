@@ -1,5 +1,6 @@
 // Pure privacy policy and redaction for prompt Preflight.
 // Must not import vscode: the policy is testable without a VS Code mock.
+import { randomUUID } from "node:crypto";
 import { SECRETS } from "@prompt-preflight/core";
 
 /** Bump when the consent text changes materially; older stored decisions expire. */
@@ -36,10 +37,11 @@ export interface RedactionResult {
 // Marker wrapped around each replaced span during the sequential pass. No
 // SECRETS pattern can match it, and its leading space stops the
 // password-assignment value part (`[^\s"']{6,}`) from re-matching it. The
-// counter keeps every marker unique, so only markers actually inserted during
-// a call are turned into `[redacted]`; a marker-like string in the input or a
-// genuine NUL is preserved untouched.
-const markerFor = (n: number) => `[ [preflight-redacted-${n}] ]`;
+// per-call nonce plus the counter keep every marker unique, so a pre-existing
+// marker-like string in the input cannot collide with an inserted marker, and
+// only markers actually inserted during the call are turned into `[redacted]`.
+// A marker-like string in the input or a genuine NUL is preserved untouched.
+const markerFor = (nonce: string, n: number) => `[ [preflight-redacted-${nonce}-${n}] ]`;
 
 /**
  * Replaces every SECRETS match with `[redacted]` and reports how many were replaced.
@@ -51,11 +53,12 @@ const markerFor = (n: number) => `[ [preflight-redacted-${n}] ]`;
 export function redact(text: string): RedactionResult {
   let masked = text;
   let count = 0;
+  const nonce = randomUUID();
   const markers: string[] = [];
   for (const pattern of SECRETS) {
     const re = new RegExp(pattern.source, pattern.flags);
     masked = masked.replace(re, () => {
-      const marker = markerFor(count++);
+      const marker = markerFor(nonce, count++);
       markers.push(marker);
       return marker;
     });
