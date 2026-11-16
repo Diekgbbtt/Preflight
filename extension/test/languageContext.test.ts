@@ -192,14 +192,14 @@ describe("buildSymbolsFragment", () => {
     expect(buildSymbolsFragment([])).toBeNull();
   });
 
-  it("renders kind and name with the container name", () => {
+  it("renders kind and name with the container name, and a location when path and range exist", () => {
     const fragment = buildSymbolsFragment([
       sym("makeThing", "function"),
       sym("build", "method", { containerName: "Thing", uri: "file:///w/src/a.ts", path: "src/a.ts", range: { start: at(2, 0), end: at(9, 1) } }),
     ]);
     expect(fragment?.source).toBe("symbols");
     expect(fragment?.priority).toBe(40);
-    expect(fragment?.content.split("\n")).toEqual(["function makeThing", "method Thing.build"]);
+    expect(fragment?.content.split("\n")).toEqual(["function makeThing", "src/a.ts:3:1 method Thing.build"]);
     expect(fragment?.provenance).toEqual({
       kind: "symbol",
       truncated: false,
@@ -693,7 +693,7 @@ describe("createSymbolsSource", () => {
   it("collects document symbols with details", async () => {
     const result = await createSymbolsSource(deps()).collect();
     expect(result.fragments[0]?.source).toBe("symbols");
-    expect(result.fragments[0]?.content).toBe("function makeThing");
+    expect(result.fragments[0]?.content).toBe("src/a.ts:1:1 function makeThing");
     expect(result.details).toEqual({ count: 1 });
   });
 

@@ -211,10 +211,14 @@ export function buildDiagnosticsFragment(diagnostics: LanguageDiagnostic[], fold
   });
 }
 
-/** A document-symbol line: `kind name` or `kind Container.name`. */
+/** A document-symbol line: `kind name`, or `path:line:col kind name` when the location is known. */
 function symbolLine(symbol: LanguageSymbol): string {
   const name = symbol.containerName ? `${symbol.containerName}.${symbol.name}` : symbol.name;
-  return `${symbol.kind} ${name}`;
+  const label = `${symbol.kind} ${name}`;
+  if (symbol.path !== undefined && symbol.range !== undefined) {
+    return `${symbol.path}:${positionLabel(symbol.range.start)} ${label}`;
+  }
+  return label;
 }
 
 /** Renders one symbol line per document symbol, capped at MAX_DOCUMENT_SYMBOLS. */
