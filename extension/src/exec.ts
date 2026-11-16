@@ -16,7 +16,7 @@ export type ExecFileLike = (
  * Failure never resolves to an empty stdout string: the result carries the
  * error code and the trimmed stderr, or the error message when stderr is empty.
  */
-export function git(cwd: string, args: string[], exec: ExecFileLike = execFile): Promise<ExecResult> {
+export function git(cwd: string, args: string[], exec: ExecFileLike = defaultExecFile): Promise<ExecResult> {
   return new Promise((resolve) => {
     exec("git", args, { cwd, timeout: 5000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) {
@@ -31,3 +31,10 @@ export function git(cwd: string, args: string[], exec: ExecFileLike = execFile):
     });
   });
 }
+
+/** Adapts the overloaded execFile to the single ExecFileLike signature. */
+const defaultExecFile: ExecFileLike = (command, args, options, callback) => {
+  execFile(command, args, options, (error, stdout, stderr) =>
+    callback(error as unknown as (Error & { code?: string | number }) | null, stdout, stderr),
+  );
+};
