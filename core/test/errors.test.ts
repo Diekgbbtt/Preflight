@@ -224,3 +224,96 @@ describe("exceedsBudget", () => {
     expect(exceedsBudget(50, 100)).toBe(false);
   });
 });
+
+import { checkHealth } from "../src/errors";
+import { createProvider } from "../src/model";
+import type { HealthExecutor, ModelProvider } from "../src/errors";
+import type { ModelProvider as Provider } from "../src/model";
+
+const config = {
+  provider: "claude" as const,
+  model: "sonnet",
+  thinkingEffort: "medium" as const,
+  quickModel: "haiku",
+  deepModel: "sonnet",
+  claudePath: "claude",
+};
+const profile = { provider: "claude" as const, model: "sonnet", thinkingEffort: "medium" as const };
+const provider: Provider = createProvider(profile, config);
+
+function execResult(err: Error | null): { exec: HealthExecutor; calls: Array<{ command: string; args: string[]; timeout: number }> } {
+  const calls: Array<{ command: string; args: string[]; timeout: number }> = [];
+  return {
+    calls,
+    exec: (command, args, options, callback) => {
+      calls.push({ command, args, timeout: options.timeout });
+      callback(err);
+    },
+  };
+}
+
+describe("checkHealth", () => {
+  it("returns ok for a valid profile and a working CLI", async () => {
+    const { exec, calls } = execResult(null);
+    const result = await checkHealth(provider, profile, "/bin/claude", exec);
+    expect(result).toEqual({ ok: true });
+    expect(calls).toEqual([{ command: "/bin/claude", args: ["--version"], timeout: 2000 }]);
+  });
+
+  it("fails fast with provider-missing for an invalid profile and never spawns", async () => {
+    const { exec, calls } = execResult(null);
+    const codexProfile = { provider: "codex" as const, model: "gpt", thinkingEffort: "low" as const };
+    const result = await checkHealth(provider, codexProfile, "claude", exec);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("provider-missing");
+      expect(result.error.action).toBe("open-settings");
+      expect(result.error.cause).toBe('Provider "codex" is not claude; the Claude adapter only accepts claude profiles.');
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it("maps a missing CLI to provider-missing with install-cli", async () => {
+    const { exec } = execResult(Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT" }));
+    const result = await checkHealth(provider, profile, "claude", exec);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("provider-missing");
+      expect(result.error.action).toBe("install-cli");
+    }
+  });
+
+  it("maps a killed CLI probe to a retryable timeout", async () => {
+    const { exec } = execResult(Object.assign(new Error("Command failed"), { killed: true, signal: "SIGTERM" }));
+    const result = await checkHealth(provider, profile, "claude", exec);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("timeout");
+      expect(result.error.action).toBe("retry");
+      expect(result.error.retryable).toBe(true);
+    }
+  });
+
+  it("catches a synchronous executor throw", async () => {
+    const exec: HealthExecutor = () => {
+      throw Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT" });
+    };
+    const result = await checkHealth(provider, profile, "claude", exec);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("provider-missing");
+  });
+
+  it("catches a throwing validateProfile without spawning", async () => {
+    const { exec, calls } = execResult(null);
+    const throwing: Provider = {
+      capabilities: provider.capabilities,
+      validateProfile: () => {
+        throw new Error("validator exploded");
+      },
+      complete: provider.complete,
+    };
+    const result = await checkHealth(throwing as ModelProvider, profile, "claude", exec);
+    expect(result.ok).toBe(false);
+    expect(calls).toEqual([]);
+  });
+});
