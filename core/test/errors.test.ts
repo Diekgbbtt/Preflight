@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { mapError } from "../src/errors";
+import {
+  ACTION_LABELS,
+  exceedsBudget,
+  exceedsContext,
+  feedbackLogMessage,
+  feedbackMessage,
+  isFeedbackError,
+  isRetryable,
+  mapError,
+} from "../src/errors";
 import type { FeedbackError } from "../src/errors";
 
 /** A raw error with an errno-style code, the way node emits them. */
@@ -89,5 +98,129 @@ describe("mapError", () => {
     const err = raw("Request timed out after 120000 ms");
     expect(mapError(err).retryable).toBe(true);
     expect(mapError(raw("boom", { code: 1 })).retryable).toBe(false);
+  });
+});
+
+const allErrors: FeedbackError[] = [
+  "provider-missing", "auth-missing", "quota", "timeout",
+  "invalid-response", "context-too-large", "cancelled", "unknown",
+].map((code) => mapError(code === "provider-missing" ? raw("x", { code: "ENOENT" }) : raw("x")));
+
+describe("isFeedbackError", () => {
+  it("accepts a mapped FeedbackError", () => {
+    expect(isFeedbackError(mapError(null))).toBe(true);
+    expect(isFeedbackError(allErrors[0])).toBe(true);
+  });
+
+  it.each([
+    ["null", null],
+    ["undefined", undefined],
+    ["plain Error", new Error("boom")],
+    ["string", "quota"],
+    ["partial object", { code: "quota" }],
+    ["wrong code", { code: "nope", message: "m", action: "retry", retryable: false }],
+  ])("rejects %s", (_name, value) => {
+    expect(isFeedbackError(value)).toBe(false);
+  });
+});
+
+describe("isRetryable", () => {
+  it("is true only for timeout", () => {
+    for (const error of allErrors) {
+      expect(isRetryable(error)).toBe(error.code === "timeout");
+    }
+  });
+});
+
+describe("feedbackMessage", () => {
+  const EXPECTED: Record<string, string> = {
+    "provider-missing": "The selected model provider is not available. Install its CLI or choose another provider in settings.",
+    "auth-missing": "The model provider rejected the login. Sign in again or check your credentials.",
+    quota: "The model provider quota is exhausted. Check your plan or try again later.",
+    timeout: "The model provider did not answer in time.",
+    "invalid-response": "The model provider returned an unreadable answer.",
+    "context-too-large": "The context is too large for the selected model. Reduce the included code and try again.",
+    cancelled: "The request was cancelled.",
+    unknown: "Something went wrong while asking the model provider.",
+  };
+
+  it.each(allErrors.map((e) => [e.code, e]) as [string, FeedbackError][])(
+    "returns the fixed sentence and action for %s",
+    (code, error) => {
+      const { message, action } = feedbackMessage(error);
+      expect(message).toBe(EXPECTED[code]);
+      expect(action).toBe(error.action);
+    },
+  );
+
+  it("never includes raw stderr in any fixed message", () => {
+    for (const error of allErrors) {
+      expect(feedbackMessage(error).message).not.toMatch(/stderr|boom|at /);
+    }
+  });
+});
+
+describe("ACTION_LABELS", () => {
+  it("labels each action", () => {
+    expect(ACTION_LABELS).toEqual({
+      "open-settings": "Open Settings",
+      "install-cli": "Install CLI",
+      "fix-permissions": "Fix Permissions",
+      retry: "Retry",
+      "reduce-context": "Reduce Context",
+      dismiss: "Dismiss",
+    });
+  });
+});
+
+describe("feedbackLogMessage", () => {
+  it("contains only the correlation id and the code", () => {
+    const error: FeedbackError = {
+      code: "quota",
+      message: "The model provider quota is exhausted. Check your plan or try again later.",
+      action: "open-settings",
+      retryable: false,
+      cause: "internal detail",
+    };
+    expect(feedbackLogMessage(error, "abc-123")).toBe("[prompt-preflight] abc-123 quota");
+  });
+
+  it("never contains the message or cause", () => {
+    const error = mapError(raw("boom", { code: 1 }));
+    const line = feedbackLogMessage(error, "id-1");
+    expect(line).not.toContain("boom");
+    expect(line).not.toContain("Something went wrong");
+  });
+});
+
+describe("exceedsContext", () => {
+  const profile = (max: number) => ({
+    provider: "claude" as const,
+    model: "sonnet",
+    thinkingEffort: "medium" as const,
+    capabilities: {
+      structuredOutput: true,
+      thinkingEffort: true,
+      maxContextTokens: max,
+      cost: { inputPerMTok: 0, outputPerMTok: 0 },
+      supportsInstructionFiles: true,
+    },
+  });
+
+  it.each([
+    ["exactly at the limit", 100, 100, false],
+    ["one token over", 101, 100, true],
+    ["unknown window, zero max", 999999, 0, false],
+    ["unknown window, negative max", 999999, -5, false],
+  ])("%s returns %j", (_name, totalTokens, max, expected) => {
+    expect(exceedsContext(totalTokens, { ...profile(max) })).toBe(expected);
+  });
+});
+
+describe("exceedsBudget", () => {
+  it("allows exactly at the budget and fails one over", () => {
+    expect(exceedsBudget(100, 100)).toBe(false);
+    expect(exceedsBudget(101, 100)).toBe(true);
+    expect(exceedsBudget(50, 100)).toBe(false);
   });
 });

@@ -167,8 +167,12 @@ export function feedbackLogMessage(error: FeedbackError, correlationId: string):
  * the bundle manifest belong to #36; #36 calls this predicate.
  */
 export function exceedsContext(totalTokens: number, profile: ModelProfile): boolean {
-  void profile;
-  return false;
+  // Assumed shape: the profile arrives bound to its provider capabilities
+  // (#39's ModelProfile itself has no capabilities field). An absent or
+  // non-positive window is unknown and skips the check.
+  const caps = (profile as Partial<Record<"capabilities", { maxContextTokens?: number }>>).capabilities;
+  const max = caps?.maxContextTokens ?? 0;
+  return max > 0 && totalTokens > max;
 }
 
 /** Budget pre-check for #36's manifest: exactly at the budget is allowed. */
