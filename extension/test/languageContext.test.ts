@@ -1,6 +1,7 @@
 // Ticket #37: language context provider tests. No vscode import here.
 import { describe, expect, it, vi } from "vitest";
 import { gitChangedFiles, gitStatus, rg, type ExecFileLike } from "../src/exec";
+import { buildDiagnosticsFragment, type LanguageDiagnostic } from "../src/languageContext";
 
 const options = { cwd: "/repo", timeout: 5000, maxBuffer: 1024 * 1024 };
 
@@ -103,6 +104,56 @@ describe("gitChangedFiles", () => {
     const exec = vi.fn<ExecFileLike>((_c, _a, _o, cb) => cb(error, "", "fatal: not a git repository"));
     const result = await gitChangedFiles("/repo", exec);
     expect(result).toEqual({ ok: false, code: undefined, stderr: "fatal: not a git repository" });
+  });
+});
+
+describe("buildDiagnosticsFragment", () => {
+  const diag = (path: string, line: number, message = "boom"): LanguageDiagnostic => ({
+    uri: `file:///w/${path}`,
+    path,
+    range: { start: { line, character: 2 }, end: { line, character: 7 } },
+    severity: "error",
+    source: "tsc",
+    message,
+  });
+
+  it("returns null for an empty list", () => {
+    expect(buildDiagnosticsFragment([])).toBeNull();
+  });
+
+  it("builds one line per diagnostic with display positions", () => {
+    const fragment = buildDiagnosticsFragment([diag("src/a.ts", 0), diag("src/b.ts", 4, "missing")]);
+    expect(fragment).not.toBeNull();
+    expect(fragment?.source).toBe("diagnostics");
+    expect(fragment?.priority).toBe(45);
+    expect(fragment?.content.split("\n")).toEqual([
+      "error tsc src/a.ts:1:3-1:8 boom",
+      "error tsc src/b.ts:5:3-5:8 missing",
+    ]);
+    expect(fragment?.tokens).toBe(Math.ceil((fragment?.content.length ?? 0) / 4));
+    expect(fragment?.provenance).toEqual({
+      kind: "diagnostic",
+      truncated: false,
+      chars: fragment?.content.length,
+      folderUri: undefined,
+    });
+  });
+
+  it("collapses newlines in the message", () => {
+    const fragment = buildDiagnosticsFragment([diag("a.ts", 0, "line one\nline two\n  ")]);
+    expect(fragment?.content).toBe("error tsc a.ts:1:3-1:8 line one line two");
+  });
+
+  it("caps at 200 and marks truncated", () => {
+    const many = Array.from({ length: 201 }, (_, i) => diag(`f${i}.ts`, i));
+    const fragment = buildDiagnosticsFragment(many);
+    expect(fragment?.content.split("\n")).toHaveLength(200);
+    expect(fragment?.provenance.truncated).toBe(true);
+  });
+
+  it("records the folder uri in provenance", () => {
+    const fragment = buildDiagnosticsFragment([diag("a.ts", 0)], "file:///w");
+    expect(fragment?.provenance.folderUri).toBe("file:///w");
   });
 });
 
