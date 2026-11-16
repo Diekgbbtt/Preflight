@@ -100,7 +100,11 @@ export class JsonlRepository<T> implements Repository<T> {
 
   private async load(): Promise<void> {
     if (this.loadPromise) return this.loadPromise;
-    this.loadPromise = this.loadFile();
+    this.loadPromise = this.loadFile().catch((error) => {
+      // Retry the read on the next operation instead of caching the failure.
+      this.loadPromise = null;
+      throw error;
+    });
     return this.loadPromise;
   }
 
@@ -184,9 +188,11 @@ export class JsonlRepository<T> implements Repository<T> {
     await this.load();
     let seq = this.maxSeq + 1;
     let terminatedPartial: string | null = null;
+    let adopted: Event<T> | null = null;
+    let extraSkipped = 0;
+    let nextMaxSeq = this.maxSeq;
     if (this.partial !== null) {
       terminatedPartial = this.partial;
-      this.partial = null;
       let parsed: unknown;
       try {
         parsed = JSON.parse(terminatedPartial);
@@ -197,18 +203,16 @@ export class JsonlRepository<T> implements Repository<T> {
       // the rest of the envelope is invalid or from a future version.
       if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
         const partialSeq = (parsed as { seq?: unknown }).seq;
-        if (typeof partialSeq === "number" && Number.isFinite(partialSeq) && partialSeq > this.maxSeq) {
-          this.maxSeq = partialSeq;
+        if (typeof partialSeq === "number" && Number.isFinite(partialSeq) && partialSeq > nextMaxSeq) {
+          nextMaxSeq = partialSeq;
           seq = partialSeq + 1;
         }
       }
       // Adopt the partial only when it is a valid current-or-older event.
       if (parsed !== undefined && isValidEvent(parsed) && parsed.schemaVersion <= SCHEMA_VERSION) {
-        const adopted = parsed as Event<T>;
-        this.events.push(adopted);
-        this.indexEvent(adopted);
+        adopted = parsed as Event<T>;
       } else {
-        this.skipped++;
+        extraSkipped = 1;
       }
     }
     const stored = { ...event, seq, schemaVersion: SCHEMA_VERSION } as Event<T>;
@@ -218,6 +222,15 @@ export class JsonlRepository<T> implements Repository<T> {
     const data = terminatedPartial === null ? body : "\n" + body;
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
     await fs.appendFile(this.filePath, data, "utf8");
+    // The write resolved: commit the in-memory state. Nothing above mutated
+    // it, so a rejected write leaves the repository exactly as it was.
+    this.partial = null;
+    this.maxSeq = nextMaxSeq;
+    this.skipped += extraSkipped;
+    if (adopted) {
+      this.events.push(adopted);
+      this.indexEvent(adopted);
+    }
     this.events.push(stored);
     this.indexEvent(stored);
     if (seq > this.maxSeq) this.maxSeq = seq;

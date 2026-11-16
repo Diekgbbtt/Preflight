@@ -226,6 +226,47 @@ describe("JsonlRepository", () => {
     }
   });
 
+  it("retries after a failed append over a partial tail and preserves both records", async () => {
+    if (process.getuid?.() === 0) return;
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-partial-"));
+    dir = base;
+    const file = path.join(base, "drafts.jsonl");
+    const good = JSON.stringify({ schemaVersion: 1, seq: 1, id: "a", ts: "2026-01-01T00:00:00.000Z", text: "a" });
+    const partial = JSON.stringify({ schemaVersion: 1, seq: 2, id: "b", ts: "2026-01-01T00:00:00.000Z", text: "b" });
+    await fs.writeFile(file, good + "\n" + partial, "utf8");
+    const repo = new JsonlRepository<{ text: string }>(file);
+    await fs.chmod(file, 0o444);
+    try {
+      await expect(repo.append({ id: "c", ts: "2026-01-01T00:00:01.000Z", text: "c" })).rejects.toThrow(/EACCES|EROFS|EPERM/);
+    } finally {
+      await fs.chmod(file, 0o644);
+    }
+    const stored = await repo.append({ id: "c", ts: "2026-01-01T00:00:01.000Z", text: "c" });
+    expect(stored.seq).toBe(3);
+    const content = await fs.readFile(file, "utf8");
+    expect(content).toBe(good + "\n" + partial + "\n" + JSON.stringify(stored) + "\n");
+    const { events, skipped } = await repo.list();
+    expect(events.map((e) => [e.seq, e.id])).toEqual([[1, "a"], [2, "b"], [3, "c"]]);
+    expect(skipped).toBe(0);
+  });
+
+  it("retries the read after a transient read failure", async () => {
+    if (process.getuid?.() === 0) return;
+    const file = await tempFile();
+    const good = JSON.stringify({ schemaVersion: 1, seq: 1, id: "a", ts: "2026-01-01T00:00:00.000Z", text: "a" });
+    await fs.writeFile(file, good + "\n", "utf8");
+    const repo = new JsonlRepository<{ text: string }>(file);
+    await fs.chmod(file, 0o000);
+    try {
+      await expect(repo.list()).rejects.toThrow(/EACCES|EPERM/);
+    } finally {
+      await fs.chmod(file, 0o644);
+    }
+    const { events, skipped } = await repo.list();
+    expect(events.map((e) => e.id)).toEqual(["a"]);
+    expect(skipped).toBe(0);
+  });
+
   it("keeps a stored SendRecord with a missing promptHash or sessionId and does not index a missing session", async () => {
     const base = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-send-"));
     dir = base;
