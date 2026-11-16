@@ -108,7 +108,7 @@ export async function gitChangedFiles(cwd: string, exec: ExecFileLike = defaultE
     }
   }
   const files = [...names].sort();
-  return { ok: true, files: files.slice(0, MAX_GIT_ENTRIES), truncated: files.length > MAX_GIT_ENTRIES };
+  return { ok: true, files: files.slice(0, MAX_GIT_ENTRIES), truncated: status.truncated || files.length > MAX_GIT_ENTRIES };
 }
 
 /** Adapts the overloaded execFile to the single ExecFileLike signature. */

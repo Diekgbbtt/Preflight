@@ -110,6 +110,20 @@ describe("gitChangedFiles", () => {
     expect(result).toEqual({ ok: true, files: ["kept.ts"], truncated: false });
   });
 
+  it("marks truncated when the status alone hit the cap, even with few unique files", async () => {
+    // 250 status entries all pointing at the same path: status truncated,
+    // but the unique file list stays small.
+    const statusNames = Array.from({ length: 250 }, () => "M  a.ts\0").join("");
+    const exec = vi.fn<ExecFileLike>((_c, args, _o, cb) => {
+      if (args[0] === "status") cb(null, statusNames, "");
+      else cb(null, "", "");
+    });
+    const result = await gitChangedFiles("/repo", exec);
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.files).toEqual(["a.ts"]);
+    expect(result.truncated).toBe(true);
+  });
+
   it("caps at MAX_GIT_ENTRIES and sets truncated", async () => {
     const statusNames = Array.from({ length: 150 }, (_, i) => `M  s${i}.ts\0`).join("");
     const logNames = Array.from({ length: 150 }, (_, i) => `l${i}.ts\0`).join("");
