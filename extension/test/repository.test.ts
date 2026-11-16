@@ -2,7 +2,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { JsonlRepository, SCHEMA_VERSION, migrate, type Event } from "../src/repository";
+import type { Event } from "@prompt-preflight/core";
+import { SCHEMA_VERSION, migrate } from "@prompt-preflight/core";
+import { JsonlRepository } from "../src/repository";
 
 const at = (v: number, seq: number, id = "d1"): Event<{ text: string }> =>
   ({ schemaVersion: v, seq, id, ts: "2026-01-01T00:00:00.000Z", text: `v${v}` });
@@ -142,7 +144,7 @@ describe("JsonlRepository", () => {
     const after = await fs.stat(file);
     expect(Number(after.size) - Number(before.size)).toBe(Buffer.byteLength(line, "utf8"));
     const content = await fs.readFile(file, "utf8");
-    expect(content.startsWith(prefix)).toBe(true);
+    expect(content).toBe(prefix + line);
   });
 
   it("serializes two concurrent appends and a read queued behind them", async () => {
@@ -235,17 +237,98 @@ describe("JsonlRepository", () => {
     expect(await sends.bySession("missing")).toEqual([]);
   });
 
-  it("orders events ascending by seq and is stable for equal seq after reload", async () => {
+  it("orders events ascending by seq after reload, not file order", async () => {
     const file = await tempFile();
-    const a = JSON.stringify({ schemaVersion: 1, seq: 2, id: "a", ts: "2026-01-01T00:00:00.000Z", text: "a" });
     const b = JSON.stringify({ schemaVersion: 1, seq: 2, id: "b", ts: "2026-01-01T00:00:00.000Z", text: "b" });
-    const c = JSON.stringify({ schemaVersion: 1, seq: 1, id: "c", ts: "2026-01-01T00:00:00.000Z", text: "c" });
-    await fs.writeFile(file, [c, a, b, ""].join("\n"), "utf8");
+    const a = JSON.stringify({ schemaVersion: 1, seq: 1, id: "a", ts: "2026-01-01T00:00:00.000Z", text: "a" });
+    await fs.writeFile(file, [b, a, ""].join("\n"), "utf8");
     const repo = new JsonlRepository<{ text: string }>(file);
     const { events, skipped } = await repo.list();
     expect(skipped).toBe(0);
-    expect(events.map((e) => e.seq)).toEqual([1, 2, 2]);
-    expect(events.slice(1).map((e) => e.id)).toEqual(["a", "b"]);
+    expect(events.map((e) => [e.seq, e.id])).toEqual([[1, "a"], [2, "b"]]);
+  });
+
+  it("keeps file order for a stable tie on equal seq after reload", async () => {
+    const file = await tempFile();
+    const b = JSON.stringify({ schemaVersion: 1, seq: 2, id: "b", ts: "2026-01-01T00:00:00.000Z", text: "b" });
+    const c = JSON.stringify({ schemaVersion: 1, seq: 2, id: "c", ts: "2026-01-01T00:00:00.000Z", text: "c" });
+    const a = JSON.stringify({ schemaVersion: 1, seq: 1, id: "a", ts: "2026-01-01T00:00:00.000Z", text: "a" });
+    await fs.writeFile(file, [b, c, a, ""].join("\n"), "utf8");
+    const repo = new JsonlRepository<{ text: string }>(file);
+    const { events } = await repo.list();
+    expect(events.map((e) => [e.seq, e.id])).toEqual([[1, "a"], [2, "b"], [2, "c"]]);
+  });
+
+  it("returns byDraft results ordered by seq for out-of-order file positions", async () => {
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-idx-"));
+    dir = base;
+    const line = (seq: number, id: string, draftId: string) =>
+      JSON.stringify({ schemaVersion: 1, seq, id, ts: "2026-01-01T00:00:00.000Z", draftId, promptHash: "h" });
+    await fs.writeFile(path.join(base, "sends.jsonl"), [line(4, "s4", "d1"), line(2, "s2", "d2"), line(1, "s1", "d1"), line(3, "s3", "d1"), ""].join("\n"), "utf8");
+    const sends = new JsonlRepository<{ draftId: string; promptHash: string }>(path.join(base, "sends.jsonl"));
+    expect((await sends.byDraft("d1")).map((e) => e.id)).toEqual(["s1", "s3", "s4"]);
+  });
+
+  it("returns bySession results ordered by seq for out-of-order file positions", async () => {
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-idx-"));
+    dir = base;
+    const line = (seq: number, id: string, sessionId: string) =>
+      JSON.stringify({ schemaVersion: 1, seq, id, ts: "2026-01-01T00:00:00.000Z", draftId: "d1", promptHash: "h", sessionId });
+    await fs.writeFile(path.join(base, "sends.jsonl"), [line(3, "s3", "sess1"), line(1, "s1", "sess1"), line(2, "s2", "sess2"), ""].join("\n"), "utf8");
+    const sends = new JsonlRepository<{ draftId: string; promptHash: string; sessionId?: string }>(
+      path.join(base, "sends.jsonl"),
+    );
+    expect((await sends.bySession("sess1")).map((e) => e.id)).toEqual(["s1", "s3"]);
+  });
+
+  it("raises the next seq from a valid-looking trailing partial line with a future schema version", async () => {
+    const file = await tempFile();
+    const good = JSON.stringify({ schemaVersion: 1, seq: 1, id: "a", ts: "2026-01-01T00:00:00.000Z", text: "a" });
+    const partial = JSON.stringify({ schemaVersion: 2, seq: 7, id: "x", ts: "2026-01-01T00:00:00.000Z", data: true });
+    await fs.writeFile(file, good + "\n" + partial, "utf8");
+    const repo = new JsonlRepository<{ text: string }>(file);
+    const stored = await repo.append({ id: "b", ts: "2026-01-01T00:00:01.000Z", text: "b" });
+    expect(stored.seq).toBe(8);
+    const { events, skipped } = await repo.list();
+    expect(events.map((e) => e.id)).toEqual(["a", "b"]);
+    expect(skipped).toBe(1);
+  });
+
+  it("raises the next seq from a trailing partial line that parses but fails envelope validation", async () => {
+    const file = await tempFile();
+    const good = JSON.stringify({ schemaVersion: 1, seq: 1, id: "a", ts: "2026-01-01T00:00:00.000Z", text: "a" });
+    const partial = JSON.stringify({ seq: 7, id: "x" });
+    await fs.writeFile(file, good + "\n" + partial, "utf8");
+    const repo = new JsonlRepository<{ text: string }>(file);
+    const stored = await repo.append({ id: "b", ts: "2026-01-01T00:00:01.000Z", text: "b" });
+    expect(stored.seq).toBe(8);
+    const { events, skipped } = await repo.list();
+    expect(events.map((e) => e.id)).toEqual(["a", "b"]);
+    expect(skipped).toBe(1);
+  });
+
+  it("skips and counts a complete line with seq 0 and does not raise the next append's seq", async () => {
+    const file = await tempFile();
+    const good = JSON.stringify({ schemaVersion: 1, seq: 1, id: "a", ts: "2026-01-01T00:00:00.000Z", text: "a" });
+    const zero = JSON.stringify({ schemaVersion: 1, seq: 0, id: "z", ts: "2026-01-01T00:00:00.000Z", text: "z" });
+    await fs.writeFile(file, good + "\n" + zero + "\n", "utf8");
+    const repo = new JsonlRepository<{ text: string }>(file);
+    const { events, skipped } = await repo.list();
+    expect(events.map((e) => e.id)).toEqual(["a"]);
+    expect(skipped).toBe(1);
+    const stored = await repo.append({ id: "b", ts: "2026-01-01T00:00:01.000Z", text: "b" });
+    expect(stored.seq).toBe(2);
+  });
+
+  it("skips and counts a complete line with a negative schema version", async () => {
+    const file = await tempFile();
+    const good = JSON.stringify({ schemaVersion: 1, seq: 1, id: "a", ts: "2026-01-01T00:00:00.000Z", text: "a" });
+    const negative = JSON.stringify({ schemaVersion: -1, seq: 2, id: "n", ts: "2026-01-01T00:00:00.000Z", text: "n" });
+    await fs.writeFile(file, good + "\n" + negative + "\n", "utf8");
+    const repo = new JsonlRepository<{ text: string }>(file);
+    const { events, skipped } = await repo.list();
+    expect(events.map((e) => e.id)).toEqual(["a"]);
+    expect(skipped).toBe(1);
   });
 
   it("skips and counts an event with an unknown future schema version; its seq still raises the next append", async () => {

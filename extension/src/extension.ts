@@ -1,8 +1,9 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
+import type { SendRecord } from "@prompt-preflight/core";
 import { CONSENT_VERSION, consentKey, consentMessage, parseConsent, type IncludeCode } from "./privacy";
 import { PromptPanel } from "./panel";
-import { JsonlRepository, type SendRecord } from "./repository";
+import { JsonlRepository } from "./repository";
 import { StudyLog } from "./studyLog";
 import { WorkspaceIndex } from "./workspace";
 
@@ -45,7 +46,7 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
     vscode.commands.registerCommand("promptPreflight.clearHistory", async () => {
-      const answer = await vscode.window.showInformationMessage(
+      const answer = await vscode.window.showWarningMessage(
         "Delete all stored drafts, questions, reviews and send records? Settings and the study log are kept.",
         { modal: true },
         "Delete",

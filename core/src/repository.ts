@@ -75,8 +75,8 @@ function isFiniteInteger(value: unknown): value is number {
 /** Envelope validation shared by reads and the migration runner. */
 export function isValidEvent(value: unknown): value is Event<unknown> {
   if (!isPlainEvent(value)) return false;
-  if (!isFiniteInteger(value.schemaVersion)) return false;
-  if (!isFiniteInteger(value.seq)) return false;
+  if (!isFiniteInteger(value.schemaVersion) || value.schemaVersion < 0) return false;
+  if (!isFiniteInteger(value.seq) || value.seq < 1) return false;
   if (typeof value.id !== "string") return false;
   if (typeof value.ts !== "string") return false;
   return true;

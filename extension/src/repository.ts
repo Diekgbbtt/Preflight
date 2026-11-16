@@ -1,36 +1,17 @@
 /**
  * Node JSONL repository implementation. Node APIs only: no `vscode` import.
- * Re-exports the pure envelope types and the migration runner from core.
+ * Core envelope types and the migration runner come from `@prompt-preflight/core`.
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
   SCHEMA_VERSION,
   isValidEvent,
-  migrate,
   type ClearResult,
   type Event,
   type EventInput,
   type ListResult,
   type Repository,
-} from "@prompt-preflight/core";
-
-export {
-  SCHEMA_VERSION,
-  isValidEvent,
-  migrate,
-  type ClearResult,
-  type Event,
-  type EventInput,
-  type ListResult,
-  type Repository,
-};
-export type {
-  SendRecord,
-  IdGenerator,
-  Clock,
-  MigrationStep,
-  MigrationResult,
 } from "@prompt-preflight/core";
 
 /**
@@ -59,21 +40,21 @@ export class JsonlRepository<T> implements Repository<T> {
   async list(): Promise<ListResult<T>> {
     return this.enqueue(async () => {
       await this.load();
-      return { events: [...this.events], skipped: this.skipped };
+      return { events: this.sortedEvents(this.events), skipped: this.skipped };
     });
   }
 
   async byDraft(draftId: string): Promise<Event<T>[]> {
     return this.enqueue(async () => {
       await this.load();
-      return this.byDraftIndex.get(draftId) ?? [];
+      return this.sortedEvents(this.byDraftIndex.get(draftId) ?? []);
     });
   }
 
   async bySession(sessionId: string): Promise<Event<T>[]> {
     return this.enqueue(async () => {
       await this.load();
-      return this.bySessionIndex.get(sessionId) ?? [];
+      return this.sortedEvents(this.bySessionIndex.get(sessionId) ?? []);
     });
   }
 
@@ -106,6 +87,15 @@ export class JsonlRepository<T> implements Repository<T> {
     const next = this.queue.then(fn, fn);
     this.queue = next.catch(() => undefined);
     return next;
+  }
+
+  /**
+   * Copy of the given events sorted by `seq` ascending. JavaScript sort is
+   * stable, so events with equal seq keep file order. A copy also stops
+   * callers from mutating the in-memory indexes.
+   */
+  private sortedEvents(events: Event<T>[]): Event<T>[] {
+    return [...events].sort((a, b) => a.seq - b.seq);
   }
 
   private async load(): Promise<void> {
@@ -203,11 +193,17 @@ export class JsonlRepository<T> implements Repository<T> {
       } catch {
         parsed = undefined;
       }
-      if (parsed !== undefined && isValidEvent(parsed) && parsed.schemaVersion <= SCHEMA_VERSION) {
-        if (typeof parsed.seq === "number" && Number.isFinite(parsed.seq) && parsed.seq > this.maxSeq) {
-          this.maxSeq = parsed.seq;
-          seq = parsed.seq + 1;
+      // Any parseable object with a finite numeric seq raises the max, even if
+      // the rest of the envelope is invalid or from a future version.
+      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+        const partialSeq = (parsed as { seq?: unknown }).seq;
+        if (typeof partialSeq === "number" && Number.isFinite(partialSeq) && partialSeq > this.maxSeq) {
+          this.maxSeq = partialSeq;
+          seq = partialSeq + 1;
         }
+      }
+      // Adopt the partial only when it is a valid current-or-older event.
+      if (parsed !== undefined && isValidEvent(parsed) && parsed.schemaVersion <= SCHEMA_VERSION) {
         const adopted = parsed as Event<T>;
         this.events.push(adopted);
         this.indexEvent(adopted);
