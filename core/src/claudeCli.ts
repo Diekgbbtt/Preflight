@@ -148,13 +148,17 @@ export function parseCliOutput(stdout: string): ModelResponse {
 }
 
 /**
- * Legacy runner kept for the existing panel path. It stays a ModelRunner with
- * the same signature and reuses the shared spawn runner, bound to a profile
- * with medium effort. So the panel path now passes --effort medium too.
+ * Legacy runner kept for the existing panel path. It stays a ModelRunner and
+ * reuses the shared spawn runner. The optional third thinking effort applies
+ * the resolved profile's effort; the default keeps the historical medium.
  */
-export function claudeCliRunner(claudePath = "claude", cwd?: string): ModelRunner {
+export function claudeCliRunner(
+  claudePath = "claude",
+  cwd?: string,
+  thinkingEffort: ThinkingEffort = "medium",
+): ModelRunner {
   return (req: ModelRequest, signal?: AbortSignal) => {
-    const profile: ModelProfile = { provider: "claude", model: req.model, thinkingEffort: "medium" };
+    const profile: ModelProfile = { provider: "claude", model: req.model, thinkingEffort };
     return execClaude({ claudePath, cwd }, req, profile, signal);
   };
 }

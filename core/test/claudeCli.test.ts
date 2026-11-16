@@ -244,8 +244,7 @@ describe("parseCliOutput", () => {
 });
 
 describe("claudeCliRunner legacy path", () => {
-  it("spawns the CLI with --effort medium and resolves the response", async () => {
-    const marker = path.join(FAKE_DIR, "marker-legacy");
+  it("spawns the CLI with --effort medium and resolves the response", async () => {    const marker = path.join(FAKE_DIR, "marker-legacy");
     fs.rmSync(marker, { force: true });
     const cliPath = makeCli(`const fs = require("fs");
 fs.writeFileSync(process.env.MARKER, JSON.stringify(process.argv.slice(2)));
@@ -260,6 +259,26 @@ process.stdout.write(${JSON.stringify(OK_JSON)});`);
       expect(args[args.indexOf("--effort") + 1]).toBe("medium");
       expect(args).toContain("sonnet");
       expect(args).toContain("--setting-sources");
+    } finally {
+      delete process.env.MARKER;
+      removeCli(cliPath);
+      fs.rmSync(marker, { force: true });
+    }
+  });
+
+  it("passes the optional third parameter as --effort high", async () => {
+    const marker = path.join(FAKE_DIR, "marker-legacy-high");
+    fs.rmSync(marker, { force: true });
+    const cliPath = makeCli(`const fs = require("fs");
+fs.writeFileSync(process.env.MARKER, JSON.stringify(process.argv.slice(2)));
+fs.readFileSync(0, "utf8");
+process.stdout.write(${JSON.stringify(OK_JSON)});`);
+    process.env.MARKER = marker;
+    try {
+      await claudeCliRunner(cliPath, undefined, "high")(request);
+      const args = JSON.parse(fs.readFileSync(marker, "utf8")) as string[];
+      expect(args).toContain("--effort");
+      expect(args[args.indexOf("--effort") + 1]).toBe("high");
     } finally {
       delete process.env.MARKER;
       removeCli(cliPath);
