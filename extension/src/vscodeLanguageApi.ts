@@ -30,7 +30,7 @@ function isOutsideWorkspace(path: string): boolean {
 }
 
 export function createVscodeLanguageApi(options: VscodeLanguageApiOptions = {}): LanguageApi & {
-  probe(uri: string): Promise<LanguageCapabilities | null>;
+  probe(uri: string, signal?: AbortSignal): Promise<LanguageCapabilities | null>;
   openDocuments(): Array<{ uri: string; path: string }>;
 } {
   const rgCommand = options.rg ?? rg;
@@ -184,14 +184,14 @@ export function createVscodeLanguageApi(options: VscodeLanguageApiOptions = {}):
      * by `uri@documentVersion` so repeated requests skip the provider calls.
      * The activation probe is the caller's non-blocking job, never this.
      */
-    async probe(uri: string): Promise<LanguageCapabilities | null> {
+    async probe(uri: string, signal?: AbortSignal): Promise<LanguageCapabilities | null> {
       const target = toUri(uri);
       const document = vscode.workspace.textDocuments.find((candidate) => candidate.uri.toString() === target.toString());
       if (!document) return null;
       const key = `${uri}@${document.version}`;
       const cached = probeCache.get(key);
       if (cached !== undefined) return cached;
-      const capabilities = await probeCapabilities(api, uri);
+      const capabilities = await probeCapabilities(api, uri, 3000, signal);
       probeCache.set(key, capabilities);
       return capabilities;
     },

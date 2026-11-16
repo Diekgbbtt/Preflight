@@ -239,6 +239,16 @@ describe("createVscodeLanguageApi probe and openDocuments", () => {
     expect(vscodeMock.commands.executeCommand.mock.calls.length).toBeGreaterThan(firstCalls);
   });
 
+  it("threads the signal through the probe and treats a null probe as unavailable", async () => {
+    vscodeMock.workspace.textDocuments = [openDoc];
+    vscodeMock.commands.executeCommand.mockResolvedValue([]);
+    vscodeMock.languages.getDiagnostics.mockReturnValue([]);
+    const controller = new AbortController();
+    controller.abort();
+    const api = createVscodeLanguageApi();
+    await expect(api.probe("file:///w/src/a.ts", controller.signal)).rejects.toMatchObject({ code: "cancelled" });
+  });
+
   it("lists open file documents with POSIX relative paths", () => {
     vscodeMock.workspace.textDocuments = [openDoc, { uri: { scheme: "untitled", fsPath: "Untitled-1", toString: () => "untitled:Untitled-1" }, version: 3 }];
     const api = createVscodeLanguageApi();

@@ -347,30 +347,16 @@ export interface LanguageSourceDeps {
   /** Workspace-symbol query: the selected identifier or a draft identifier. */
   query?: string;
   /** Per-request capability probe; the adapter caches per document version. */
-  probe?: () => Promise<LanguageCapabilities | null>;
+  probe?: (signal?: AbortSignal) => Promise<LanguageCapabilities | null>;
   timeoutMs?: number;
 }
 
-/** The provider timeout: a hung language call never blocks the bundle. */
-const DEFAULT_PROVIDER_TIMEOUT_MS = MAX_TIMEOUT_MS;
-
-/** True when the per-request probe is missing or says the provider is unavailable. */
-async function unavailable(deps: LanguageSourceDeps, capability: keyof LanguageCapabilities, signal?: AbortSignal): Promise<boolean> {
-  if (deps.probe === undefined) return false;
-  const capabilities = await deps.probe();
-  return capabilities === null || !capabilities[capability];
-}
-
-/** Runs one provider call under the timeout and the cancellation rules. */
+/** Runs one provider call under the provider timeout and the cancellation rules. */
 async function providerCall<T>(deps: LanguageSourceDeps, run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-  return withTimeout(run(), deps.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS, signal);
+  return withTimeout(run(), deps.timeoutMs ?? MAX_TIMEOUT_MS, signal);
 }
 
-/** Maps a failed provider call to an omit reason: an abort throws, everything else is error. */
-function failureReason(error: unknown, signal?: AbortSignal): { omit: "error" } {
-  if (signal?.aborted) throw cancelledError();
-  throw new Error(`provider call failed: ${error instanceof Error ? error.message : String(error)}`);
-}/** The fallback options shared by every LSP source. */
+/** The fallback options shared by every LSP source. */
 function fallbackOptions(deps: LanguageSourceDeps, sourceId: ContextSourceId): SearchFallbackOptions {
   return {
     sourceId,
@@ -396,7 +382,7 @@ export function createDiagnosticsSource(deps: LanguageSourceDeps): ContextSource
       if (documents.length === 0) return { fragments: [], omittedReason: "empty" as const };
       const included = documents.filter((document) => shouldInclude(document.path, "diagnostic", deps.policy));
       if (included.length === 0) return { fragments: [], omittedReason: "excluded" as const };
-      if (await unavailable(deps, "diagnostics", signal)) return { fragments: [], omittedReason: "unsupported" as const };
+      if (await capabilityMissing(deps, "diagnostics", signal)) return { fragments: [], omittedReason: "unsupported" as const };
       let collected: LanguageDiagnostic[];
       try {
         const perDocument = await Promise.all(included.map((document) => providerCall(deps, () => deps.api.diagnostics(document.uri), signal)));
@@ -461,7 +447,7 @@ function filterByPolicy<T extends { path?: string }>(items: T[], policy: Include
 /** True when the per-request probe is missing or says the capability is unavailable. */
 async function capabilityMissing(deps: LanguageSourceDeps, capability: keyof LanguageCapabilities, signal?: AbortSignal): Promise<boolean> {
   if (deps.probe === undefined) return false;
-  const capabilities = await deps.probe();
+  const capabilities = await deps.probe(signal);
   return capabilities === null || !capabilities[capability];
 }
 
