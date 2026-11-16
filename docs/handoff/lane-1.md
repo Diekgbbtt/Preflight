@@ -14,6 +14,7 @@ Every entry has a contract version and a change log.
 | #39 | merged | ticket/39-model-profiles | 986b610b2f5bf0ee0b18a3a803c51771fee789ff | `npm run typecheck && npm test && npm run build` -> 227 passed | PASS |
 | #42 | merged | ticket/42-feedback-errors | 507ee22d48d26de29a5cf3e88982040105b40e65 | `npm run typecheck && npm test && npm run build` -> 295 passed | PASS |
 | #36 | merged | ticket/36-context-assembler | 495b52853631580933232fea1a3941c94adb5510 | `npm run typecheck && npm test && npm run build` -> 322 passed | PASS |
+| #37 | merged | ticket/37-language-context | 96ce4605b489049d8c6919c8bcbd429ff2cc66f3 | `npm run typecheck && npm test && npm run build` -> 442 passed | PASS |
 
 Source branch: `lane-1/control-plane`.
 Setup commit: `098e887` (`chore: set up lane 1 worktrees and extension tests`).
@@ -23,6 +24,7 @@ Lane base for ticket #35: `6b1384bc0453247d9d2212a16b9bcc7f77a9077c`.
 Lane base for ticket #39: `ed0c1d7cb40aee3fe68e633d75b2896839ae124b`.
 Lane base for ticket #42: `35c6a3b`.
 Lane base for ticket #36: `0c62960`.
+Lane base for ticket #37: `99b7392`.
 
 <a id="contract-40"></a>
 
@@ -838,6 +840,132 @@ Lane base for ticket #36: `0c62960`.
 - Change log:
   - v1: initial contract merged in #36.
 
+<a id="contract-37"></a>
+
+## Contract: #37 Language context provider - v1
+
+- State: merged.
+- Commit: `96ce4605b489049d8c6919c8bcbd429ff2cc66f3`.
+- Base: `99b7392`.
+- Exports from `extension/src/languageContext.ts`:
+  - `interface LanguagePosition { line: number; character: number }` (0-based; display adds 1).
+  - `interface LanguageRange { start: LanguagePosition; end: LanguagePosition }`.
+  - `interface LanguageAnchor { uri: string; path?: string; range: LanguageRange }`.
+  - `interface LanguageLocation extends LanguageAnchor { name?: string }`.
+  - `interface LanguageSymbol { name: string; kind: string; uri?: string; path?: string; range?: LanguageRange; containerName?: string }`.
+  - `interface LanguageDiagnostic extends LanguageAnchor { severity: string; source?: string; message: string }`.
+  - `interface TextSearchMatch extends LanguageAnchor { preview?: string }`.
+  - `interface TextSearchOptions { cwd?: string; maxResults: number }`.
+  - `interface LanguageApi { documentSymbols(uri); workspaceSymbols(query); definitions(uri, position); references(uri, position); diagnostics(uri); textSearch(query, options) }`.
+  - `interface LanguageCapabilities { documentSymbols: boolean; workspaceSymbols: boolean; definitions: boolean; references: boolean; diagnostics: boolean }`.
+  - `const MAX_DIAGNOSTICS = 200`, `MAX_DOCUMENT_SYMBOLS = 100`, `MAX_WORKSPACE_SYMBOLS = 50`, `MAX_DEFINITIONS = 20`, `MAX_REFERENCES = 50`, `MAX_TEXT_SEARCH_MATCHES = 50`.
+  - `function withTimeout<T>(promise, ms, signal?): Promise<T>`.
+  - `function isOutsideWorkspace(path: string): boolean`.
+  - `function buildDiagnosticsFragment(diagnostics, folderUri?): ContextFragment | null`.
+  - `function buildSymbolsFragment(symbols, folderUri?): ContextFragment | null`.
+  - `function buildWorkspaceSymbolsFragment(symbols, folderUri?): ContextFragment | null`.
+  - `function buildDefinitionsFragment(definitions, folderUri?): ContextFragment | null`.
+  - `function buildReferencesFragment(references, folderUri?): ContextFragment | null`.
+  - `function probeCapabilities(api, uri, timeoutMs?, signal?): Promise<LanguageCapabilities | null>`.
+  - `interface SearchFallbackOptions { sourceId; priority; cwd?; maxResults?; folderUri?; allowPath? }`.
+  - `function searchFallback(api, query, options, signal?): Promise<ContextFragment | null>`.
+  - `interface LanguageSourceDeps { api; policy; folderUri?; cwd?; activeUri?; activePath?; activePosition?; openDocuments?; query?; probe?: (signal?) => Promise<LanguageCapabilities | null>; timeoutMs? }`.
+  - `function createDiagnosticsSource(deps): ContextSource`.
+  - `function createSymbolsSource(deps): ContextSource`.
+  - `function createWorkspaceSymbolsSource(deps): ContextSource`.
+  - `function createDefinitionsSource(deps): ContextSource`.
+  - `function createReferencesSource(deps): ContextSource`.
+  - `function createLanguageSources(deps): ContextSource[]` in reserved order: diagnostics, symbols, workspace-symbols, definitions, references.
+- Exports from `extension/src/exec.ts`:
+  - `function rg(args: string[], cwd: string, exec?: ExecFileLike): Promise<ExecResult>`.
+  - `interface GitStatusEntry { status: string; path: string }`.
+  - `type GitStatusResult = { ok: true; entries: GitStatusEntry[]; truncated: boolean } | { ok: false; code?: string; stderr: string }`.
+  - `type GitChangedFilesResult = { ok: true; files: string[]; truncated: boolean } | { ok: false; code?: string; stderr: string }`.
+  - `function gitStatus(cwd: string, exec?: ExecFileLike): Promise<GitStatusResult>`.
+  - `function gitChangedFiles(cwd: string, exec?: ExecFileLike): Promise<GitChangedFilesResult>`.
+  - `const MAX_GIT_ENTRIES = 200`.
+- Exports from `extension/src/vscodeLanguageApi.ts`:
+  - `interface VscodeLanguageApiOptions { cwd?: string; rg?: typeof rg }`.
+  - `function createVscodeLanguageApi(options?): LanguageApi & { probe(uri, signal?): Promise<LanguageCapabilities | null>; openDocuments(): Array<{ uri: string; path: string }> }`.
+  - This is the only file in #37 that imports `vscode`.
+- Source ids and priorities:
+  - `diagnostics` 45, `symbols` 40, `references` 39, `definitions` 38, `workspace-symbols` 37. The ids/priorities come from #36's `SOURCE_PRIORITIES`.
+- Builder behavior:
+  - Diagnostics: one line per diagnostic, `severity source path:range message`, newlines collapsed, cap 200, `truncated` when capped, `kind: "diagnostic"`.
+  - Symbols: one line per document symbol; `path:line:col kind Container.name` when the path and range are known, otherwise `kind name`; cap 100; `kind: "symbol"`; `provenance.path` only when every included symbol is in the same known file.
+  - Workspace symbols: one line per symbol `path:line:col kind Container.name`; cap 50; `kind: "workspace-symbol"`.
+  - Definitions: one line per location `path:line:col name?`; cap 20; `kind: "definition"`.
+  - References: one line per location `path:line:col name?`; cap 50; `kind: "reference"`.
+  - Multi-result fragments omit `provenance.range`. All builders set `tokens = estimateTokens(content)`, `provenance.chars`, `provenance.truncated`, and `folderUri` when present. They leave `redactions` undefined for #36 to redact.
+  - Positions are 0-based in the port and 1-based in the displayed `line:col`.
+- Capability probe:
+  - `probeCapabilities` returns null for an empty uri.
+  - It calls each of the five LSP methods under a 3000 ms timeout and returns booleans. A sync throw, a rejection, or a timeout is false. The full lists are discarded.
+  - The signal rejects the whole probe with `code: "cancelled"`.
+  - The adapter's `probe(uri, signal?)` requires an open document; no open document returns null. It caches one entry per uri with `{ version, capabilities }`; the same document version hits, a version bump recomputes, and a version seen again recomputes. The cache is bounded by the number of open documents, not the number of edits.
+  - Activation is the caller's non-blocking job; this ticket publishes the cached per-request probe.
+- Text-search fallback:
+  - `searchFallback` returns null for an empty/whitespace query.
+  - It calls `api.textSearch(query, { cwd, maxResults })` under a 3000 ms timeout, with the cap clamped to `MAX_TEXT_SEARCH_MATCHES` (50).
+  - It drops pathless, absolute, `..`, and `allowPath`-rejected matches.
+  - No matches -> null. A fragment carries the replaced LSP source id/priority, `provenance.kind: "text-search"`, no range, and `truncated` when the match cap is hit.
+  - `rg` missing (`ENOENT`) rethrows so the source can omit `unsupported`; other failures rethrow for `error`.
+- Source behavior:
+  - All sources `throwIfAborted(signal)` and use a 3000 ms provider timeout (`deps.timeoutMs` override for tests).
+  - `diagnostics`: no open documents -> `empty`; documents filtered by `shouldInclude(path, "diagnostic", policy)`; all filtered -> `excluded`; probe false/null -> `unsupported`; provider throw/timeout -> `error`; zero diagnostics -> `empty`; cap 200; `details: { files, count, dropped }`.
+  - `symbols`: no active uri/path -> `empty`; active path excluded by `shouldInclude(path, "active-file", policy)` -> `excluded`; probe false/null -> fallback/`unsupported`; LSP results filtered by `shouldInclude(path, "workspace", policy)`; cap 100; `details: { count, dropped }` or `{ count, dropped, textSearch: true }` on fallback.
+  - `workspace-symbols`: no query -> `empty`; never calls the provider with an empty query; probe false/null -> fallback; LSP results filtered by `shouldInclude(path, "workspace", policy)`; cap 50; `details` as above.
+  - `definitions`: no active uri/position -> `empty`; active path excluded -> `excluded`; probe false/null -> fallback/`unsupported`; locations filtered by `shouldInclude(path, "workspace", policy)`; cap 20; details as above.
+  - `references`: same as definitions with cap 50.
+  - A provider that answered but had every result filtered returns `empty` with `details: { count: 0, dropped: raw.length }`; it does not run the text-search fallback for hidden data.
+  - A provider that answered with zero results falls back to text search when a query exists; otherwise `empty`/`unsupported`.
+  - A fallback that finds no matches omits `empty`; a missing `rg` omits `unsupported`; another fallback failure omits `error`. An abort rejects.
+- `exec.ts`:
+  - `rg(args, cwd)` uses `execFile("rg", args, { cwd, timeout: 5000, maxBuffer: 1 MB })`. Exit code 1 with empty stderr is a successful empty result. A missing `rg` returns `code: "ENOENT"`. Other failures return `code` when it is a string and the stderr/error message. No shell.
+  - `gitStatus(cwd)` uses `git status --porcelain=v1 -z`, parses NUL-separated rows, preserves spaces/newlines, skips the original-path segment after a rename/copy, caps at 200, and sets `truncated`.
+  - `gitChangedFiles(cwd)` combines the status paths with the last five commits' NUL-separated `--name-only` names, unique and sorted, caps at 200, and sets `truncated` when either the status or the combined list was capped. A log failure keeps the status paths.
+- `vscodeLanguageApi.ts`:
+  - Converts `DocumentSymbol` (children flattened), `SymbolInformation`, `Location`, `LocationLink` (target selection range preferred), `Diagnostic` (severity name, source, range, message), and `Uri`/`Position`/`Range`.
+  - `textSearch` runs `rg --json` with the cwd, parses match lines, builds file URIs, drops absolute/`..` paths, and caps. Missing rg and other failures throw with the code.
+  - `openDocuments()` returns file-scheme open documents as `{ uri, path }`.
+  - The adapter caches the probe per uri and document version.
+- Docs:
+  - `docs/lsp-parity.md` records the environment facts, the three languages (TypeScript, Python, Rust), a table with provider availability/symbol kind/location precision/truncation, and the exact manual steps. All rows are marked **not measured** because no interactive VS Code window was available. `rg` is not installed on this machine.
+- Tests:
+  - `extension/test/languageContext.test.ts`: `npx vitest run extension/test/languageContext.test.ts` -> 100 passed.
+  - `extension/test/vscodeLanguageApi.test.ts`: `npx vitest run extension/test/vscodeLanguageApi.test.ts` -> 20 passed.
+  - Full suite: `npm test` -> 442 passed.
+- Test seams:
+  - `LanguageApi` port with a fake: `extension/test/languageContext.test.ts`.
+  - Builders: `extension/test/languageContext.test.ts`.
+  - `probeCapabilities`: `extension/test/languageContext.test.ts`.
+  - `searchFallback`: `extension/test/languageContext.test.ts`.
+  - Sources: `extension/test/languageContext.test.ts`.
+  - `exec.ts` helpers with a fake executor: `extension/test/languageContext.test.ts`.
+  - Adapter with a stubbed `vscode`: `extension/test/vscodeLanguageApi.test.ts`. This is the only test that mocks `vscode`.
+- Edge modes covered:
+  - No active editor/position, untitled/virtual, no query, empty provider results, zero diagnostics, 10k diagnostics/symbols capped, locations outside the workspace dropped, provider throw/timeout, abort, `rg` missing, git missing/not a repo, paths with spaces/newlines, renames, ignored paths, `.gitignore`, multi-root caller-provided cwd, deleted/pathless results dropped.
+- Assumptions:
+  - `DocumentSymbol` and `SymbolInformation` results both arrive from `vscode.executeDocumentSymbolProvider`; the adapter handles both. `LocationLink` prefers `targetSelectionRange`.
+  - The probe calls all five providers with a sentinel `"probe"` workspace query and discards the lists; the result is booleans only. This costs five provider calls per uncached document version; the adapter caches.
+  - `deps.probe` is optional. When absent, the source calls the LSP directly; when null/false, it uses the fallback.
+  - The diagnostics source returns `excluded` when open documents exist but all fail `shouldInclude`.
+  - `rg` is not installed on this machine. The real text-search fallback omits `unsupported` until it is installed; no grep substitute.
+  - LSP parity is not measured. The doc records the manual steps and the reason; the user must run them.
+  - `isOutsideWorkspace` is exported from the pure module and imported by the adapter. `privacy.ts` has a separate pre-existing private copy; it is out of this ticket's file list.
+- Consumers:
+  - #46: wire `createLanguageSources` into the assembler with the adapter, the resolved folder/policy, the active uri/path/position, open documents, the query, and the cached `probe`. The deep prompt receives the fragments; #36 redacts and budgets them.
+  - #36: no change; the language sources use the reserved ids/priorities and return `ContextSourceResult`.
+  - #18: use `LanguageApi`/builders for codebase access experiments.
+  - #4: use the parity record and fallback behavior for few-shot task detection.
+- Open gaps:
+  - LSP parity is not measured. The user must run `docs/lsp-parity.md` in a real VS Code window for TypeScript, Python, and Rust.
+  - `rg` is not installed on this machine. Install ripgrep to exercise the real text-search fallback; until then it omits `unsupported`.
+  - The probe makes five provider calls per uncached version; large workspaces may want a cheaper provider-availability check.
+  - The `privacy.ts` private `isOutsideWorkspace` is a separate pre-existing copy; a later cleanup can share one helper.
+- Change log:
+  - v1: initial contract merged in #37.
+
 ## Contract changes
 
 | Date | Contract | From | To | Consumers notified |
@@ -849,6 +977,7 @@ Lane base for ticket #36: `0c62960`.
 | 2026-11-16 | #39 model profiles | v1 | v1.1 | #42, #43, #46; additive `claudeCliRunner` effort parameter, no break |
 | 2026-11-16 | #42 feedback errors | none | v1 | #27, #43, #46, #47, #10, #12, #22 |
 | 2026-11-16 | #36 context assembler | none | v1 | #37, #38, #46, #48, #13 |
+| 2026-11-16 | #37 language context | none | v1 | #46, #18, #4, #36 |
 
 ## Dispatch notes
 
