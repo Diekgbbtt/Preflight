@@ -1,5 +1,5 @@
 import type { Analysis, Range } from "./types";
-import { DEEP_REPLY_SCHEMA, PROMPT_VERSION, QUICK_REPLY_SCHEMA, RUBRIC_TEXT, RUBRIC_VERSION } from "./schema";
+import { DEEP_REPLY_SCHEMA, QUICK_REPLY_SCHEMA, RUBRIC_TEXT } from "./schema";
 
 export type ReviewMode = "quick" | "deep";
 
@@ -43,8 +43,7 @@ ${RUBRIC_TEXT}
 Find what is missing or ambiguous that would make the agent guess. Only flag real gaps; a short prompt can be complete.
 Reply with JSON only, no prose, in this shape:
 ${QUICK_REPLY_SCHEMA}
-At most 3 issues.
-Set rubric version ${RUBRIC_VERSION}.`;
+At most 3 issues.`;
 
 const DEEP_SYSTEM = `You coach a student on how to write prompts for an AI coding agent. You do not do the task.
 ${RUBRIC_TEXT}
@@ -53,7 +52,7 @@ Review the prompt. For each issue, explain briefly why it matters to the agent, 
 Then write an improved version of the prompt. Never invent facts the user did not give: put unknown details in square brackets as placeholders, e.g. [which page?] or [expected result]. Keep the user's intent and wording where possible.
 Reply with JSON only, no prose, in this shape:
 ${DEEP_REPLY_SCHEMA}
-At most 3 issues and 3 questions. Set prompt version ${PROMPT_VERSION}.`;
+At most 3 issues and 3 questions.`;
 
 export interface ReviewContext {
   analysis?: Analysis;

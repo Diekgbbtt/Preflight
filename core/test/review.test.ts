@@ -102,7 +102,7 @@ describe("parseQuickReview", () => {
   });
 
   it("returns score null and empty lists without throwing on malformed text", () => {
-    for (const text of ["sorry, no", '{"dimensions":{"target":30}}', "{", '{"dimensions":null}']) {
+    for (const text of ["sorry, no", '{"dimensions":{"target":30}}', "{", '{"dimensions":null}', '{"dimensions":{"target":20,"action":25,"scope":15,"done":20}} {"verdict":"ready"}']) {
       const r = parseQuickReview(text, prompt, meta);
       expect(r, text).toEqual({ score: null, issues: [], questions: [] });
     }
@@ -189,7 +189,7 @@ describe("parseDeepReview", () => {
   });
 
   it("returns a safe empty review without throwing on malformed text", () => {
-    for (const text of ["sorry, no", '{"dimensions":{"target":5.5}}', "[]", '{"questions":"no"}']) {
+    for (const text of ["sorry, no", '{"dimensions":{"target":5.5}}', "[]", '{"questions":"no"}', '{"dimensions":{"target":25,"action":25,"scope":25,"done":25}} {"dimensions":{"target":5,"action":5,"scope":5,"done":5}}']) {
       const r = parseDeepReview(text, prompt, meta);
       expect(r, text).toEqual({ score: null, issues: [], questions: [], improvedPrompt: "", assumptions: [], contextGaps: [], usage, latency: 42, promptVersion: "v1" });
     }
@@ -247,6 +247,31 @@ describe("buildReviewRequest", () => {
     const req = buildReviewRequest(prompt, "deep", "sonnet", { analysis: analyze(prompt), projectNotes: "Files: a.ts" });
     expect(req.user).toContain("Rule-based checks already found:");
     expect(req.user).toContain("Files: a.ts");
+  });
+});
+
+describe("rubric and reply schemas", () => {
+  it("gives each dimension line all six anchor numbers", () => {
+    const lines = RUBRIC_TEXT.split("\n").filter((l) => /^(target|action|scope|done)\b/.test(l));
+    expect(lines).toHaveLength(4);
+    for (const line of lines) {
+      const dimension = line.split(/\s/)[0];
+      for (const anchor of [0, 5, 10, 15, 20, 25]) {
+        expect(line.match(new RegExp(`(^|[:;] )${anchor} =`)), `${dimension} anchor ${anchor}`).toBeTruthy();
+      }
+    }
+  });
+
+  it("pins the quick reply schema", () => {
+    expect(QUICK_REPLY_SCHEMA).toMatchInlineSnapshot(
+      `"{"dimensions":{"target":0-25,"action":0-25,"scope":0-25,"done":0-25},"confidence":0-1,"issues":[{"quote":"exact words from the prompt or empty","problem":"max 15 words","suggestion":"max 20 words"}],"questions":["max 3 short questions to the user"]}"`,
+    );
+  });
+
+  it("pins the deep reply schema", () => {
+    expect(DEEP_REPLY_SCHEMA).toMatchInlineSnapshot(
+      `"{"dimensions":{"target":0-25,"action":0-25,"scope":0-25,"done":0-25},"confidence":0-1,"issues":[{"quote":"exact words from the prompt or empty","problem":"what is missing and why it matters","suggestion":"how to fix it"}],"questions":[{"question":"...","why":"why the agent needs it","options":["max 3 choices"]}],"improvedPrompt":"...","assumptions":["..."],"contextGaps":["..."]}"`,
+    );
   });
 });
 
