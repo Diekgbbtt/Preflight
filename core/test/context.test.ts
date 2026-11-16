@@ -194,5 +194,88 @@ describe("assemble", () => {
     expect(diffEntry?.tokens).toBe(5);
     expect(diffEntry?.chars).toBe(20);
   });
+
+  it("records every omit reason and keeps a throwing source from failing the bundle", async () => {
+    const empty = fixedSource("selection", SOURCE_PRIORITIES.selection, { fragments: [], omittedReason: "empty" });
+    const excluded = fixedSource("open-editors", SOURCE_PRIORITIES["open-editors"], { fragments: [], omittedReason: "excluded" });
+    const unsupported = fixedSource("git-diff", SOURCE_PRIORITIES["git-diff"], { fragments: [], omittedReason: "unsupported" });
+    const throwing = fixedSource("test-command", SOURCE_PRIORITIES["test-command"], undefined as unknown as ContextSourceResult);
+    throwing.collect = async () => {
+      throw new Error("boom");
+    };
+    const healthy = fixedSource("active-editor", SOURCE_PRIORITIES["active-editor"], {
+      fragments: [{ source: "x", priority: 0, content: "ok", tokens: 1, provenance: { kind: "active-file", truncated: false, chars: 2 } }],
+    });
+    const noReason = fixedSource("definitions", SOURCE_PRIORITIES.definitions, { fragments: [] });
+    const withDetails = fixedSource("references", SOURCE_PRIORITIES.references, { fragments: [], omittedReason: "excluded", details: { found: 3, stale: true } });
+
+    const bundle = await assemble({ draft: "", qa: [] }, [empty, excluded, unsupported, throwing, healthy, noReason, withDetails], {
+      budget: 100,
+      estimateTokens: fakeEstimate,
+      redact: noRedact,
+    });
+    const bySource = Object.fromEntries(bundle.manifest.sources.map((s) => [s.source, s]));
+    expect(bySource["selection"].omittedReason).toBe("empty");
+    expect(bySource["open-editors"].omittedReason).toBe("excluded");
+    expect(bySource["git-diff"].omittedReason).toBe("unsupported");
+    expect(bySource["test-command"]).toMatchObject({ included: false, omittedReason: "error", chars: 0, tokens: 0, redactions: 0 });
+    expect(bySource["definitions"].omittedReason).toBe("empty");
+    expect(bySource["references"]).toMatchObject({ included: false, omittedReason: "excluded", details: { found: 3, stale: true } });
+    expect(bySource["active-editor"]).toMatchObject({ included: true, tokens: 1 });
+    expect(bundle.fragments.map((f) => f.source)).toEqual(["active-editor"]);
+    // The error source does not stop later sources.
+    expect(bundle.manifest.sources.map((s) => s.source)).toEqual([
+      "draft", "qa", "selection", "active-editor", "open-editors", "git-diff", "references", "definitions", "test-command",
+    ]);
+  });
+
+  it("throws on duplicate source ids, reserved ids, and duplicate extra entries", async () => {
+    const s = fixedSource("selection", 80, { fragments: [] });
+    await expect(assemble({ draft: "", qa: [] }, [s, fixedSource("selection", 80, { fragments: [] })], { budget: 10, estimateTokens: fakeEstimate, redact: noRedact }))
+      .rejects.toThrow(/duplicate context source id "selection"/);
+    await expect(assemble({ draft: "", qa: [] }, [fixedSource("draft", 100, { fragments: [] })], { budget: 10, estimateTokens: fakeEstimate, redact: noRedact }))
+      .rejects.toThrow(/reserved/);
+    await expect(assemble({ draft: "", qa: [] }, [fixedSource("qa", 90, { fragments: [] })], { budget: 10, estimateTokens: fakeEstimate, redact: noRedact }))
+      .rejects.toThrow(/reserved/);
+    const extra = { source: "AGENTS.md", chars: 1, tokens: 1, included: true, truncated: false, redactions: 0 };
+    await expect(assemble({ draft: "", qa: [] }, [], { budget: 10, estimateTokens: fakeEstimate, redact: noRedact, extraEntries: [extra, { ...extra }] }))
+      .rejects.toThrow(/duplicate extra manifest entry source "AGENTS\.md"/);
+  });
+
+  it("merges extra entries after the source entries, sorted by id, without consuming the budget", async () => {
+    const source = fixedSource("open-editors", SOURCE_PRIORITIES["open-editors"], {
+      fragments: [{ source: "x", priority: 0, content: "ok", tokens: 1, provenance: { kind: "open-editor", truncated: false, chars: 2 } }],
+    });
+    const bundle = await assemble({ draft: "", qa: [] }, [source], {
+      budget: 1,
+      estimateTokens: fakeEstimate,
+      redact: noRedact,
+      extraEntries: [
+        { source: "CLAUDE.md", chars: 5, tokens: 2, included: true, truncated: false, redactions: 0 },
+        { source: "AGENTS.md", chars: 5, tokens: 2, included: true, truncated: false, redactions: 0 },
+      ],
+    });
+    expect(bundle.manifest.sources.map((s) => s.source)).toEqual(["draft", "qa", "open-editors", "AGENTS.md", "CLAUDE.md"]);
+    expect(bundle.manifest.totalTokens).toBe(1);
+    expect(bundle.manifest.sources.find((s) => s.source === "CLAUDE.md")?.tokens).toBe(2);
+  });
+
+  it("does not double count an already-redacted fragment and sums counts in the manifest", async () => {
+    const already = fixedSource("selection", SOURCE_PRIORITIES.selection, {
+      fragments: [{ source: "x", priority: 0, content: "secret[redacted]", tokens: 4, provenance: { kind: "selection", truncated: false, chars: 16, redactions: 2 } }],
+    });
+    const raw = fixedSource("open-editors", SOURCE_PRIORITIES["open-editors"], {
+      fragments: [{ source: "x", priority: 0, content: "hunter2", tokens: 2, provenance: { kind: "open-editor", truncated: false, chars: 7 } }],
+    });
+    const redact = (text: string) => ({ text: text.replaceAll("hunter2", "[redacted]"), count: text.includes("hunter2") ? 1 : 0 });
+    const bundle = await assemble({ draft: "", qa: [] }, [already, raw], { budget: 100, estimateTokens: fakeEstimate, redact });
+    const sel = bundle.manifest.sources.find((s) => s.source === "selection");
+    const ed = bundle.manifest.sources.find((s) => s.source === "open-editors");
+    expect(sel?.redactions).toBe(2);
+    expect(sel?.chars).toBe(16);
+    expect(ed?.redactions).toBe(1);
+    expect(ed?.chars).toBe(10);
+    expect(bundle.fragments.find((f) => f.source === "open-editors")?.content).toBe("[redacted]");
+  });
 });
 
