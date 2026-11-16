@@ -7,7 +7,7 @@ import * as path from "node:path";
 import { open, readdir, stat } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { Event, ModelCapabilities, ModelProfile, SendRecord } from "@prompt-preflight/core";
+import type { Event, ModelCapabilities, SendRecord } from "@prompt-preflight/core";
 import { estimateTokens, SOURCE_PRIORITIES, type Clock, type ContextSource, type ContextSourceResult } from "@prompt-preflight/core";
 import { canonicalFolderUri, locateSession, type SessionCandidate, type SessionProvider } from "./sessionLocator";
 import { shouldInclude, type IncludeCode } from "./privacy";
@@ -126,7 +126,7 @@ function looksLikeTest(command: string): boolean {
 const FILE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch"]);
 
 /** True when a tool call is a test run: decide from the command, never from a path in a summary. */
-function isTestCall(name: string, described: string | undefined, input: Record<string, unknown>): boolean {
+function isTestCall(name: string, input: Record<string, unknown>): boolean {
   if (FILE_TOOLS.has(name)) return false;
   const command = input.command;
   if (typeof command === "string" && command.trim()) return looksLikeTest(command);
@@ -223,8 +223,6 @@ interface ParserState {
   startedAt?: string;
   endedAt?: string;
   turns: Turn[];
-  /** Owner turn index of each tool call, parallel to toolCalls. */
-  ownerOf: number[];
   toolCalls: ToolCall[];
   pending: Map<string, number>;
   changedFiles: string[];
@@ -239,7 +237,6 @@ interface ParserState {
 
 const newState = (): ParserState => ({
   turns: [],
-  ownerOf: [],
   toolCalls: [],
   pending: new Map(),
   changedFiles: [],
@@ -308,27 +305,22 @@ function applyResult(state: ParserState, callIndex: number, ok: boolean, output:
   }
 }
 
-/** Adds a tool call with its owner turn, pending-link index and test bookkeeping. */
-function registerCall(state: ParserState, call: ToolCall, ownerIndex: number, isTest: boolean): number {
-  const callIndex = state.toolCalls.length;
+/** Adds a tool call with its pending-link index and test bookkeeping. Ownership is resolved later by timestamp. */
+function registerCall(state: ParserState, call: ToolCall, isTest: boolean): void {
   state.toolCalls.push(call);
-  state.ownerOf.push(ownerIndex);
   state.isTestOf.push(isTest);
   if (isTest && !state.testStatus.has(call.summary)) {
     state.testOrder.push(call.summary);
     state.testStatus.set(call.summary, { status: "unknown", at: call.at });
   }
-  return callIndex;
 }
 
 /** Extracts fenced code per turn and removes it from the turn text. */
 function finalizeTurns(state: ParserState): void {
   const out: Turn[] = [];
-  const ownerMap: number[] = [];
   state.turns.forEach((turn, index) => {
     const { code, paths, rest } = extractFences(turn.text);
     if (code.length === 0) {
-      ownerMap.push(index);
       out.push({ ...turn, text: turn.text.trim() });
       return;
     }
@@ -346,7 +338,6 @@ function finalizeTurns(state: ParserState): void {
     const clean = rest.replace(/\n{3,}/g, "\n\n").trim();
     const firstKey = order[0];
     const firstCode = groups.get(firstKey)!;
-    ownerMap.push(index);
     out.push({
       ...turn,
       text: clean,
@@ -355,7 +346,6 @@ function finalizeTurns(state: ParserState): void {
     });
     // Fences bound for another file become code-only turns with their own path.
     for (const key of order.slice(1)) {
-      ownerMap.push(index);
       out.push({
         role: turn.role,
         text: "",
@@ -366,7 +356,6 @@ function finalizeTurns(state: ParserState): void {
     }
   });
   state.turns = out;
-  state.ownerOf = state.ownerOf.map((owner) => ownerMap[owner] ?? owner);
 }
 
 /** Fills a ParsedSession from the parse state. */
@@ -491,7 +480,7 @@ export function parseClaudeSession(text: string): ParsedSession {
             summary: oneLine(`${name}${described ? ` ${displayPath(described, state.cwd)}` : ""}`),
             at: state.endedAt,
           };
-          registerCall(state, call, plan.index, isTestCall(name, described, input));
+          registerCall(state, call, isTestCall(name, input));
           if (typeof b.id === "string") state.pending.set(b.id, state.toolCalls.length - 1);
           // Only mutation tools contribute changed files; reads stay summary-only.
           if (FILE_TOOLS.has(name)) messageFiles.push(...changedFromInput(input, state));
@@ -554,7 +543,7 @@ export function parseCodexSession(text: string): ParsedSession {
           summary: oneLine(`${name}${described ? ` ${described}` : ""}`),
           at: state.endedAt,
         };
-        registerCall(state, call, ownerIndex, isTestCall(name, described, input));
+        registerCall(state, call, isTestCall(name, input));
         if (typeof payload.call_id === "string") state.pending.set(payload.call_id, state.toolCalls.length - 1);
         continue;
       }
@@ -611,7 +600,7 @@ export function parseCodexSession(text: string): ParsedSession {
         summary: oneLine(`${name}${described ? ` ${displayPath(described, state.cwd)}` : ""}`),
         at: state.endedAt,
       };
-      registerCall(state, call, ownerIndex, isTestCall(name, described, input ?? {}));
+      registerCall(state, call, isTestCall(name, input ?? {}));
       if (described && FILE_TOOLS.has(name)) state.turnFiles[ownerIndex]?.push(displayPath(described, state.cwd));
       if (typeof payload.call_id === "string") state.pending.set(payload.call_id, state.toolCalls.length - 1);
       continue;
@@ -710,7 +699,11 @@ export async function discoverCandidates(folderUri: string, homeDir: string): Pr
 
   const candidates: SessionCandidate[] = [];
 
-  // Claude: one directory per workspace, path separators encoded as "-".
+  // Claude: one directory per workspace. Claude encodes the absolute path by
+  // replacing path separators with "-" (POSIX: "/Users/x" -> "-Users-x",
+  // verified against real directory names in ~/.claude/projects). The Windows
+  // drive and separator encoding is a recorded gap, not guessed: discovery on
+  // Windows stays unimplemented until verified there.
   const encoded = folderPath.split(path.sep).join("-");
   const claudeDir = path.join(homeDir, ".claude", "projects", encoded);
   let claudeEntries: Dirent[];
@@ -898,7 +891,7 @@ export async function readSlice(
   if (windowText.trim() === "") return emptySlice(filePath, provider, "empty", total, start > 0);
 
   const parsed = provider === "claude" ? parseClaudeSession(windowText) : parseCodexSession(windowText);
-  if (parsed.turns.length === 0 && parsed.errors.length === 0 && parsed.testResults.length === 0) {
+  if (parsed.turns.length === 0 && parsed.toolCalls.length === 0 && parsed.errors.length === 0 && parsed.testResults.length === 0) {
     return emptySlice(filePath, provider, "empty", total, start > 0, parsed);
   }
 
@@ -952,6 +945,11 @@ export async function readSlice(
   });
 
   // Redact the one-line status records; they are kept regardless of turns.
+  // Status records are global: the turn cap never drops them. They count
+  // against the token budget through fixedTokens, so when the total exceeds
+  // maxTokens the drop loop empties the window and the single-turn check
+  // returns the empty truncated slice. A window with no turns at all keeps
+  // only these records; there is no turn left to drop.
   const turnTokens = (turn: Turn): number =>
     estimateTokens(turn.text) + (turn.code ?? []).reduce((sum, code) => sum + estimateTokens(code), 0);
   const errors: SessionError[] = parsed.errors.map((error) => {
@@ -1007,6 +1005,9 @@ export async function readSlice(
     retainedCalls = budget.calls;
   }
   const droppedToolCalls = parsed.toolCalls.length - retainedCalls.length;
+  // Truncation also covers dropped tool calls: a slice that lost calls but
+  // kept every turn is still a partial view of the session.
+  const truncated = start > 0 || droppedTurns > 0 || droppedToolCalls > 0;
 
   // Normalize changed files against the session cwd, POSIX, sorted.
   const changedFiles = new Set<string>();
@@ -1035,12 +1036,12 @@ export async function readSlice(
     testResults,
     changedFiles: [...changedFiles].sort(),
     tokens,
-    truncated: start > 0 || droppedTurns > 0,
+    truncated,
     provenance: {
       sourcePath: filePath,
       bytesRead: total,
       turnsKept: kept.length,
-      truncated: start > 0 || droppedTurns > 0,
+      truncated,
       droppedTurns,
       droppedToolCalls,
       droppedFiles,
@@ -1132,8 +1133,7 @@ export interface SessionSliceSourceDeps {
   promptHash?: string;
   clock: Clock;
   caps?: SessionCaps;
-  profile?: ModelProfile;
-  /** #39's model capabilities; ModelProfile alone has none. */
+  /** #39's model capabilities; the cap input is capabilities.maxContextTokens. */
   capabilities?: ModelCapabilities;
   includeCode: IncludeCode;
   activeFileUri?: string;

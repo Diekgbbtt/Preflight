@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_SESSION_CAPS, createSessionSliceSource, discoverCandidates, formatSessionSlice, parseClaudeSession, parseCodexSession, readSlice, type SessionSliceSourceDeps } from "../src/sessionSlice";
+import { DEFAULT_SESSION_CAPS, createSessionSliceSource, discoverCandidates, formatSessionSlice, parseClaudeSession, parseCodexSession, readSlice, type SessionCaps, type SessionSliceSourceDeps } from "../src/sessionSlice";
 import type { SessionCandidate } from "../src/sessionLocator";
 import { redact } from "../src/privacy";
 
@@ -495,6 +495,77 @@ describe("readSlice", () => {
     expect(slice.testResults[0]).toMatchObject({ name: "exec npm test", status: "failed" });
     expect(slice.errors[0]).toMatchObject({ message: "1 failed, 1 passed", status: "error" });
   });
+
+  it("marks the slice truncated when tool calls drop without any turn", async () => {
+    // A Codex function call recorded before any message turn: no turn owns it.
+    const text = [
+      JSON.stringify({ timestamp: at(0), type: "session_meta", payload: { id: "sess-x", timestamp: at(0), cwd: CWD } }),
+      JSON.stringify({ timestamp: at(1), type: "response_item", payload: { type: "function_call", name: "shell", call_id: "c1", arguments: '{"command":["npm","test"]}' } }),
+    ].join("\n") + "\n";
+    const file = await write("orphan-call.jsonl", text);
+    const slice = await readSlice(file, "codex", DEFAULT_SESSION_CAPS, { now: () => 0 }, options);
+    expect(slice.turns).toEqual([]);
+    expect(slice.toolCalls).toEqual([]);
+    expect(slice.provenance.droppedToolCalls).toBe(1);
+    expect(slice.truncated).toBe(true);
+    expect(slice.provenance.truncated).toBe(true);
+  });
+
+  it("rejects discovery when the Claude project directory denies permission", async () => {
+    if (process.getuid?.() === 0) return; // root ignores permission bits
+    const home = await setup();
+    const projectDir = path.join(home, ".claude", "projects", "-Users-alice-proj");
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(path.join(projectDir, "sess-a.jsonl"), claudeFixture);
+    await fs.chmod(projectDir, 0o000);
+    try {
+      await expect(discoverCandidates("file:///Users/alice/proj", home)).rejects.toThrow();
+    } finally {
+      await fs.chmod(projectDir, 0o755);
+    }
+  });
+
+  it("returns an empty slice for binary content without throwing", async () => {
+    const base = await setup();
+    const file = path.join(base, "binary.jsonl");
+    // Deterministic binary bytes: NUL and 0xFF runs separated by newlines.
+    const bytes = Buffer.concat([
+      Buffer.alloc(1024, 0x00),
+      Buffer.from([0x0a]),
+      Buffer.alloc(1024, 0xff),
+      Buffer.from([0x0a]),
+    ]);
+    await fs.writeFile(file, bytes);
+    const slice = await readSlice(file, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, options);
+    expect(slice.turns).toEqual([]);
+    expect(slice.provenance.reason).toBe("empty");
+  });
+
+  it("does not truncate a read at exactly maxBytes but truncates one byte over", async () => {
+    const base = await setup();
+    const mkFile = async (name: string, total: number): Promise<string> => {
+      const line1Base = JSON.stringify({ type: "user", sessionId: "sess-x", timestamp: at(0), cwd: CWD, message: { role: "user", content: "t" } });
+      const line2 = JSON.stringify({ type: "assistant", sessionId: "sess-x", timestamp: at(1), cwd: CWD, message: { role: "assistant", content: [{ type: "text", text: "answer" }] } });
+      const pad = total - Buffer.byteLength(line1Base, "utf8") - Buffer.byteLength(line2, "utf8") - 2;
+      const line1 = JSON.stringify({ type: "user", sessionId: "sess-x", timestamp: at(0), cwd: CWD, message: { role: "user", content: `t${"p".repeat(pad)}` } });
+      const file = path.join(base, name);
+      const text = `${line1}\n${line2}\n`;
+      expect(Buffer.byteLength(text, "utf8")).toBe(total);
+      await fs.writeFile(file, text);
+      return file;
+    };
+    const caps: SessionCaps = { maxTurns: 10, maxTokens: 2_000_000, maxBytes: 5_000_000 };
+
+    const exact = await readSlice(await mkFile("exact.jsonl", 5_000_000), "claude", caps, { now: () => 0 }, options);
+    expect(exact.provenance.bytesRead).toBe(5_000_000);
+    expect(exact.truncated).toBe(false);
+    expect(exact.turns).toHaveLength(2);
+
+    const over = await readSlice(await mkFile("over.jsonl", 5_000_001), "claude", caps, { now: () => 0 }, options);
+    expect(over.provenance.bytesRead).toBe(5_000_000);
+    expect(over.truncated).toBe(true);
+    expect(over.turns.map((t) => t.text)).toEqual(["answer"]);
+  });
 });
 
 describe("createSessionSliceSource", () => {
@@ -556,7 +627,6 @@ describe("createSessionSliceSource", () => {
     const result = await createSessionSliceSource(
       deps({
         candidates: [{ ...candidate, filePath: file }],
-        profile: { provider: "claude", model: "sonnet", thinkingEffort: "high" },
         capabilities: { structuredOutput: true, thinkingEffort: true, maxContextTokens: 100, cost: { inputPerMTok: 0, outputPerMTok: 0 }, supportsInstructionFiles: false },
       }),
     ).collect();
