@@ -12,6 +12,7 @@ Every entry has a contract version and a change log.
 | #41 | merged | ticket/41-privacy-policy | bf2bb83575f7007a9537c5802e5146587990fcc0 | `npm run typecheck && npm test && npm run build` -> 151 passed | PASS |
 | #35 | merged | ticket/35-jsonl-repository | 621906d336f7aaaf7d68165a11a01a1d15d52a4e | `npm run typecheck && npm test && npm run build` -> 187 passed | PASS |
 | #39 | merged | ticket/39-model-profiles | 986b610b2f5bf0ee0b18a3a803c51771fee789ff | `npm run typecheck && npm test && npm run build` -> 227 passed | PASS |
+| #42 | merged | ticket/42-feedback-errors | 507ee22d48d26de29a5cf3e88982040105b40e65 | `npm run typecheck && npm test && npm run build` -> 295 passed | PASS |
 
 Source branch: `lane-1/control-plane`.
 Setup commit: `098e887` (`chore: set up lane 1 worktrees and extension tests`).
@@ -19,6 +20,7 @@ Lane base for ticket #40: `098e8873371ef995ba7cb1a2ddbd50a2bc385a03`.
 Lane base for ticket #41: `9ed943f7e352c4c56653ed5e003607a3d79d2a34`.
 Lane base for ticket #35: `6b1384bc0453247d9d2212a16b9bcc7f77a9077c`.
 Lane base for ticket #39: `ed0c1d7cb40aee3fe68e633d75b2896839ae124b`.
+Lane base for ticket #42: `35c6a3b`.
 
 <a id="contract-40"></a>
 
@@ -397,7 +399,7 @@ Lane base for ticket #39: `ed0c1d7cb40aee3fe68e633d75b2896839ae124b`.
 
 <a id="contract-39"></a>
 
-## Contract: #39 Model provider profiles - v1
+## Contract: #39 Model provider profiles - v1.1
 
 - State: merged.
 - Commit: `986b610b2f5bf0ee0b18a3a803c51771fee789ff`.
@@ -414,7 +416,7 @@ Lane base for ticket #39: `ed0c1d7cb40aee3fe68e633d75b2896839ae124b`.
   - `function createProvider(profile: ModelProfile, config: Config): ModelProvider`
   - `function createClaudeProvider(profile: ModelProfile, config: { claudePath: string }): ModelProvider`
   - `function buildClaudeArgs(request: ModelRequest, profile: ModelProfile): string[]`
-  - `claudeCliRunner(claudePath = "claude", cwd?: string): ModelRunner` remains exported with its existing signature.
+  - `claudeCliRunner(claudePath = "claude", cwd?: string, thinkingEffort: ThinkingEffort = "medium"): ModelRunner` (v1.1 additive third parameter; the v1 two-argument form is still compatible).
   - `parseCliOutput(stdout: string): ModelResponse` remains exported and unchanged.
   - `createCodexStubProvider` and `validateClaudeProfile` are module-private, not package exports.
 - `ThinkingEffort` alignment:
@@ -469,14 +471,15 @@ Lane base for ticket #39: `ed0c1d7cb40aee3fe68e633d75b2896839ae124b`.
   - The Codex stub rejects every profile with `Codex provider is not implemented; use Claude.`.
   - The Codex stub `complete` rejects with the same message.
 - Legacy panel path:
-  - `claudeCliRunner` keeps its `(claudePath?, cwd?)` signature and its `ModelRunner` type.
-  - It now binds a profile `{ provider: "claude", model: req.model, thinkingEffort: "medium" }` and therefore passes `--effort medium`.
-  - The panel still uses this path. The new provider path is not wired to the panel in this ticket.
+  - `claudeCliRunner` keeps its `ModelRunner` type and its two-argument compatibility.
+  - It binds a profile `{ provider: "claude", model: req.model, thinkingEffort }` and passes `--effort <thinkingEffort>`.
+  - The default effort stays `medium`. The optional third parameter lets the panel pass the resolved profile effort.
+  - The panel now calls `claudeCliRunner(config.claudePath, workspaceRoot, profile.thinkingEffort)` and passes `profile.model` to `review()`. This preserves the workspace cwd for the Claude session and makes the model/effort settings effective.
+  - The new provider `complete()` path is still not used by the panel. The provider is used for validation and health checks. #46 may use `complete()` for deep feedback.
 - Extension wiring:
-  - `readConfig()` reads the six settings into a plain `Config` object.
-  - `validateModelSettings(config)` resolves quick and deep, creates each provider, and calls `validateProfile`. It returns the first failure prefixed with the mode, or `null`. It catches the unknown-provider throw from `createProvider`.
-  - Activation shows a non-modal warning for an invalid profile or the Codex stub. The default Claude config shows no warning.
-  - `probeEffortSupport(config)` runs only for `provider === "claude"`. It runs a read-only `claude --help` with a 2-second timeout and a 1 MB buffer. It checks stdout and stderr for `--effort`. A failed probe is silent; #42 owns missing-CLI health. A successful probe without the flag shows a non-modal warning.
+  - `readModelConfig()` in `extension/src/modelSettings.ts` reads the six settings into a plain `Config` object. It is shared by `extension.ts` and `panel.ts`.
+  - #42 replaced the v1 `validateModelSettings` helper with `checkHealth` (profile validation plus CLI presence). The activation health check is non-blocking and non-modal.
+  - `probeEffortSupport(config)` remains. It runs only for `provider === "claude"`, with a read-only `claude --help`, a 2-second timeout, and a 1 MB buffer. It checks stdout and stderr for `--effort`. A failed probe is silent; the activation health check owns missing-CLI errors. A successful probe without the flag shows a non-modal warning.
   - The probe never runs a model call and never logs prompt or file text.
 - Tests:
   - `core/test/model.test.ts`: `npx vitest run core/test/model.test.ts` -> 21 passed.
@@ -506,10 +509,10 @@ Lane base for ticket #39: `ed0c1d7cb40aee3fe68e633d75b2896839ae124b`.
   - The haiku cost is the base tier. The over-100k tier is not represented.
   - `maxContextTokens` 200000 is a lane pin, not the current published maximum.
   - `structuredOutput` is a capability flag only; no JSON Schema argument exists yet.
-  - The new provider path is not wired to the panel. The panel keeps `claudeCliRunner` with medium effort. The user's `thinkingEffort` setting affects only consumers that use `resolveProfile`/`createProvider`; #42/#43/#46 own the panel integration.
+  - The new provider `complete()` path is not wired to the panel. The panel uses the legacy `claudeCliRunner` with the resolved model/effort and the workspace cwd. The provider is used for validation and health checks.
   - Codex is a stub. Selecting it warns and rejects; #10 owns the real adapter.
 - Consumers:
-  - #42: use `ModelProvider.validateProfile`, `complete`, capabilities, and the cancelled error code. Health check adds CLI presence; do not assume `probeEffortSupport` is a health check.
+  - #42: used `ModelProvider.validateProfile` through `checkHealth`, the cancelled error code, and the capabilities. It did not use `complete()`; the panel still uses the legacy runner with cwd. Do not assume `probeEffortSupport` is a health check.
   - #26: use `resolveProfile` and `parseQuickReview` with the profile fields.
   - #46: use `supportsInstructionFiles` to decide whether to call #48's loader.
   - #10: replace the Codex stub with the real adapter; keep the `ProviderId` and capability shape.
@@ -520,12 +523,164 @@ Lane base for ticket #39: `ed0c1d7cb40aee3fe68e633d75b2896839ae124b`.
   - #22: use `validateProfile` and the cancelled/error codes for missing CLI and auth handling.
   - #27: use the profile fields in `ScoreReport`.
 - Open gaps:
-  - The panel is not wired to the new provider path. It still uses `claudeCliRunner` with medium effort. The `provider` and `thinkingEffort` settings do not change the panel's behavior yet.
+  - The panel is not wired to the new provider `complete()` path. It uses `claudeCliRunner` with the resolved model/effort and the workspace cwd. The `provider` and `thinkingEffort` settings do change the panel call; the Codex provider is rejected by the health check.
   - `structuredOutput` has no JSON Schema argument.
   - The cost table is a substring table with a zero fallback for unknown models.
   - The Codex stub is not a working provider.
 - Change log:
   - v1: initial contract merged in #39.
+  - v1.1: #42 added the optional third `thinkingEffort` parameter to `claudeCliRunner` and wired the panel to the resolved model/effort while preserving the workspace cwd. Additive; no consumer break. The #42 ledger records the change.
+
+<a id="contract-42"></a>
+
+## Contract: #42 Feedback errors and degraded modes - v1
+
+- State: merged.
+- Commit: `507ee22d48d26de29a5cf3e88982040105b40e65`.
+- Base: `35c6a3b`.
+- Exports:
+  - `type FeedbackErrorCode = "provider-missing" | "auth-missing" | "quota" | "timeout" | "invalid-response" | "context-too-large" | "cancelled" | "unknown"`
+  - `type FeedbackAction = "open-settings" | "install-cli" | "fix-permissions" | "retry" | "reduce-context" | "dismiss"`
+  - `interface FeedbackError { code: FeedbackErrorCode; message: string; action: FeedbackAction; retryable: boolean; cause?: string }`
+  - `function isFeedbackError(value: unknown): value is FeedbackError`
+  - `function mapError(err: unknown): FeedbackError`
+  - `function isRetryable(error: FeedbackError): boolean`
+  - `function feedbackMessage(error: FeedbackError): { message: string; action: FeedbackAction }`
+  - `function feedbackLogMessage(error: FeedbackError, correlationId: string): string`
+  - `const ACTION_LABELS: Record<FeedbackAction, string>`
+  - `function exceedsContext(totalTokens: number, maxContextTokens: number): boolean`
+  - `function exceedsBudget(totalTokens: number, budget: number): boolean`
+  - `type HealthResult = { ok: true } | { ok: false; error: FeedbackError }`
+  - `type HealthExecutor = (command: string, args: string[], options: { timeout: number }, callback: (error: Error | null) => void) => void`
+  - `function checkHealth(provider: ModelProvider, profile: ModelProfile, cliPath: string, exec?: HealthExecutor): Promise<HealthResult>`
+  - `core/src/index.ts` re-exports `./errors`.
+  - `extension/src/modelSettings.ts`: `function readModelConfig(): Config`.
+  - `extension/src/panel.ts`: `function showFeedbackError(error: FeedbackError, retry?: () => void): void`.
+  - #39 addendum: `claudeCliRunner(claudePath = "claude", cwd?: string, thinkingEffort: ThinkingEffort = "medium"): ModelRunner`.
+- Fixed messages:
+  - `provider-missing`: "The selected model provider is not available. Install its CLI or choose another provider in settings."
+  - `auth-missing`: "The model provider rejected the login. Sign in again or check your credentials."
+  - `quota`: "The model provider quota is exhausted. Check your plan or try again later."
+  - `timeout`: "The model provider did not answer in time."
+  - `invalid-response`: "The model provider returned an unreadable answer."
+  - `context-too-large`: "The context is too large for the selected model. Reduce the included code and try again."
+  - `cancelled`: "The request was cancelled."
+  - `unknown`: "Something went wrong while asking the model provider."
+- Actions:
+  - `provider-missing`: `install-cli` for ENOENT, `fix-permissions` for EACCES/EPERM, `open-settings` for an invalid profile or unknown provider.
+  - `auth-missing`: `open-settings`.
+  - `quota`: `open-settings`.
+  - `timeout`: `retry`.
+  - `invalid-response`: `retry` (manual retry only).
+  - `context-too-large`: `reduce-context`.
+  - `cancelled`: `dismiss`.
+  - `unknown`: `dismiss`.
+- Action labels:
+  - `open-settings`: "Open Settings".
+  - `install-cli`: "Install CLI".
+  - `fix-permissions`: "Fix Permissions".
+  - `retry`: "Retry".
+  - `reduce-context`: "Reduce Context".
+  - `dismiss`: "Dismiss".
+- `mapError` order:
+  1. A full `FeedbackError` is returned unchanged by reference.
+  2. `code: "cancelled"`, `name: "AbortError"`, or `code: "ABORT_ERR"` -> `cancelled`.
+  3. `ENOENT` -> `provider-missing`/`install-cli`.
+  4. `EACCES` or `EPERM` -> `provider-missing`/`fix-permissions`, never auth.
+  5. Status/code 429, quota, rate limit, or too many requests -> `quota`.
+  6. Status/code 401 or 403, or an auth message -> `auth-missing`. Auth is checked before timeout.
+  7. `killed`, `SIGTERM`, `ETIMEDOUT`, or a timeout message -> `timeout`.
+  8. `SyntaxError`, JSON parse, parse, unexpected, or empty output/result -> `invalid-response`.
+  9. Context window, maximum context, too many tokens, or token limit -> `context-too-large`.
+  10. Unknown model provider or a "not implemented; use Claude" message -> `provider-missing`/`open-settings`.
+  11. Anything else, including a generic nonzero exit -> `unknown`.
+  - Mapped raw errors never set `cause`. A raw stderr message is not copied to `message` or `cause`.
+  - A validation failure in `checkHealth` may carry the safe `validation.message` as `cause`.
+- Retry policy:
+  - `isRetryable(error)` is true only when `error.code === "timeout"`.
+  - The panel retries a retryable error at most once automatically. A manual "Retry" action can start a new attempt.
+  - Auth, quota, provider-missing, invalid-response, context-too-large, cancelled, and unknown are not retryable.
+- Health check:
+  - `checkHealth` calls `provider.validateProfile(profile)` first. On `{ ok: false }`, it returns `provider-missing` with `open-settings`, the safe validation message as `cause`, and does not run the executor.
+  - On a valid profile, it runs `exec(cliPath, ["--version"], { timeout: 2000 }, cb)`. The default executor uses `execFile` with `maxBuffer: 64 * 1024`.
+  - A successful executor result returns `{ ok: true }`.
+  - An executor error returns `{ ok: false, error: mapError(error) }`.
+  - A synchronous throw from validation or the executor returns a mapped error.
+  - The health check runs no model call. It does not prove auth; a first-call auth failure maps to `auth-missing`.
+  - Activation: the quick profile is checked non-blocking and non-modal. `showFeedbackError` surfaces the fixed message and action. A read-only `claude --help` probe still checks `--effort` for Claude profiles only.
+  - Before a review: the panel awaits `checkHealth` for the mode's profile. A failure posts the fixed error and returns before the model call.
+- Context and budget pre-checks:
+  - `exceedsContext(totalTokens, maxContextTokens)` returns `maxContextTokens > 0 && totalTokens > maxContextTokens`.
+  - Exactly at the model window is allowed. One token over fails. A zero or negative window is unknown and skips the pre-check.
+  - `exceedsBudget(totalTokens, budget)` returns `totalTokens > budget`. Exactly at the budget is allowed.
+  - The caller passes `provider.capabilities.maxContextTokens` to `exceedsContext`. This is an adaptation from the lane brief's `(totalTokens, profile)` because #39's `ModelProfile` has no `capabilities` field.
+  - #36's `ContextManifest.totalTokens > budget` is the tighter check. #36/#46 must call `exceedsBudget` and return `context-too-large` before the provider call, even when the model window is larger.
+  - The panel has no bundle/token source in this ticket, so the predicates are published and tested; #36/#46 wire the real bundle count.
+- Panel and degraded UI:
+  - Before each review, the panel reads `readModelConfig()`, resolves the profile, creates the provider, and awaits `checkHealth`.
+  - The actual review call uses `claudeCliRunner(config.claudePath, workspaceRoot, profile.thinkingEffort)` and `review(..., profile.model, ...)`. This preserves the workspace cwd for the Claude session and applies the resolved model and effort.
+  - On a review error, the panel maps it. A timeout is retried once automatically. The final error posts `{ type: "review", mode, text, error: fixedMessage }` to the webview and calls `showFeedbackError(error, () => runReview(mode))`.
+  - The webview error path clears the loading state. The current rule analysis stays in `this.analysis`; rule findings and the tier-1 rule score remain. The model score is not updated.
+  - Quick-only: a deep failure replaces the deep section; the current quick review remains.
+  - Rules-only: both model calls fail; rule findings remain; no model score is shown. The tier-1 rule score is separate and remains.
+  - No-score: no current `ScoreReport` exists; the panel shows rule findings and no model score.
+  - A quick review aborted by an edit that no longer qualifies posts the fixed `cancelled` message to clear the spinner. A supersede with a follow-up review lets the follow-up update the state.
+  - A true user cancel button is #43. The panel does not add one.
+- Logging:
+  - `showFeedbackError` logs `console.error(feedbackLogMessage(error, randomUUID()))`.
+  - The format is exactly `[prompt-preflight] <correlationId> <code>`.
+  - The log never contains the message, cause, prompt, request, stderr, file contents, or paths.
+- Tests:
+  - `core/test/errors.test.ts`: `npx vitest run core/test/errors.test.ts` -> 67 passed.
+  - `core/test/claudeCli.test.ts`: `npx vitest run core/test/claudeCli.test.ts` -> 20 passed.
+  - Full suite: `npm test` -> 295 passed.
+- Test seams:
+  - `mapError`: `core/test/errors.test.ts`.
+  - `isRetryable`: `core/test/errors.test.ts`.
+  - `feedbackMessage`: `core/test/errors.test.ts`.
+  - `feedbackLogMessage`: `core/test/errors.test.ts`.
+  - `checkHealth` with a real `createProvider` Claude profile and a fake executor: `core/test/errors.test.ts`.
+  - `exceedsContext`: `core/test/errors.test.ts`.
+  - `exceedsBudget`: `core/test/errors.test.ts`.
+  - `claudeCliRunner` high effort: `core/test/claudeCli.test.ts`.
+  - No VS Code mock. The panel/extension glue is not unit-tested.
+- Edge modes covered:
+  - ENOENT -> provider-missing/install-cli. EACCES/EPERM -> provider-missing/fix-permissions.
+  - AbortError or `code: "cancelled"` -> cancelled. Provider timeout -> timeout/retry, retryable true.
+  - 429/quota -> quota. 401/403/auth -> auth. Auth before timeout when both appear.
+  - Generic exit code 1 with stderr -> unknown, not auth.
+  - SyntaxError, empty output, invalid JSON -> invalid-response.
+  - Context overflow -> context-too-large. Unknown model provider -> provider-missing.
+  - A full FeedbackError passes through by reference.
+  - null/undefined/string/number -> unknown.
+  - A raw message containing a fake secret does not reach the message or cause.
+  - `checkHealth`: valid profile + success -> ok; invalid profile -> provider-missing with no executor call; Codex stub -> provider-missing with the Codex message; ENOENT -> install-cli; EACCES -> fix-permissions; timeout -> retry; synchronous throw -> mapped.
+  - `exceedsContext`: at limit false, one over true, zero/negative max false.
+  - `exceedsBudget`: at budget false, one over true.
+  - Quick-only, rules-only, and no-score states.
+  - A quick review aborted by a short edit clears the spinner with the fixed cancelled message.
+- Assumptions:
+  - `exceedsContext` takes the max token number directly. This is the published #42 shape. #36/#46 pass `provider.capabilities.maxContextTokens`.
+  - #36's bundle/manifest does not exist yet. The context/budget integration is a predicate contract for #36/#46, not an end-to-end panel check.
+  - The panel uses the legacy `claudeCliRunner` with the resolved model/effort and the workspace cwd. The provider `complete()` path is not used by the panel; #46 may use it.
+  - The tier-1 rule score is not the model score. "Show no score" in the degraded modes means no model `ScoreReport`.
+  - A true cancel button is #43. The supersede cleanup is not a user cancel.
+  - `mapError` uses English wording heuristics for quota/auth/timeout/invalid/context. An unknown wording falls back to `unknown` with `dismiss`, which is the safe default.
+- Consumers:
+  - #27: use `mapError`, `isRetryable`, `feedbackMessage`, and the degraded states for the score/send gate.
+  - #43: build the typed protocol and a real cancel action; reuse the `FeedbackError` union, fixed messages, actions, and health check.
+  - #46: use `exceedsContext(totalTokens, provider.capabilities.maxContextTokens)`, `exceedsBudget(manifest.totalTokens, manifest.budget)`, and the health check before deep feedback.
+  - #47: use `FeedbackError`/`feedbackMessage` for the deep review rendering.
+  - #10: map Codex CLI errors into the same union; the Codex stub is the seam.
+  - #12: use the error actions for direct extension input.
+  - #22: use `mapError`, `checkHealth`, and the actions for missing CLI/auth handling.
+- Open gaps:
+  - The real bundle token count and manifest budget do not exist until #36. The pre-check is a published predicate, not wired to the panel.
+  - A true user cancel action is #43. The panel only handles supersede cleanup and provider timeouts.
+  - The panel's actual review still uses the legacy `claudeCliRunner`, not the provider `complete()` path. The provider is used for validation and health. #46 may switch to `complete()`.
+  - The rule score remains visible on failure; only the model score is absent.
+- Change log:
+  - v1: initial contract merged in #42.
 
 ## Contract changes
 
@@ -535,6 +690,8 @@ Lane base for ticket #39: `ed0c1d7cb40aee3fe68e633d75b2896839ae124b`.
 | 2026-11-16 | #41 privacy boundary | none | v1 | #36, #38, #13, #46 |
 | 2026-11-16 | #35 JSONL repository | none | v1 | #38, #43, #45, #46, #15 |
 | 2026-11-16 | #39 model profiles | none | v1 | #42, #26, #46, #10, #12, #45, #38, #6, #22, #27 |
+| 2026-11-16 | #39 model profiles | v1 | v1.1 | #42, #43, #46; additive `claudeCliRunner` effort parameter, no break |
+| 2026-11-16 | #42 feedback errors | none | v1 | #27, #43, #46, #47, #10, #12, #22 |
 
 ## Dispatch notes
 
