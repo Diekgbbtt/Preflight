@@ -3,11 +3,18 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_SESSION_CAPS, discoverCandidates, parseClaudeSession, parseCodexSession, readSlice } from "../src/sessionSlice";
+import { DEFAULT_SESSION_CAPS, createSessionSliceSource, discoverCandidates, parseClaudeSession, parseCodexSession, readSlice, type SessionSliceSourceDeps } from "../src/sessionSlice";
+import type { SessionCandidate } from "../src/sessionLocator";
 import { redact } from "../src/privacy";
 
 const claudeFixture = readFileSync(new URL("./fixtures/claude/session-basic.jsonl", import.meta.url), "utf8");
 const codexFixture = readFileSync(new URL("./fixtures/codex/session-basic.jsonl", import.meta.url), "utf8");
+
+const CWD = "/Users/alice/proj";
+const at = (n: number) => `2026-01-02T10:00:${String(n).padStart(2, "0")}.000Z`;
+
+const claudeTurns = (turns: Array<{ role: "user" | "assistant"; text: string }>): string =>
+  turns.map((t, i) => JSON.stringify({ type: t.role, sessionId: "sess-x", timestamp: at(i), cwd: CWD, message: { role: t.role, content: t.text } })).join("\n") + "\n";
 
 describe("parseClaudeSession", () => {
   it("extracts metadata from the public format", () => {
@@ -213,12 +220,6 @@ describe("readSlice", () => {
     return file;
   };
 
-  const CWD = "/Users/alice/proj";
-  const at = (n: number) => `2026-01-02T10:00:${String(n).padStart(2, "0")}.000Z`;
-
-  const claudeTurns = (turns: Array<{ role: "user" | "assistant"; text: string }>): string =>
-    turns.map((t, i) => JSON.stringify({ type: t.role, sessionId: "sess-x", timestamp: at(i), cwd: CWD, message: { role: t.role, content: t.text } })).join("\n") + "\n";
-
   const options = { includeCode: "off" as const, redact };
 
   it("returns an empty slice with reason unsupported for an unknown provider", async () => {
@@ -382,5 +383,86 @@ describe("readSlice", () => {
     const file = await write("i18n.jsonl", claudeTurns([{ role: "user", text: "認証を追加してください" }, { role: "assistant", text: "理解しました" }]));
     const slice = await readSlice(file, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, options);
     expect(slice.turns.map((t) => t.text)).toEqual(["認証を追加してください", "理解しました"]);
+  });
+});
+
+describe("createSessionSliceSource", () => {
+  const clock = { now: () => 1_000_000 };
+  const FOLDER = "file:///Users/alice/proj";
+  const candidate: SessionCandidate = {
+    sessionId: "sess-x",
+    provider: "claude",
+    folderUri: FOLDER,
+    filePath: "/fixtures/sess-x.jsonl",
+    mtimeMs: clock.now() - 1000,
+  };
+
+  const deps = (over: Partial<SessionSliceSourceDeps> = {}): SessionSliceSourceDeps => ({
+    folderUri: FOLDER,
+    draft: "review my draft",
+    sends: [],
+    clock,
+    includeCode: "off",
+    redact,
+    ...over,
+  });
+
+  it("exposes the session-slice source id and priority 85", () => {
+    const source = createSessionSliceSource(deps({ candidates: [] }));
+    expect(source.id).toBe("session-slice");
+    expect(source.priority).toBe(85);
+  });
+
+  it("returns a formatted fragment when a candidate is found", async () => {
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-src-"));
+    const file = path.join(base, "sess-x.jsonl");
+    await fs.writeFile(file, claudeTurns([{ role: "user", text: "hello" }, { role: "assistant", text: "hi there" }]));
+    const result = await createSessionSliceSource(deps({ candidates: [{ ...candidate, filePath: file }] })).collect();
+    expect(result.fragments).toHaveLength(1);
+    const fragment = result.fragments[0];
+    expect(fragment.provenance).toMatchObject({ kind: "session", folderUri: FOLDER });
+    expect(fragment.provenance.redactions).toBe(0);
+    expect(fragment.tokens).toBeGreaterThan(0);
+    expect(fragment.content).toContain("sess-x");
+    expect(fragment.content).toContain("hello");
+    expect(fragment.content).not.toContain('"type":"user"');
+    expect(result.details).toMatchObject({ sourcePath: file, turnsKept: 2 });
+    await fs.rm(base, { recursive: true, force: true });
+  });
+
+  it("omits with reason empty when no session matches", async () => {
+    const result = await createSessionSliceSource(deps({ candidates: [] })).collect();
+    expect(result.fragments).toEqual([]);
+    expect(result.omittedReason).toBe("empty");
+  });
+
+  it("omits with reason empty and records ambiguity instead of guessing", async () => {
+    const a = { ...candidate, sessionId: "a", mtimeMs: clock.now() - 60_000 };
+    const b = { ...candidate, sessionId: "b", mtimeMs: clock.now() - 30_000 };
+    const result = await createSessionSliceSource(deps({ candidates: [a, b] })).collect();
+    expect(result.fragments).toEqual([]);
+    expect(result.omittedReason).toBe("empty");
+    expect(result.details).toMatchObject({ ambiguous: 2 });
+  });
+
+  it("omits with reason error when the linked file vanished after discovery", async () => {
+    const result = await createSessionSliceSource(
+      deps({ candidates: [{ ...candidate, filePath: "/gone/sess-x.jsonl" }], sendId: "send-9", sends: [{ schemaVersion: 1, seq: 1, id: "send-9", ts: new Date(clock.now() - 1000).toISOString(), draftId: "d1", folderUri: FOLDER, text: "t", promptHash: "h", sessionId: "sess-x", target: "terminal" }] }),
+    ).collect();
+    // A candidate whose file is gone: never guess a different session.
+    expect(result.fragments).toEqual([]);
+    expect(result.omittedReason).toBe("error");
+  });
+
+  it("discovers candidates when none are supplied, using the injected homeDir", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-disco-"));
+    const projectDir = path.join(home, ".claude", "projects", "-Users-alice-proj");
+    await fs.mkdir(projectDir, { recursive: true });
+    const file = path.join(projectDir, "sess-x.jsonl");
+    await fs.writeFile(file, claudeTurns([{ role: "user", text: "hello" }]));
+    const result = await createSessionSliceSource(deps({ homeDir: home })).collect();
+    expect(result.fragments).toHaveLength(1);
+    expect(result.fragments[0].content).toContain("hello");
+    await fs.rm(home, { recursive: true, force: true });
   });
 });

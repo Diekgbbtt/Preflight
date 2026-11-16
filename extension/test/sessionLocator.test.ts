@@ -52,7 +52,7 @@ describe("locateSession", () => {
       sendId: "send-9",
       folderUri: FOLDER,
       promptHash: "hash-1",
-      sends: [{ schemaVersion: 1, seq: 1, id: "send-9", ts: new Date(clock.now() - 1000).toISOString(), draftId: "d1", folderUri: FOLDER, text: "t", promptHash: "hash-1", sessionId: "s-linked" }],
+      sends: [{ schemaVersion: 1, seq: 1, id: "send-9", ts: new Date(clock.now() - 1000).toISOString(), draftId: "d1", folderUri: FOLDER, text: "t", promptHash: "hash-1", sessionId: "s-linked", target: "terminal" }],
       candidates: [c2, c1],
       clock,
     });
@@ -64,7 +64,7 @@ describe("locateSession", () => {
       sendId: "send-9",
       folderUri: FOLDER,
       promptHash: "hash-1",
-      sends: [{ schemaVersion: 1, seq: 1, id: "send-9", ts: new Date(clock.now() - 1000).toISOString(), draftId: "d1", folderUri: FOLDER, text: "t", promptHash: "hash-1", sessionId: "s-gone" }],
+      sends: [{ schemaVersion: 1, seq: 1, id: "send-9", ts: new Date(clock.now() - 1000).toISOString(), draftId: "d1", folderUri: FOLDER, text: "t", promptHash: "hash-1", sessionId: "s-gone", target: "terminal" }],
       candidates: [candidate({ sessionId: "s2", mtimeMs: clock.now() - 10 })],
       clock,
     });
@@ -78,8 +78,8 @@ describe("locateSession", () => {
       sendId: "send-9",
       folderUri: FOLDER,
       sends: [
-        { schemaVersion: 1, seq: 1, id: "send-9", ts: new Date(clock.now() - 5000).toISOString(), draftId: "d1", folderUri: FOLDER, text: "t", promptHash: "h", sessionId: "s-old" },
-        { schemaVersion: 1, seq: 2, id: "send-9", ts: new Date(clock.now() - 1000).toISOString(), draftId: "d1", folderUri: FOLDER, text: "t", promptHash: "h", sessionId: "s-new" },
+        { schemaVersion: 1, seq: 1, id: "send-9", ts: new Date(clock.now() - 5000).toISOString(), draftId: "d1", folderUri: FOLDER, text: "t", promptHash: "h", sessionId: "s-old", target: "terminal" },
+        { schemaVersion: 1, seq: 2, id: "send-9", ts: new Date(clock.now() - 1000).toISOString(), draftId: "d1", folderUri: FOLDER, text: "t", promptHash: "h", sessionId: "s-new", target: "terminal" },
       ],
       candidates: [cOld, cNew],
       clock,
@@ -92,7 +92,7 @@ describe("locateSession", () => {
     const result = locateSession({
       folderUri: FOLDER,
       promptHash: hashPrompt("Run the tests"),
-      sends: [{ schemaVersion: 1, seq: 1, id: "send-1", ts: new Date(clock.now() - 29 * 60 * 1000).toISOString(), draftId: "d1", folderUri: FOLDER, text: "Run the tests", promptHash: hashPrompt("Run the tests"), sessionId: "s-hash" }],
+      sends: [{ schemaVersion: 1, seq: 1, id: "send-1", ts: new Date(clock.now() - 29 * 60 * 1000).toISOString(), draftId: "d1", folderUri: FOLDER, text: "Run the tests", promptHash: hashPrompt("Run the tests"), sessionId: "s-hash", target: "terminal" }],
       candidates: [c],
       clock,
     });
@@ -104,7 +104,7 @@ describe("locateSession", () => {
     const result = locateSession({
       folderUri: FOLDER,
       promptHash: hashPrompt("Run the tests"),
-      sends: [{ schemaVersion: 1, seq: 1, id: "send-1", ts: new Date(clock.now() - 31 * 60 * 1000).toISOString(), draftId: "d1", folderUri: FOLDER, text: "Run the tests", promptHash: hashPrompt("Run the tests"), sessionId: "s-hash" }],
+      sends: [{ schemaVersion: 1, seq: 1, id: "send-1", ts: new Date(clock.now() - 31 * 60 * 1000).toISOString(), draftId: "d1", folderUri: FOLDER, text: "Run the tests", promptHash: hashPrompt("Run the tests"), sessionId: "s-hash", target: "terminal" }],
       candidates: [c],
       clock,
     });
@@ -118,8 +118,8 @@ describe("locateSession", () => {
       folderUri: FOLDER,
       promptHash: "hash-1",
       sends: [
-        { schemaVersion: 1, seq: 1, id: "send-1", ts: new Date(clock.now() - 2000).toISOString(), draftId: "d1", folderUri: FOLDER, text: "t", promptHash: "hash-1", sessionId: "s-a" },
-        { schemaVersion: 1, seq: 2, id: "send-2", ts: new Date(clock.now() - 1000).toISOString(), draftId: "d1", folderUri: FOLDER, text: "t", promptHash: "hash-1", sessionId: "s-b" },
+        { schemaVersion: 1, seq: 1, id: "send-1", ts: new Date(clock.now() - 2000).toISOString(), draftId: "d1", folderUri: FOLDER, text: "t", promptHash: "hash-1", sessionId: "s-a", target: "terminal" },
+        { schemaVersion: 1, seq: 2, id: "send-2", ts: new Date(clock.now() - 1000).toISOString(), draftId: "d1", folderUri: FOLDER, text: "t", promptHash: "hash-1", sessionId: "s-b", target: "terminal" },
       ],
       candidates: [c1, c2],
       clock,
@@ -132,7 +132,7 @@ describe("locateSession", () => {
     const result = locateSession({
       folderUri: FOLDER,
       promptHash: "hash-1",
-      sends: [{ schemaVersion: 1, seq: 1, id: "send-1", ts: new Date(clock.now() - 1000).toISOString(), draftId: "d1", folderUri: FOLDER, text: "t", promptHash: "hash-1", sessionId: "s-gone" }],
+      sends: [{ schemaVersion: 1, seq: 1, id: "send-1", ts: new Date(clock.now() - 1000).toISOString(), draftId: "d1", folderUri: FOLDER, text: "t", promptHash: "hash-1", sessionId: "s-gone", target: "terminal" }],
       candidates: [c],
       clock,
     });
@@ -183,7 +183,7 @@ describe("locateSession", () => {
     const skew = locateSession({
       folderUri: FOLDER,
       promptHash: "hash-1",
-      sends: [{ schemaVersion: 1, seq: 1, id: "send-1", ts: "not-a-date", draftId: "d1", folderUri: FOLDER, text: "t", promptHash: "hash-1", sessionId: "s-hash" }],
+      sends: [{ schemaVersion: 1, seq: 1, id: "send-1", ts: "not-a-date", draftId: "d1", folderUri: FOLDER, text: "t", promptHash: "hash-1", sessionId: "s-hash", target: "terminal" }],
       candidates: [old],
       clock,
     });

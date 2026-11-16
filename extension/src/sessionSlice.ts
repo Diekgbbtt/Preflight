@@ -2,11 +2,14 @@
 // Discovers Claude and Codex session files, parses the public JSONL formats
 // into a derived SessionSlice, and applies the privacy policy and redaction.
 // No vscode import, no picker, and no raw transcript leaves this module.
+import * as os from "node:os";
 import * as path from "node:path";
 import { open, readdir, stat } from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { estimateTokens, type Clock, type ContextSource } from "@prompt-preflight/core";
-import { canonicalFolderUri, type SessionCandidate, type SessionProvider } from "./sessionLocator";
+import type { Event, ModelCapabilities, ModelProfile, SendRecord } from "@prompt-preflight/core";
+import { estimateTokens, SOURCE_PRIORITIES, type Clock, type ContextSource, type ContextSourceResult } from "@prompt-preflight/core";
+import { canonicalFolderUri, locateSession, type SessionCandidate, type SessionProvider } from "./sessionLocator";
 import { shouldInclude, type IncludeCode } from "./privacy";
 
 /** Caps for one slice: turns kept, token budget, and the byte window. */
@@ -673,7 +676,7 @@ export async function discoverCandidates(folderUri: string, homeDir: string): Pr
   // Claude: one directory per workspace, path separators encoded as "-".
   const encoded = folderPath.split(path.sep).join("-");
   const claudeDir = path.join(homeDir, ".claude", "projects", encoded);
-  let claudeEntries;
+  let claudeEntries: Dirent[];
   try {
     claudeEntries = await readdir(claudeDir, { withFileTypes: true });
   } catch (error) {
@@ -986,4 +989,147 @@ function ownerTurnIndex(parsed: ParsedSession, call: ToolCall): number {
     owner = index;
   });
   return owner;
+}
+
+// ---------------------------------------------------------------------------
+// Formatting and the context source
+// ---------------------------------------------------------------------------
+
+/** Renders one bounded slice as stable plain text. One line per call, error and test. */
+export function formatSessionSlice(slice: SessionSlice): string {
+  const lines: string[] = [];
+  lines.push(`session: ${slice.sessionId} (${slice.provider})`);
+  if (slice.folderUri) lines.push(`folder: ${slice.folderUri}`);
+  if (slice.startedAt || slice.endedAt) {
+    lines.push(`window: ${slice.startedAt ?? "unknown"} to ${slice.endedAt ?? "unknown"}`);
+  }
+  if (slice.turns.length > 0) {
+    lines.push("turns:");
+    for (const turn of slice.turns) {
+      const at = turn.at ? ` @${turn.at}` : "";
+      lines.push(`- [${turn.role}]${at} ${turn.text}`);
+      for (const code of turn.code ?? []) {
+        lines.push(`  code (${turn.codePath ?? "unknown path"}):`);
+        for (const line of code.split("\n")) lines.push(`  ${line}`);
+      }
+    }
+  }
+  if (slice.toolCalls.length > 0) {
+    lines.push("tool calls:");
+    for (const call of slice.toolCalls) {
+      const at = call.at ? ` @${call.at}` : "";
+      lines.push(`- ${call.name} [${call.status}] ${call.summary}${at}`);
+    }
+  }
+  if (slice.errors.length > 0) {
+    lines.push("errors:");
+    for (const error of slice.errors) {
+      const at = error.at ? ` @${error.at}` : "";
+      lines.push(`- [${error.status}] ${error.message}${at}`);
+    }
+  }
+  if (slice.testResults.length > 0) {
+    lines.push("tests:");
+    for (const result of slice.testResults) {
+      const at = result.at ? ` @${result.at}` : "";
+      lines.push(`- ${result.name} [${result.status}]${at}`);
+    }
+  }
+  if (slice.changedFiles.length > 0) lines.push(`changed files: ${slice.changedFiles.join(", ")}`);
+  return lines.join("\n");
+}
+
+/** Inputs of the session-slice context source. Everything impure is injected. */
+export interface SessionSliceSourceDeps {
+  folderUri: string;
+  draft: string;
+  homeDir?: string;
+  candidates?: SessionCandidate[];
+  sends: Array<Event<SendRecord>>;
+  sendId?: string;
+  promptHash?: string;
+  clock: Clock;
+  caps?: SessionCaps;
+  /** #39's profile; capabilities ride along because ModelProfile alone has none. */
+  profile?: ModelProfile & { capabilities?: ModelCapabilities };
+  includeCode: IncludeCode;
+  activeFileUri?: string;
+  redact(text: string): { text: string; count: number };
+}
+
+/** Mirrors the core assembler's abort convention. */
+function abortError(signal: AbortSignal | undefined): Error {
+  if (signal?.reason instanceof Error) return signal.reason;
+  return Object.assign(new Error("cancelled"), { code: "cancelled" });
+}
+
+/**
+ * The `session-slice` ContextSource at priority 85. Discovers candidates when
+ * they are not supplied, locates one session, reads the bounded slice, and
+ * returns it as one redacted fragment. Ambiguity is reported, never guessed.
+ */
+export function createSessionSliceSource(deps: SessionSliceSourceDeps): ContextSource {
+  return {
+    id: "session-slice",
+    priority: SOURCE_PRIORITIES["session-slice"],
+    async collect(signal?: AbortSignal): Promise<ContextSourceResult> {
+      if (signal?.aborted) throw abortError(signal);
+      const caps: SessionCaps = { ...(deps.caps ?? DEFAULT_SESSION_CAPS) };
+      const maxContext = deps.profile?.capabilities?.maxContextTokens ?? 0;
+      if (Number.isFinite(maxContext) && maxContext > 0) caps.maxTokens = Math.min(caps.maxTokens, maxContext);
+
+      const candidates = deps.candidates ?? (await discoverCandidates(deps.folderUri, deps.homeDir ?? os.homedir()));
+      const location = locateSession({
+        sendId: deps.sendId,
+        folderUri: deps.folderUri,
+        promptHash: deps.promptHash,
+        sends: deps.sends,
+        candidates,
+        clock: deps.clock,
+      });
+
+      if (location.kind === "none") {
+        return { fragments: [], omittedReason: "empty", details: { resolved: "none" } };
+      }
+      if (location.kind === "ambiguous") {
+        // The caller owns the picker; the source never guesses a session.
+        return { fragments: [], omittedReason: "empty", details: { ambiguous: location.candidates.length } };
+      }
+
+      const slice = await readSlice(location.candidate.filePath, location.candidate.provider, caps, deps.clock, {
+        includeCode: deps.includeCode,
+        activeFileUri: deps.activeFileUri,
+        redact: deps.redact,
+      });
+      const details = {
+        sourcePath: slice.provenance.sourcePath,
+        bytesRead: slice.provenance.bytesRead,
+        turnsKept: slice.provenance.turnsKept,
+      };
+      const reason = slice.provenance.reason;
+      if (reason === "unsupported") return { fragments: [], omittedReason: "unsupported", details };
+      if (reason === "error") return { fragments: [], omittedReason: "error", details };
+      if (reason === "empty") return { fragments: [], omittedReason: "empty", details };
+
+      const content = formatSessionSlice(slice);
+      return {
+        fragments: [
+          {
+            source: "session-slice",
+            priority: SOURCE_PRIORITIES["session-slice"],
+            content,
+            tokens: estimateTokens(content),
+            provenance: {
+              kind: "session",
+              truncated: slice.truncated,
+              chars: content.length,
+              redactions: slice.provenance.redactions,
+              folderUri: deps.folderUri,
+            },
+          },
+        ],
+        details,
+      };
+    },
+  };
 }
