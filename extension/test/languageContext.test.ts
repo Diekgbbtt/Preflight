@@ -8,11 +8,14 @@ import {
   buildSymbolsFragment,
   buildWorkspaceSymbolsFragment,
   probeCapabilities,
+  searchFallback,
   withTimeout,
   type LanguageApi,
   type LanguageDiagnostic,
   type LanguageLocation,
   type LanguageSymbol,
+  type TextSearchMatch,
+  type TextSearchOptions,
 } from "../src/languageContext";
 
 const at = (line: number, character: number) => ({ line, character });
@@ -368,6 +371,109 @@ describe("probeCapabilities", () => {
       references: false,
       diagnostics: true,
     });
+  });
+});
+
+describe("searchFallback", () => {
+  const match = (path: string, line = 0, preview = "let x"): TextSearchMatch => ({
+    uri: `file:///w/${path}`,
+    path,
+    range: { start: at(line, 3), end: at(line, 7) },
+    preview,
+  });
+  const apiWith = (matches: TextSearchMatch[], calls?: { query?: string; options?: TextSearchOptions }[]): LanguageApi => ({
+    documentSymbols: async () => [],
+    workspaceSymbols: async () => [],
+    definitions: async () => [],
+    references: async () => [],
+    diagnostics: async () => [],
+    textSearch: async (query, options) => {
+      calls?.push({ query, options });
+      return matches;
+    },
+  });
+  const options = {
+    sourceId: "symbols" as const,
+    priority: 40,
+    cwd: "/w",
+    folderUri: "file:///w",
+  };
+
+  it("returns null for an empty or whitespace query", async () => {
+    await expect(searchFallback(apiWith([match("a.ts")]), "  ", options)).resolves.toBeNull();
+  });
+
+  it("builds a text-search fragment with the source id and priority from the options", async () => {
+    const fragment = await searchFallback(apiWith([match("src/a.ts", 4, "makeThing() {")]), "makeThing", options);
+    expect(fragment?.source).toBe("symbols");
+    expect(fragment?.priority).toBe(40);
+    expect(fragment?.content).toBe("src/a.ts:5:4 makeThing() {");
+    expect(fragment?.provenance.kind).toBe("text-search");
+    expect(fragment?.provenance.truncated).toBe(false);
+  });
+
+  it("caps at 50 matches and marks truncated", async () => {
+    const matches = Array.from({ length: 60 }, (_, i) => match(`f${i}.ts`, i));
+    const fragment = await searchFallback(apiWith(matches), "pat", options);
+    expect(fragment?.content.split("\n")).toHaveLength(50);
+    expect(fragment?.provenance.truncated).toBe(true);
+  });
+
+  it("passes maxResults to the text search and defaults to 50", async () => {
+    const calls: Array<{ query?: string; options?: TextSearchOptions }> = [];
+    await searchFallback(apiWith([], calls), "pat", options);
+    expect(calls[0]?.query).toBe("pat");
+    expect(calls[0]?.options).toEqual({ cwd: "/w", maxResults: 50 });
+    await searchFallback(apiWith([], calls), "pat", { ...options, maxResults: 10 });
+    expect(calls[1]?.options).toEqual({ cwd: "/w", maxResults: 10 });
+  });
+
+  it("returns null when every match is outside the workspace", async () => {
+    const fragment = await searchFallback(apiWith([match("/etc/passwd"), match("../outside.ts")]), "pat", options);
+    expect(fragment).toBeNull();
+  });
+
+  it("filters matches with allowPath", async () => {
+    const fragment = await searchFallback(apiWith([match("secret.env"), match("a.ts")]), "pat", {
+      ...options,
+      allowPath: (path) => path === "a.ts",
+    });
+    expect(fragment?.content).toBe("a.ts:1:4 let x");
+  });
+
+  it("returns null with no matches", async () => {
+    await expect(searchFallback(apiWith([]), "pat", options)).resolves.toBeNull();
+  });
+
+  it("rethrows an ENOENT failure with code ENOENT", async () => {
+    const api: LanguageApi = {
+      documentSymbols: async () => [],
+      workspaceSymbols: async () => [],
+      definitions: async () => [],
+      references: async () => [],
+      diagnostics: async () => [],
+      textSearch: async () => {
+        throw Object.assign(new Error("rg is missing"), { code: "ENOENT" });
+      },
+    };
+    await expect(searchFallback(api, "pat", options)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("throws the cancelled error on abort", async () => {
+    const controller = new AbortController();
+    const api: LanguageApi = {
+      documentSymbols: async () => [],
+      workspaceSymbols: async () => [],
+      definitions: async () => [],
+      references: async () => [],
+      diagnostics: async () => [],
+      textSearch: () =>
+        new Promise<TextSearchMatch[]>((_, reject) => {
+          controller.signal.addEventListener("abort", () => reject(Object.assign(new Error("cancelled"), { code: "cancelled" })), { once: true });
+        }),
+    };
+    controller.abort();
+    await expect(searchFallback(api, "pat", options, controller.signal)).rejects.toMatchObject({ code: "cancelled" });
   });
 });
 

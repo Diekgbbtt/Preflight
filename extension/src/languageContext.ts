@@ -22,8 +22,7 @@ export interface LanguageRange {
   end: LanguagePosition;
 }
 
-/** Where one language result points: the raw uri plus a workspace path when known. */
-export interface LanguageAnchor {
+/** Where one language result points: the raw uri plus a workspace path when known. */export interface LanguageAnchor {
   uri: string;
   /** Workspace-relative POSIX path, or undefined for untitled/virtual documents. */
   path?: string;
@@ -56,6 +55,19 @@ export interface TextSearchMatch extends LanguageAnchor {
 export interface TextSearchOptions {
   cwd?: string;
   maxResults: number;
+}
+
+/** Everything searchFallback needs to stand in for one LSP source. */
+export interface SearchFallbackOptions {
+  /** The LSP source id the fragment replaces; also the fragment's source. */
+  sourceId: ContextSourceId;
+  /** The LSP source priority the fragment keeps. */
+  priority: number;
+  cwd?: string;
+  maxResults?: number;
+  folderUri?: string;
+  /** Extra privacy filter on workspace-relative paths; workspace boundary and #41 exclusions stay mandatory. */
+  allowPath?: (path: string) => boolean;
 }
 
 /** The injected port the pure module calls; the adapter implements it over vscode. */
@@ -266,6 +278,53 @@ export function buildReferencesFragment(references: LanguageLocation[], folderUr
     capped: references.length > MAX_REFERENCES,
     folderUri,
   });
+}
+
+/**
+ * Text-search fallback that stands in for one LSP source: same source id,
+ * same priority, provenance kind `text-search`. Never runs without a query.
+ * An `rg` failure with code ENOENT rethrows so the source can omit with
+ * `unsupported`; matches outside the workspace or rejected by `allowPath`
+ * are dropped.
+ */
+export async function searchFallback(api: LanguageApi, query: string, options: SearchFallbackOptions, signal?: AbortSignal): Promise<ContextFragment | null> {
+  if (query.trim() === "") return null;
+  const cap = options.maxResults ?? MAX_TEXT_SEARCH_MATCHES;
+  let matches: TextSearchMatch[];
+  try {
+    matches = await withTimeout(api.textSearch(query, { cwd: options.cwd, maxResults: cap }), MAX_TIMEOUT_MS, signal);
+  } catch (error) {
+    if (signal?.aborted) throw cancelledError();
+    if ((error as { code?: unknown } | null)?.code === "ENOENT") {
+      throw Object.assign(new Error("rg is not available"), { code: "ENOENT" });
+    }
+    throw error;
+  }
+  const allowed = matches.filter((m) => {
+    const path = m.path;
+    if (path === undefined || path === "" || isOutsideWorkspace(path)) return false;
+    return options.allowPath === undefined || options.allowPath(path);
+  });
+  if (allowed.length === 0) return null;
+  const included = allowed.slice(0, cap);
+  const content = included.map((m) => {
+    const base = `${m.path ?? m.uri}:${positionLabel(m.range.start)}`;
+    const preview = m.preview !== undefined ? ` ${collapse(m.preview)}` : "";
+    return `${base}${preview}`;
+  });
+  const joined = content.join("\n");
+  return {
+    source: options.sourceId,
+    priority: options.priority,
+    content: joined,
+    tokens: estimateTokens(joined),
+    provenance: {
+      kind: "text-search",
+      truncated: allowed.length > included.length,
+      chars: joined.length,
+      ...(options.folderUri !== undefined ? { folderUri: options.folderUri } : {}),
+    },
+  };
 }
 
 /**
