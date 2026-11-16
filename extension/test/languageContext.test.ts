@@ -480,6 +480,13 @@ describe("searchFallback", () => {
     expect(fragment?.provenance.truncated).toBe(true);
   });
 
+  it("clamps an overriding maxResults to the 50-match cap", async () => {
+    const matches = Array.from({ length: 60 }, (_, i) => match(`f${i}.ts`, i));
+    const fragment = await searchFallback(apiWith(matches), "pat", { ...options, maxResults: 60 });
+    expect(fragment?.content.split("\n")).toHaveLength(50);
+    expect(fragment?.provenance.truncated).toBe(true);
+  });
+
   it("passes maxResults to the text search and defaults to 50", async () => {
     const calls: Array<{ query?: string; options?: TextSearchOptions }> = [];
     await searchFallback(apiWith([], calls), "pat", options);

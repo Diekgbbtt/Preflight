@@ -296,7 +296,7 @@ export function buildReferencesFragment(references: LanguageLocation[], folderUr
  */
 export async function searchFallback(api: LanguageApi, query: string, options: SearchFallbackOptions, signal?: AbortSignal): Promise<ContextFragment | null> {
   if (query.trim() === "") return null;
-  const cap = options.maxResults ?? MAX_TEXT_SEARCH_MATCHES;
+  const cap = Math.min(options.maxResults ?? MAX_TEXT_SEARCH_MATCHES, MAX_TEXT_SEARCH_MATCHES);
   let matches: TextSearchMatch[];
   try {
     matches = await withTimeout(api.textSearch(query, { cwd: options.cwd, maxResults: cap }), MAX_TIMEOUT_MS, signal);
