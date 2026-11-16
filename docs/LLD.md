@@ -23,7 +23,7 @@ flowchart TB
     FS --> RE[RuleEngine]
     FS --> CA[ContextAssembler]
     FS --> DP[buildDeepPrompt]
-    DP --> IF[Instruction files]
+    FS --> IF[InstructionLoader]
     FS --> MP[ModelProvider]
     SS --> GP[GatePolicy]
     PS --> DR[DraftRepository]
@@ -109,10 +109,10 @@ sequenceDiagram
     F-->>P: render
     U->>P: deep(draft, answers)
     P->>F: deep(draft, answers)
-    F->>X: build(draft, answers)
-    X-->>F: ContextBundle and Manifest
     F->>I: loadInstructionBlock(draft)
     I-->>F: block and files
+    F->>X: build(draft, answers, files)
+    X-->>F: ContextBundle and Manifest
     F->>D: buildDeepPrompt(bundle, block)
     D-->>F: system and user
     F->>M: complete(system, user)
