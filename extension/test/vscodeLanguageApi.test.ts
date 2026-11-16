@@ -249,6 +249,44 @@ describe("createVscodeLanguageApi probe and openDocuments", () => {
     await expect(api.probe("file:///w/src/a.ts", controller.signal)).rejects.toMatchObject({ code: "cancelled" });
   });
 
+  it("keeps one cache entry per uri and recomputes when a version is seen again", async () => {
+    vscodeMock.workspace.textDocuments = [openDoc];
+    vscodeMock.commands.executeCommand.mockResolvedValue([]);
+    vscodeMock.languages.getDiagnostics.mockReturnValue([]);
+    const api = createVscodeLanguageApi();
+    await api.probe("file:///w/src/a.ts"); // version 1 computed
+    vscodeMock.workspace.textDocuments = [{ ...openDoc, version: 2 }];
+    await api.probe("file:///w/src/a.ts"); // version 2 computed
+    const callsAfterTwoVersions = vscodeMock.commands.executeCommand.mock.calls.length;
+    vscodeMock.workspace.textDocuments = [openDoc]; // back to version 1
+    await api.probe("file:///w/src/a.ts");
+    // One entry per uri: version 1 is no longer cached after the version 2
+    // probe replaced it, so this must recompute instead of serving a stale hit.
+    expect(vscodeMock.commands.executeCommand.mock.calls.length).toBeGreaterThan(callsAfterTwoVersions);
+  });
+
+  it("caches falsy capabilities for the version, not just truthy ones", async () => {
+    vscodeMock.workspace.textDocuments = [openDoc];
+    vscodeMock.commands.executeCommand.mockRejectedValue(new Error("no providers"));
+    const api = createVscodeLanguageApi();
+    await expect(api.probe("file:///w/src/a.ts")).resolves.toEqual({
+      documentSymbols: false,
+      workspaceSymbols: false,
+      definitions: false,
+      references: false,
+      diagnostics: false,
+    });
+    const callsAfterFirst = vscodeMock.commands.executeCommand.mock.calls.length;
+    await expect(api.probe("file:///w/src/a.ts")).resolves.toEqual({
+      documentSymbols: false,
+      workspaceSymbols: false,
+      definitions: false,
+      references: false,
+      diagnostics: false,
+    });
+    expect(vscodeMock.commands.executeCommand.mock.calls.length).toBe(callsAfterFirst);
+  });
+
   it("lists open file documents with POSIX relative paths", () => {
     vscodeMock.workspace.textDocuments = [openDoc, { uri: { scheme: "untitled", fsPath: "Untitled-1", toString: () => "untitled:Untitled-1" }, version: 3 }];
     const api = createVscodeLanguageApi();

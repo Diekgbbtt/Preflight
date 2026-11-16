@@ -34,7 +34,9 @@ export function createVscodeLanguageApi(options: VscodeLanguageApiOptions = {}):
   openDocuments(): Array<{ uri: string; path: string }>;
 } {
   const rgCommand = options.rg ?? rg;
-  const probeCache = new Map<string, LanguageCapabilities | null>();
+  // One entry per uri, replaced on every computed probe: bounded by the
+  // number of open documents, never by the number of edits.
+  const probeCache = new Map<string, { version: number; capabilities: LanguageCapabilities | null }>();
 
   const toUri = (uri: string): vscode.Uri => vscode.Uri.parse(uri);
   const toPosition = (position: LanguagePosition): vscode.Position => new vscode.Position(position.line, position.character);
@@ -188,11 +190,10 @@ export function createVscodeLanguageApi(options: VscodeLanguageApiOptions = {}):
       const target = toUri(uri);
       const document = vscode.workspace.textDocuments.find((candidate) => candidate.uri.toString() === target.toString());
       if (!document) return null;
-      const key = `${uri}@${document.version}`;
-      const cached = probeCache.get(key);
-      if (cached !== undefined) return cached;
+      const cached = probeCache.get(uri);
+      if (cached !== undefined && cached.version === document.version) return cached.capabilities;
       const capabilities = await probeCapabilities(api, uri, 3000, signal);
-      probeCache.set(key, capabilities);
+      probeCache.set(uri, { version: document.version, capabilities });
       return capabilities;
     },
 
