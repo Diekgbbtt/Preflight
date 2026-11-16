@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveProfile, type Config } from "../src/model";
+import { createProvider, resolveProfile, type Config, type ModelProfile } from "../src/model";
 
 const base: Config = {
   provider: "claude",
@@ -52,5 +52,74 @@ describe("resolveProfile", () => {
     const workspace: Config = { ...base, thinkingEffort: "high", deepModel: "opus" };
     expect(resolveProfile(user, "deep").thinkingEffort).toBe("low");
     expect(resolveProfile(workspace, "deep")).toEqual({ provider: "claude", model: "opus", thinkingEffort: "high" });
+  });
+});
+
+describe("createProvider", () => {
+  const claudeProfile: ModelProfile = { provider: "claude", model: "sonnet", thinkingEffort: "medium" };
+  const codexProfile: ModelProfile = { provider: "codex", model: "gpt-5", thinkingEffort: "high" };
+  const config: Config = { ...base };
+
+  it("binds a Claude profile to the Claude adapter", () => {
+    const provider = createProvider(claudeProfile, config);
+    expect(provider.capabilities).toEqual({
+      structuredOutput: true,
+      thinkingEffort: true,
+      maxContextTokens: 200_000,
+      cost: { inputPerMTok: 2, outputPerMTok: 10 },
+      supportsInstructionFiles: true,
+    });
+  });
+
+  it("binds a Codex profile to the stub with unknown capabilities", () => {
+    const provider = createProvider(codexProfile, config);
+    expect(provider.capabilities).toEqual({
+      structuredOutput: false,
+      thinkingEffort: false,
+      maxContextTokens: 0,
+      cost: { inputPerMTok: 0, outputPerMTok: 0 },
+      supportsInstructionFiles: false,
+    });
+  });
+
+  it("accepts a valid Claude profile and never rejects the default profile for its effort", () => {
+    const provider = createProvider(claudeProfile, config);
+    expect(provider.validateProfile(claudeProfile)).toEqual({ ok: true });
+    expect(provider.validateProfile({ provider: "claude", model: "haiku", thinkingEffort: "high" })).toEqual({ ok: true });
+  });
+
+  it("rejects a profile whose provider is not claude", () => {
+    const provider = createProvider(claudeProfile, config);
+    const result = provider.validateProfile(codexProfile);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toContain("claude");
+  });
+
+  it("rejects an empty model without throwing", () => {
+    const provider = createProvider(claudeProfile, config);
+    const result = provider.validateProfile({ provider: "claude", model: "   ", thinkingEffort: "medium" });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a thinking effort outside the enum", () => {
+    const provider = createProvider(claudeProfile, config);
+    const result = provider.validateProfile({
+      provider: "claude",
+      model: "sonnet",
+      thinkingEffort: "urgent" as ModelProfile["thinkingEffort"],
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("always rejects the Codex stub with a clear message", () => {
+    const provider = createProvider(codexProfile, config);
+    expect(provider.validateProfile(codexProfile)).toEqual({
+      ok: false,
+      message: "Codex provider is not implemented; use Claude.",
+    });
+  });
+
+  it("throws for an unknown provider at runtime", () => {
+    expect(() => createProvider({ ...claudeProfile, provider: "openai" as ModelProfile["provider"] }, config)).toThrow(/Unknown model provider/);
   });
 });
