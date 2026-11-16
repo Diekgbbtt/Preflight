@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { analyze, extractJson, parseCliOutput, review, type ModelRunner } from "../src";
+import { analyze, extractJson, hashPrompt, parseCliOutput, review, type ModelRunner } from "../src";
+
+describe("hashPrompt", () => {
+  it.each([
+    ["", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"],
+    ["hello", "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"],
+    ["  hello\r\nworld  ", "26c60a61d01db5836ca70fefd44a6a016620413c8ef5f259a6c5612d4f79d3b8"],
+    ["Target: src/a.ts\nAction: add a test", "380c8cdb25423d97431861938064739609ddfdc729ab81fafa996983e36fbba8"],
+  ])("hashes %j to the known vector", (text, expected) => {
+    expect(hashPrompt(text)).toBe(expected);
+  });
+});
 
 describe("review", () => {
   it("parses fenced JSON and maps quotes to ranges", async () => {
