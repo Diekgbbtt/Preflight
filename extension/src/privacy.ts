@@ -40,29 +40,33 @@ const SENTINEL = "\u0000";
 // Marker wrapped around each replaced span during the sequential pass. No
 // SECRETS pattern can match it, and its leading space stops the
 // password-assignment value part (`[^\s"']{6,}`) from re-matching it. The
-// counter keeps every marker unique, so a genuine NUL or an unrelated byte in
-// the input is preserved untouched.
-let markerCounter = 0;
+// counter keeps every marker unique, so only markers actually inserted during
+// a call are turned into `[redacted]`; a marker-like string in the input or a
+// genuine NUL is preserved untouched.
 const markerFor = (n: number) => `[ [preflight-redacted-${n}] ]`;
 
 /**
  * Replaces every SECRETS match with `[redacted]` and reports how many were replaced.
  * Patterns are applied sequentially to the updated text with fresh regex clones,
  * so shared global regex state and cross-pattern double counting are impossible.
- * Every marker is replaced with `[redacted]` at the end. Never logs the matches
- * or the original text.
+ * Every marker inserted during this call is replaced with `[redacted]` at the
+ * end. Never logs the matches or the original text.
  */
 export function redact(text: string): RedactionResult {
   let masked = text;
   let count = 0;
+  const markers: string[] = [];
   for (const pattern of SECRETS) {
     const re = new RegExp(pattern.source, pattern.flags);
-    masked = masked.replace(re, () => markerFor(count++));
+    masked = masked.replace(re, () => {
+      const marker = markerFor(count++);
+      markers.push(marker);
+      return marker;
+    });
   }
-  return {
-    text: masked.replace(/\[ \[preflight-redacted-\d+\] \]/g, "[redacted]"),
-    count,
-  };
+  let text2 = masked;
+  for (const marker of markers) text2 = text2.split(marker).join("[redacted]");
+  return { text: text2, count };
 }
 
 /** How much code context may be included in a model call. */

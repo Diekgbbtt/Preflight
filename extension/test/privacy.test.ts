@@ -129,6 +129,13 @@ describe("redact", () => {
     expect(result.text).toBe("a\u0000b");
     expect(result.count).toBe(0);
   });
+
+  it("leaves a pre-existing marker-like string untouched when nothing matched", () => {
+    const text = "[ [preflight-redacted-1] ]";
+    const result = redact(text);
+    expect(result.text).toBe(text);
+    expect(result.count).toBe(0);
+  });
 });
 
 describe("shouldInclude", () => {
