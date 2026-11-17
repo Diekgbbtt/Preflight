@@ -1,5 +1,6 @@
 import * as P from "./patterns";
 import type { Analysis, Dimensions, Finding, Level, Range, WorkspaceContext } from "./types";
+import { levelForScore } from "./schema";
 
 interface Match extends Range {
   text: string;
@@ -236,7 +237,7 @@ export function analyze(prompt: string, ctx: WorkspaceContext = {}): Analysis {
 
   const dimensions: Dimensions = { target, action, scope, done };
   const score = target + action + scope + done;
-  const level: Level = score >= 80 ? "clear" : score >= 55 ? "needs-work" : "vague";
+  const level: Level = levelForScore(score);
   const hasUnfilled = findings.some((f) => f.rule === "placeholder");
   const shouldClarify =
     hasSecret ||
@@ -264,7 +265,7 @@ function result(
 ): Analysis {
   const score = dimensions.target + dimensions.action + dimensions.scope + dimensions.done;
   findings.sort((a, b) => (a.range?.start ?? Infinity) - (b.range?.start ?? Infinity));
-  return { level, score, dimensions, findings, questions, shouldClarify, skipped };
+  return { level, score, dimensions, findings, questions, shouldClarify, skipped, hardBlock: findings.some((f) => f.severity === "error") };
 }
 
 function buildQuestions(
