@@ -309,8 +309,7 @@ export function createCodeTools(options: CodeToolsOptions): CodebaseTools {
     return { items: capped.items, truncated: capped.truncated, dropped };
   };
 
-  const fallback = async (query: string | undefined, signal?: AbortSignal): Promise<TextSearchToolResult> => {
-    if (query === undefined || query.trim() === "") return { ...emptyResult("empty"), fallback: "text-search" };
+  const fallback = async (query: string, signal?: AbortSignal): Promise<TextSearchToolResult> => {
     const result = await searchText({ query }, signal);
     return { ...result, fallback: "text-search" };
   };
@@ -331,6 +330,7 @@ export function createCodeTools(options: CodeToolsOptions): CodebaseTools {
     const capped = cap(filtered, caps.documentSymbols);
     if (capped.items.length > 0) return { items: capped.items, truncated: capped.truncated, dropped };
     if (dropped > 0) return emptyResult("empty", dropped);
+    if (input.query === undefined || input.query.trim() === "") return emptyResult("empty");
     return fallback(input.query, signal);
   };
 
@@ -374,6 +374,7 @@ export function createCodeTools(options: CodeToolsOptions): CodebaseTools {
     const capped = cap(filtered, caps.definitions);
     if (capped.items.length > 0) return { items: capped.items, truncated: capped.truncated, dropped };
     if (dropped > 0) return emptyResult("empty", dropped);
+    if (input.query === undefined || input.query.trim() === "") return emptyResult("empty");
     return fallback(input.query, signal);
   };
 
@@ -404,6 +405,7 @@ export function createCodeTools(options: CodeToolsOptions): CodebaseTools {
     const capped = cap(filtered, caps.references);
     if (capped.items.length > 0) return { items: capped.items, truncated: capped.truncated, dropped };
     if (dropped > 0) return emptyResult("empty", dropped);
+    if (input.query === undefined || input.query.trim() === "") return emptyResult("empty");
     return fallback(input.query, signal);
   };
 

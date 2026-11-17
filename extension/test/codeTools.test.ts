@@ -100,6 +100,13 @@ describe("documentSymbols tool", () => {
     expect(search).not.toHaveBeenCalled();
   });
 
+  it("omits empty without a query and does not mark a fallback", async () => {
+    const result = await tools({ protocol: { documentSymbols: async () => [] } }).documentSymbols({ path: "src/a.ts" });
+    expect(result.items).toEqual([]);
+    expect(result.omittedReason).toBe("empty");
+    expect(result.fallback).toBeUndefined();
+  });
+
   it("omits excluded when the input path is outside the policy", async () => {
     const result = await tools({ policy: { includeCode: "prompt-files", promptFiles: [] } }).documentSymbols({ path: "src/a.ts" });
     expect(result.items).toEqual([]);

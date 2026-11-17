@@ -586,6 +586,7 @@ describe("relativeToWorkspace", () => {
     expect(relativeToWorkspace("C:\\Users\\alice\\proj\\src\\app.ts", "C:\\Users\\alice\\proj", path.win32)).toBe("src/app.ts");
     expect(relativeToWorkspace("D:\\other\\app.ts", "C:\\Users\\alice\\proj", path.win32)).toBeNull();
     expect(relativeToWorkspace("C:\\Users\\alice\\proj\\..\\secret.ts", "C:\\Users\\alice\\proj", path.win32)).toBeNull();
+    expect(relativeToWorkspace("\\\\server\\share\\proj\\src\\app.ts", "\\\\server\\share\\proj", path.win32)).toBe("src/app.ts");
   });
 });
 

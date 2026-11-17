@@ -827,7 +827,7 @@ export function relativeToWorkspace(
 ): string | null {
   if (!raw) return null;
   let rel = raw;
-  if (/^[A-Za-z]:[\\/]/.test(raw) || raw.startsWith("/")) {
+  if (/^[A-Za-z]:[\\/]/.test(raw) || raw.startsWith("/") || raw.startsWith("\\\\")) {
     if (!cwdPath) return null;
     rel = pathApi.relative(cwdPath, raw);
   }

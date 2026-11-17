@@ -95,11 +95,12 @@ export async function resolvePromptFileRefs(
 
     const match = matches[0];
     const key = `${match.root.uri}\0${match.path}`;
-    if (seen.has(key)) {
+    const dedupeKey = pathApi.sep === "\\" ? key.toLowerCase() : key;
+    if (seen.has(dedupeKey)) {
       duplicate++;
       continue;
     }
-    seen.add(key);
+    seen.add(dedupeKey);
     files.push({ ref, path: match.path, fsPath: match.fsPath, folderUri: match.root.uri });
   }
 

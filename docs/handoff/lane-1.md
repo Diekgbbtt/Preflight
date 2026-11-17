@@ -16,6 +16,10 @@ Every entry has a contract version and a change log.
 | #36 | merged | ticket/36-context-assembler | 495b52853631580933232fea1a3941c94adb5510 | `npm run typecheck && npm test && npm run build` -> 322 passed | PASS |
 | #37 | merged | ticket/37-language-context | 96ce4605b489049d8c6919c8bcbd429ff2cc66f3 | `npm run typecheck && npm test && npm run build` -> 442 passed | PASS |
 | #38 | merged | ticket/38-session-slice | e366d25df10a700bae886d3af3d342afe959455d | `npm run typecheck && npm test && npm run build` -> 518 passed | PASS |
+| Review fixes | in progress | lane-1/review-fixes | branch head | `npm run typecheck && npm test && npm run build` -> 522 passed; `npm run e2e` blocked by VS Code `SIGABRT` | pending |
+
+The review fixes are not merged into `lane-1/control-plane` yet.
+The e2e gate is not observed green.
 
 Source branch: `lane-1/control-plane`.
 Setup commit: `098e887` (`chore: set up lane 1 worktrees and extension tests`).
@@ -318,6 +322,10 @@ const matches = await tools.searchText({ query: "greet", maxResults: 50 });
 
 ## Contract: #40 Review schema and rubric versioning - v1
 
+> **Superseded in v2:** the fields and seams in "Contract deltas in detail" win.
+> The text below is retained as the v1 record.
+
+
 - State: merged.
 - Commit: `cf5cdbbcacbb73468dc8b8c0d90eb41eb59bc622`.
 - Exports:
@@ -432,6 +440,10 @@ const matches = await tools.searchText({ query: "greet", maxResults: 50 });
 <a id="contract-41"></a>
 
 ## Contract: #41 Privacy and consent boundary - v1.1
+
+> **Superseded in v2:** the fields and seams in "Contract deltas in detail" win.
+> The text below is retained as the v1 record.
+
 
 - State: merged.
 - Commit: `bf2bb83575f7007a9537c5802e5146587990fcc0`.
@@ -693,6 +705,10 @@ const matches = await tools.searchText({ query: "greet", maxResults: 50 });
 <a id="contract-39"></a>
 
 ## Contract: #39 Model provider profiles - v1.1
+
+> **Superseded in v2:** the fields and seams in "Contract deltas in detail" win.
+> The text below is retained as the v1 record.
+
 
 - State: merged.
 - Commit: `986b610b2f5bf0ee0b18a3a803c51771fee789ff`.
@@ -979,6 +995,10 @@ const matches = await tools.searchText({ query: "greet", maxResults: 50 });
 
 ## Contract: #36 Context assembler and manifest - v1
 
+> **Superseded in v2:** the fields and seams in "Contract deltas in detail" win.
+> The text below is retained as the v1 record.
+
+
 - State: merged.
 - Commit: `495b52853631580933232fea1a3941c94adb5510`.
 - Base: `0c62960`.
@@ -1133,6 +1153,10 @@ const matches = await tools.searchText({ query: "greet", maxResults: 50 });
 
 ## Contract: #37 Language context provider - v1
 
+> **Superseded in v2:** the fields and seams in "Contract deltas in detail" win.
+> The text below is retained as the v1 record.
+
+
 - State: merged.
 - Commit: `96ce4605b489049d8c6919c8bcbd429ff2cc66f3`.
 - Base: `99b7392`.
@@ -1239,8 +1263,8 @@ const matches = await tools.searchText({ query: "greet", maxResults: 50 });
   - The probe calls all five providers with a sentinel `"probe"` workspace query and discards the lists; the result is booleans only. This costs five provider calls per uncached document version; the adapter caches.
   - `deps.probe` is optional. When absent, the source calls the LSP directly; when null/false, it uses the fallback.
   - The diagnostics source returns `excluded` when open documents exist but all fail `shouldInclude`.
-  - `rg` is not installed on this machine. The real text-search fallback omits `unsupported` until it is installed; no grep substitute.
-  - LSP parity is not measured. The doc records the manual steps and the reason; the user must run them.
+  - The bundled `@vscode/ripgrep` binary is copied to `extension/dist/rg`; no system `rg` is needed.
+  - The e2e suite measures TypeScript; Python and Rust remain manual in `docs/lsp-parity.md`.
   - The workspace-boundary helper is #41's `isOutsideWorkspace`; this module and the adapter import it from `./privacy`.
 - Consumers:
   - #46: wire `createLanguageSources` into the assembler with the adapter, the resolved folder/policy, the active uri/path/position, open documents, the query, and the cached `probe`. The deep prompt receives the fragments; #36 redacts and budgets them.
@@ -1248,8 +1272,8 @@ const matches = await tools.searchText({ query: "greet", maxResults: 50 });
   - #18: use `LanguageApi`/builders for codebase access experiments.
   - #4: use the parity record and fallback behavior for few-shot task detection.
 - Open gaps:
-  - LSP parity is not measured. The user must run `docs/lsp-parity.md` in a real VS Code window for TypeScript, Python, and Rust.
-  - `rg` is not installed on this machine. Install ripgrep to exercise the real text-search fallback; until then it omits `unsupported`.
+  - LSP parity is measured by the e2e TypeScript tests; Python and Rust remain manual in `docs/lsp-parity.md`.
+  - The bundled `rg` is exercised by the e2e suite; no system install is needed.
   - The probe makes five provider calls per uncached version; large workspaces may want a cheaper provider-availability check.
   - No separate workspace-boundary copy remains; #41 exports the shared helper.
 - Change log:
@@ -1258,6 +1282,10 @@ const matches = await tools.searchText({ query: "greet", maxResults: 50 });
 <a id="contract-38"></a>
 
 ## Contract: #38 Current session slice reader - v1
+
+> **Superseded in v2:** the fields and seams in "Contract deltas in detail" win.
+> The text below is retained as the v1 record.
+
 
 - State: merged.
 - Commit: `e366d25df10a700bae886d3af3d342afe959455d`.
@@ -1367,7 +1395,7 @@ const matches = await tools.searchText({ query: "greet", maxResults: 50 });
   - #18: use the slice as bounded session context in the codebase-access experiment.
   - #1: the token estimate and usage fields can inform agent usage reporting.
 - Open gaps:
-  - LSP parity is still not measured (#37 follow-up) and `rg` is not installed on this machine; both are recorded in the #37 contract.
+  - LSP parity is measured by the e2e TypeScript tests; Python and Rust remain manual. The bundled `rg` needs no system install.
   - The Windows Claude encoding is not measured.
   - Claude discovery leaves `startedAt`/`turnCount` undefined; the picker caller can enrich them.
   - A live session's newest line can lag by one write because trailing partial lines are dropped.

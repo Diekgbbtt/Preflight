@@ -55,6 +55,18 @@ describe("resolvePromptFileRefs", () => {
     expect(result.outside).toEqual([ref]);
   });
 
+  it("dedupes case-insensitively on Windows", async () => {
+    const winRoots: WorkspaceRoot[] = [{ uri: "file:///C:/repo", fsPath: "C:\\repo" }];
+    const result = await resolvePromptFileRefs(
+      ["src/App.ts", "src/app.ts"],
+      winRoots,
+      existsIn(["C:\\repo\\src\\App.ts", "C:\\repo\\src\\app.ts"]),
+      path.win32,
+    );
+    expect(result.files).toHaveLength(1);
+    expect(result.duplicate).toBe(1);
+  });
+
   it("bridges win32 paths with path.win32 and still returns POSIX relative paths", async () => {
     const winRoots: WorkspaceRoot[] = [{ uri: "file:///C:/repo", fsPath: "C:\\repo" }];
     const result = await resolvePromptFileRefs(

@@ -28,7 +28,7 @@ Add an e2e tier that mounts the built extension in a real VS Code window.
   - The new control-plane contracts do not depend on it.
   - The handoff names the exact replacement seam for #46.
 - The shell has no network access.
-  - The LSP work is blocked until the owner installs the packages in section 8.
+  - The owner installed the LSP packages on 2026-11-17.
   - All other work starts immediately.
 
 ## 3. Work item order
@@ -204,7 +204,7 @@ Goal: close owner requirement 4.
 ### Phase 4 - LSP agent middleware
 
 Goal: close comment 2.7.
-Blocked on the owner install in section 8.
+The owner installed the packages on 2026-11-17.
 
 #### Slice 4.1 - Tool contracts over LSP types
 
@@ -399,10 +399,10 @@ Goal: close owner requirement 3.
 - After Phase 6: owner approves the assertions catalogue.
 - After Phase 8: owner sees the final gate and the updated PR.
 
-## 8. Owner action required
+## 8. Owner action taken
 
 The shell cannot reach the npm registry.
-Install these packages from a networked shell:
+The owner installed these packages on 2026-11-17:
 
 ```bash
 npm install -w extension vscode-languageserver-types@3.18.5 vscode-languageserver-protocol@3.18.5 vscode-jsonrpc@10.0.0
