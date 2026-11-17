@@ -1,8 +1,6 @@
 // Pure session locator for the current-session slice (ticket #38).
 // Never touches the filesystem: candidates are discovered by sessionSlice.ts
 // and passed in. Uses only the injected clock; no Date.now, no vscode.
-import { fileURLToPath, pathToFileURL } from "node:url";
-import * as path from "node:path";
 import type { Clock, Event, SendRecord } from "@prompt-preflight/core";
 
 /** Providers with a session store this reader understands. */
@@ -42,21 +40,46 @@ export const SESSION_AGE_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const AMBIGUITY_WINDOW_MS = 2 * 60 * 1000;
 
 /**
- * Stable canonical form of a folder URI. File URIs round-trip through
- * fileURLToPath + pathToFileURL so percent-encoding and trailing slashes
- * normalize away. Non-file URIs pass through unchanged; an invalid file URI
- * also passes through instead of throwing.
+ * Stable canonical form of a folder URI across POSIX, Windows drive and UNC
+ * paths. Percent-encoding and a trailing separator normalize away, a Windows
+ * drive letter is lowercased, and localhost folds into the empty host.
+ * Non-file URIs and invalid file URIs pass through unchanged.
  */
 export function canonicalFolderUri(uri: string): string {
   if (!uri.startsWith("file:")) return uri;
+  let url: URL;
   try {
-    const p = fileURLToPath(uri);
-    // A trailing separator is directory sugar; strip it so both spellings match.
-    const trimmed = p.length > 1 && p.endsWith(path.sep) ? p.slice(0, -1) : p;
-    return pathToFileURL(trimmed).href;
+    url = new URL(uri);
   } catch {
     return uri;
   }
+  if (url.protocol !== "file:") return uri;
+
+  let pathname: string;
+  try {
+    pathname = decodeURIComponent(url.pathname);
+  } catch {
+    return uri;
+  }
+  if (pathname.length > 1 && pathname.endsWith("/") && !/^\/[A-Za-z]:\/$/.test(pathname)) {
+    pathname = pathname.slice(0, -1);
+  }
+  if (/^\/[A-Za-z]:\//.test(pathname)) {
+    pathname = "/" + pathname[1].toLowerCase() + pathname.slice(2);
+  }
+  const host = url.host === "localhost" ? "" : url.host.toLowerCase();
+  return `file://${host}${encodeURI(pathname)}`;
+}
+
+/**
+ * Claude Code's project-directory encoding. Every character outside
+ * [A-Za-z0-9_-] becomes "-", so POSIX "/Users/x" is "-Users-x" and Windows
+ * "C:\\Users\\x" is "C--Users-x". The rule matches the Claude binary's
+ * sanitizer and the real POSIX directory names.
+ */
+export function encodeClaudeProjectPath(cwd: string): string {
+  const sanitized = cwd.replace(/[^a-zA-Z0-9\-_]/g, "-");
+  return sanitized === "" ? "unknown" : sanitized;
 }
 
 /** Folds send versions to the highest seq per envelope id. Order of ids follows first appearance. */

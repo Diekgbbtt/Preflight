@@ -9,7 +9,7 @@ import type { Dirent } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Event, ModelCapabilities, SendRecord } from "@prompt-preflight/core";
 import { estimateTokens, SOURCE_PRIORITIES, type Clock, type ContextSource, type ContextSourceResult } from "@prompt-preflight/core";
-import { canonicalFolderUri, locateSession, type SessionCandidate, type SessionProvider } from "./sessionLocator";
+import { canonicalFolderUri, encodeClaudeProjectPath, locateSession, type SessionCandidate, type SessionProvider } from "./sessionLocator";
 import { shouldInclude, type IncludeCode } from "./privacy";
 
 /** Caps for one slice: turns kept, token budget, and the byte window. */
@@ -128,13 +128,20 @@ const FILE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit", "apply
 /** True when a tool call is a test run: decide from the command, never from a path in a summary. */
 function isTestCall(name: string, input: Record<string, unknown>): boolean {
   if (FILE_TOOLS.has(name)) return false;
-  const command = input.command;
+  const command = input.command ?? input.cmd;
   if (typeof command === "string" && command.trim()) return looksLikeTest(command);
   if (Array.isArray(command)) {
     const joined = command.filter((part) => typeof part === "string").join(" ");
     if (joined.trim()) return looksLikeTest(joined);
   }
   return false;
+}
+
+/** Final status of one real Codex CommandExecution item. */
+function commandExecutionOk(item: Record<string, unknown>): boolean {
+  if (item.status === "completed") return true;
+  if (item.status === "failed") return false;
+  return typeof item.exit_code === "number" ? item.exit_code === 0 : true;
 }
 
 /** Parses an opaque arguments blob into an object when possible. */
@@ -153,7 +160,7 @@ function asObject(value: unknown): Record<string, unknown> | null {
 
 /** A short human-readable description of a tool input, for the summary. */
 function describeInput(input: Record<string, unknown>): string | undefined {
-  const command = input.command;
+  const command = input.command ?? input.cmd;
   if (typeof command === "string" && command.trim()) return oneLine(command);
   if (Array.isArray(command)) {
     const joined = command.filter((part) => typeof part === "string").join(" ");
@@ -225,6 +232,8 @@ interface ParserState {
   turns: Turn[];
   toolCalls: ToolCall[];
   pending: Map<string, number>;
+  /** Persistent call_id -> tool call index, for real Codex event dedupe. */
+  callIndexById: Map<string, number>;
   changedFiles: string[];
   /** Displayed file path observed inside each turn, parallel to turns. */
   turnFiles: string[][];
@@ -239,6 +248,7 @@ const newState = (): ParserState => ({
   turns: [],
   toolCalls: [],
   pending: new Map(),
+  callIndexById: new Map(),
   changedFiles: [],
   turnFiles: [],
   testOrder: [],
@@ -532,30 +542,65 @@ export function parseCodexSession(text: string): ParsedSession {
     // Exec event messages carry command runs when the public format emits them.
     if (entry.type === "event_msg") {
       const eventType = payload.type;
-      if (eventType === "exec_command_begin") {
-        const name = typeof payload.name === "string" && payload.name ? payload.name : "exec";
-        const input: Record<string, unknown> = { command: payload.command };
+      if (eventType !== "item_completed") continue; // Unknown event_msg types are skipped.
+      const item = asObject(payload.item);
+      if (!item) continue;
+
+      if (item.type === "CommandExecution") {
+        const id = typeof item.id === "string" ? item.id : undefined;
+        const known = id ? state.callIndexById.get(id) : undefined;
+        if (known !== undefined) {
+          // The response_item function_call already registered this call.
+          // Apply the final event status once, and only while it is pending.
+          if (id && state.pending.has(id)) {
+            applyResult(state, known, commandExecutionOk(item), resultText(item.aggregated_output), state.endedAt);
+            state.pending.delete(id);
+          }
+          continue;
+        }
+        const input: Record<string, unknown> = { command: item.command };
         const described = describeInput(input);
         const call: ToolCall = {
-          name,
+          name: "exec",
           status: "unknown",
-          summary: oneLine(`${name}${described ? ` ${described}` : ""}`),
+          summary: oneLine(`exec${described ? ` ${described}` : ""}`),
           at: state.endedAt,
         };
-        registerCall(state, call, isTestCall(name, input));
-        if (typeof payload.call_id === "string") state.pending.set(payload.call_id, state.toolCalls.length - 1);
+        registerCall(state, call, isTestCall("exec", input));
+        const index = state.toolCalls.length - 1;
+        if (id) {
+          state.callIndexById.set(id, index);
+          state.pending.set(id, index);
+        }
+        applyResult(state, index, commandExecutionOk(item), resultText(item.aggregated_output), state.endedAt);
+        if (id) state.pending.delete(id);
         continue;
       }
-      if (eventType === "exec_command_end") {
-        const callIndex = typeof payload.call_id === "string" ? state.pending.get(payload.call_id) : undefined;
-        const exit = typeof payload.exit_code === "number" ? payload.exit_code : undefined;
-        const ok = exit === undefined ? payload.is_error !== true : exit === 0;
-        const output = resultText(payload.output ?? payload.aggregated_output);
-        applyResult(state, callIndex ?? -1, ok, output, state.endedAt);
-        if (callIndex !== undefined && typeof payload.call_id === "string") state.pending.delete(payload.call_id);
+
+      if (item.type === "FileChange") {
+        const changes = asObject(item.changes) ?? {};
+        const paths = Object.keys(changes);
+        const ownerIndex = Math.max(0, state.turns.length - 1);
+        for (const path of paths) {
+          const shown = changedFromPatch(path, state);
+          if (shown) state.turnFiles[ownerIndex]?.push(shown);
+        }
+        const shownPaths = paths.map((path) => displayPath(path, state.cwd));
+        const call: ToolCall = {
+          name: "FileChange",
+          status: "unknown",
+          summary: oneLine(`FileChange${shownPaths.length > 0 ? ` ${shownPaths.join(", ")}` : ""}`),
+          at: state.endedAt,
+        };
+        registerCall(state, call, false);
+        const index = state.toolCalls.length - 1;
+        const id = typeof item.id === "string" ? item.id : undefined;
+        if (id) state.callIndexById.set(id, index);
+        applyResult(state, index, item.status !== "failed", resultText(item.stdout), state.endedAt);
         continue;
       }
-      // Unknown event_msg types are skipped.
+
+      // AgentMessage duplicates the response_item message turn; skip it.
       continue;
     }
     if (entry.type !== "response_item") continue;
@@ -580,6 +625,8 @@ export function parseCodexSession(text: string): ParsedSession {
       continue;
     }
     if (itemType === "function_call") {
+      // A real Codex item_completed event may have registered this call first.
+      if (typeof payload.call_id === "string" && state.callIndexById.has(payload.call_id)) continue;
       const name = typeof payload.name === "string" ? payload.name : "tool";
       const argsRaw = payload.arguments;
       const input = asObject(argsRaw);
@@ -601,11 +648,17 @@ export function parseCodexSession(text: string): ParsedSession {
       };
       registerCall(state, call, isTestCall(name, input ?? {}));
       if (described && FILE_TOOLS.has(name)) state.turnFiles[ownerIndex]?.push(displayPath(described, state.cwd));
-      if (typeof payload.call_id === "string") state.pending.set(payload.call_id, state.toolCalls.length - 1);
+      if (typeof payload.call_id === "string") {
+        const index = state.toolCalls.length - 1;
+        state.pending.set(payload.call_id, index);
+        state.callIndexById.set(payload.call_id, index);
+      }
       continue;
     }
     if (itemType === "function_call_output") {
       const callIndex = typeof payload.call_id === "string" ? state.pending.get(payload.call_id) : undefined;
+      // The event already settled this call; never apply a second result.
+      if (callIndex === undefined && typeof payload.call_id === "string" && state.callIndexById.has(payload.call_id)) continue;
       const output = resultText(payload.output);
       let ok = payload.is_error !== true;
       const structured = asObject(payload.output);
@@ -698,12 +751,11 @@ export async function discoverCandidates(folderUri: string, homeDir: string): Pr
 
   const candidates: SessionCandidate[] = [];
 
-  // Claude: one directory per workspace. Claude encodes the absolute path by
-  // replacing path separators with "-" (POSIX: "/Users/x" -> "-Users-x",
-  // verified against real directory names in ~/.claude/projects). The Windows
-  // drive and separator encoding is a recorded gap, not guessed: discovery on
-  // Windows stays unimplemented until verified there.
-  const encoded = folderPath.split(path.sep).join("-");
+  // Claude: one directory per workspace. Claude replaces every character
+  // outside [A-Za-z0-9_-] with "-", so POSIX "/Users/x" -> "-Users-x" and
+  // Windows "C:\\Users\\x" -> "C--Users-x". The rule matches the Claude
+  // binary's sanitizer and the real POSIX directory names.
+  const encoded = encodeClaudeProjectPath(folderPath);
   const claudeDir = path.join(homeDir, ".claude", "projects", encoded);
   let claudeEntries: Dirent[];
   try {
@@ -763,16 +815,34 @@ export interface SliceOptions {
   redact(text: string): { text: string; count: number };
 }
 
-/** The workspace-relative POSIX path of a raw changed or code path, or null when it is outside. */
-function relativeToWorkspace(raw: string, cwdPath: string | undefined): string | null {
+/**
+ * The workspace-relative POSIX path of a raw changed or code path, or null
+ * when it is outside. The path API is injectable so the Windows rules are
+ * tested on any host.
+ */
+export function relativeToWorkspace(
+  raw: string,
+  cwdPath: string | undefined,
+  pathApi: Pick<typeof path, "relative" | "isAbsolute" | "sep"> = path,
+): string | null {
   if (!raw) return null;
   let rel = raw;
   if (/^[A-Za-z]:[\\/]/.test(raw) || raw.startsWith("/")) {
     if (!cwdPath) return null;
-    rel = path.relative(cwdPath, raw);
+    rel = pathApi.relative(cwdPath, raw);
   }
-  const posix = rel.split(path.sep).join("/").replace(/\\/g, "/");
-  if (!posix || posix === "." || posix.startsWith("/") || /^[A-Za-z]:\//.test(posix) || posix === ".." || posix.startsWith("../")) return null;
+  const posix = rel.split(pathApi.sep).join("/").replace(/\\/g, "/");
+  if (
+    !posix ||
+    posix === "." ||
+    posix.startsWith("/") ||
+    /^[A-Za-z]:\//.test(posix) ||
+    posix === ".." ||
+    posix.startsWith("../") ||
+    pathApi.isAbsolute(rel)
+  ) {
+    return null;
+  }
   return posix;
 }
 

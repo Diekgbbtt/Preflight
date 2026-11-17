@@ -4,13 +4,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_SESSION_CAPS, createSessionSliceSource, discoverCandidates, formatSessionSlice, parseClaudeSession, parseCodexSession, readSlice, type SessionCaps, type SessionSliceSourceDeps } from "../src/sessionSlice";
+import { DEFAULT_SESSION_CAPS, createSessionSliceSource, discoverCandidates, formatSessionSlice, parseClaudeSession, parseCodexSession, readSlice, relativeToWorkspace, type SessionCaps, type SessionSliceSourceDeps } from "../src/sessionSlice";
 import type { SessionCandidate } from "../src/sessionLocator";
 import { redact } from "../src/privacy";
 
 const claudeFixture = readFileSync(new URL("./fixtures/claude/session-basic.jsonl", import.meta.url), "utf8");
 const codexFixture = readFileSync(new URL("./fixtures/codex/session-basic.jsonl", import.meta.url), "utf8");
-const codexExecFixture = readFileSync(new URL("./fixtures/codex/session-exec-events.jsonl", import.meta.url), "utf8");
+const codexRealFixture = readFileSync(new URL("./fixtures/codex/session-real-events.jsonl", import.meta.url), "utf8");
 
 const CWD = "/Users/alice/proj";
 const at = (n: number) => `2026-01-02T10:00:${String(n).padStart(2, "0")}.000Z`;
@@ -140,12 +140,15 @@ describe("parseCodexSession", () => {
     expect(parsed.turns).toEqual([]);
   });
 
-  it("parses exec_command_begin/end event messages", () => {
-    const parsed = parseCodexSession(codexExecFixture);
-    expect(parsed.sessionId).toBe("sess-codex-2");
-    expect(parsed.toolCalls).toEqual([{ name: "exec", status: "error", summary: "exec npm test", at: "2026-01-02T12:00:05.000Z" }]);
-    expect(parsed.testResults).toEqual([{ name: "exec npm test", status: "failed", at: "2026-01-02T12:00:05.000Z" }]);
-    expect(parsed.errors).toEqual([{ message: "1 failed, 1 passed", status: "error", at: "2026-01-02T12:00:10.000Z" }]);
+  it("parses real item_completed CommandExecution and FileChange events", () => {
+    const parsed = parseCodexSession(codexRealFixture);
+    expect(parsed.sessionId).toBe("sess-codex-real");
+    expect(parsed.toolCalls).toHaveLength(2);
+    expect(parsed.toolCalls[0]).toMatchObject({ name: "FileChange", status: "ok", summary: "FileChange src/app.ts" });
+    expect(parsed.toolCalls[1]).toMatchObject({ name: "exec_command", status: "error", summary: "exec_command npm test" });
+    expect(parsed.testResults).toEqual([{ name: "exec_command npm test", status: "failed", at: "2026-04-10T20:18:21.000Z" }]);
+    expect(parsed.errors).toEqual([{ message: "1 failed, 1 passed", status: "error", at: "2026-04-10T20:18:22.000Z" }]);
+    expect(parsed.changedFiles).toEqual(["/Users/alice/proj/src/app.ts"]);
   });
 });
 
@@ -489,11 +492,21 @@ describe("readSlice", () => {
     expect(slice.toolCalls).toEqual([]);
   });
 
-  it("derives a slice with exec event failures from codex events", async () => {
-    const slice = await readSlice(fileURLToPath(new URL("./fixtures/codex/session-exec-events.jsonl", import.meta.url)), "codex", DEFAULT_SESSION_CAPS, { now: () => 0 }, options);
-    expect(slice.toolCalls[0]).toMatchObject({ name: "exec", status: "error", summary: "exec npm test" });
-    expect(slice.testResults[0]).toMatchObject({ name: "exec npm test", status: "failed" });
+  it("derives a slice from real Codex item_completed events", async () => {
+    const slice = await readSlice(
+      fileURLToPath(new URL("./fixtures/codex/session-real-events.jsonl", import.meta.url)),
+      "codex",
+      DEFAULT_SESSION_CAPS,
+      { now: () => 0 },
+      { includeCode: "prompt-files", promptFiles: ["src/app.ts"], redact },
+    );
+    expect(slice.toolCalls[0]).toMatchObject({ name: "FileChange", status: "ok", summary: "FileChange src/app.ts" });
+    expect(slice.toolCalls[1]).toMatchObject({ name: "exec_command", status: "error", summary: "exec_command npm test" });
+    expect(slice.testResults[0]).toMatchObject({ name: "exec_command npm test", status: "failed" });
     expect(slice.errors[0]).toMatchObject({ message: "1 failed, 1 passed", status: "error" });
+    expect(slice.changedFiles).toEqual(["src/app.ts"]);
+    expect(slice.turns[1].code).toEqual(["export const app = 2;"]);
+    expect(slice.turns[1].codePath).toBe("src/app.ts");
   });
 
   it("marks the slice truncated when tool calls drop without any turn", async () => {
@@ -565,6 +578,14 @@ describe("readSlice", () => {
     expect(over.provenance.bytesRead).toBe(5_000_000);
     expect(over.truncated).toBe(true);
     expect(over.turns.map((t) => t.text)).toEqual(["answer"]);
+  });
+});
+
+describe("relativeToWorkspace", () => {
+  it("normalizes Windows drive paths with path.win32", () => {
+    expect(relativeToWorkspace("C:\\Users\\alice\\proj\\src\\app.ts", "C:\\Users\\alice\\proj", path.win32)).toBe("src/app.ts");
+    expect(relativeToWorkspace("D:\\other\\app.ts", "C:\\Users\\alice\\proj", path.win32)).toBeNull();
+    expect(relativeToWorkspace("C:\\Users\\alice\\proj\\..\\secret.ts", "C:\\Users\\alice\\proj", path.win32)).toBeNull();
   });
 });
 

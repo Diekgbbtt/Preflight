@@ -6,6 +6,7 @@ import {
   SESSION_AGE_WINDOW_MS,
   SEND_MATCH_WINDOW_MS,
   canonicalFolderUri,
+  encodeClaudeProjectPath,
   locateSession,
   type SessionCandidate,
 } from "../src/sessionLocator";
@@ -29,8 +30,29 @@ describe("canonicalFolderUri", () => {
     expect(canonicalFolderUri("file:///Users/alice/proj")).toBe("file:///Users/alice/proj");
   });
 
+  it("canonicalizes Windows drive and UNC file URIs", () => {
+    expect(canonicalFolderUri("file:///C:/Users/Alice/Proj/")).toBe("file:///c:/Users/Alice/Proj");
+    expect(canonicalFolderUri("file:///c:/Users/Alice/Proj")).toBe("file:///c:/Users/Alice/Proj");
+    expect(canonicalFolderUri("file:///C:/")).toBe("file:///c:/");
+    expect(canonicalFolderUri("file://server/share/proj/")).toBe("file://server/share/proj");
+    expect(canonicalFolderUri("file://localhost/C:/Users/Alice/Proj")).toBe("file:///c:/Users/Alice/Proj");
+  });
+
   it("returns non-file URIs unchanged", () => {
     expect(canonicalFolderUri("untitled:Untitled-1")).toBe("untitled:Untitled-1");
+  });
+
+  it("returns a malformed URI unchanged instead of throwing", () => {
+    expect(canonicalFolderUri("file:///Users/%ZZ")).toBe("file:///Users/%ZZ");
+  });
+});
+
+describe("encodeClaudeProjectPath", () => {
+  it("encodes POSIX and Windows paths with the Claude sanitizer", () => {
+    expect(encodeClaudeProjectPath("/Users/Alice/Proj")).toBe("-Users-Alice-Proj");
+    expect(encodeClaudeProjectPath("C:\\Users\\Alice\\Proj")).toBe("C--Users-Alice-Proj");
+    expect(encodeClaudeProjectPath("C:\\Users\\Alice\\My Proj")).toBe("C--Users-Alice-My-Proj");
+    expect(encodeClaudeProjectPath("")).toBe("unknown");
   });
 });
 

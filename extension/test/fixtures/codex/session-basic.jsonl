@@ -1,10 +1,10 @@
 {"timestamp":"2026-01-02T11:00:00.000Z","type":"session_meta","payload":{"id":"sess-codex-1","timestamp":"2026-01-02T11:00:00.000Z","cwd":"/Users/alice/proj","originator":"codex_cli_rs"}}
 {"timestamp":"2026-01-02T11:00:02.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Fix the flaky test in src/app.test.ts"}]}}
 {"timestamp":"2026-01-02T11:00:05.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Checking the test file.\n\n```ts src/app.test.ts\nexpect(flaky()).toBe(true);\n```"}]}}
-{"timestamp":"2026-01-02T11:00:10.000Z","type":"response_item","payload":{"type":"function_call","name":"shell","call_id":"call-1","arguments":"{\"command\":[\"npm\",\"test\"]}"}}
+{"timestamp":"2026-01-02T11:00:10.000Z","type":"response_item","payload":{"type":"function_call","name":"shell","call_id":"call-1","arguments":"{\"cmd\":\"npm test\"}"}}
 {"timestamp":"2026-01-02T11:00:15.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-1","output":"2 passed, 0 failed"}}
 {"timestamp":"2026-01-02T11:00:20.000Z","type":"response_item","payload":{"type":"function_call","name":"apply_patch","call_id":"call-2","arguments":"*** Begin Patch\n*** Update File: src/app.test.ts\n@@\n-expect(flaky()).toBe(false)\n+expect(flaky()).toBe(true)\n*** End Patch"}}
 {"timestamp":"2026-01-02T11:00:25.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-2","output":"Patch applied"}}
-{"timestamp":"2026-01-02T11:00:30.000Z","type":"response_item","payload":{"type":"function_call","name":"shell","call_id":"call-3","arguments":"{\"command\":[\"npm\",\"run\",\"build\"]}"}}
+{"timestamp":"2026-01-02T11:00:30.000Z","type":"response_item","payload":{"type":"function_call","name":"shell","call_id":"call-3","arguments":"{\"cmd\":\"npm run build\"}"}}
 {"timestamp":"2026-01-02T11:00:35.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-3","output":{"output":"error: build failed","metadata":{"exit_code":1}}}}
-{"timestamp":"2026-01-02T11:00:40.000Z","type":"event_msg","payload":{"type":"agent_message","message":"Done."}}
+{"timestamp":"2026-01-02T11:00:40.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","last_agent_message":"Done.","completed_at":1767351640}}
