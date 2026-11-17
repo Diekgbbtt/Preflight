@@ -5,20 +5,16 @@ import type { ExecResult } from "../src/exec";
 import { createVscodeLanguageApi } from "../src/vscodeLanguageApi";
 
 type FakeUri = { scheme: string; fsPath: string; toString: () => string };
-
 const fileUri = (fsPath: string): FakeUri => ({ scheme: "file", fsPath, toString: () => `file://${fsPath}` });
 
 const vscodeMock = vi.hoisted(() => {
-  const SymbolKind = { Namespace: 1, Class: 4, Method: 6, Function: 12, Variable: 13 } as Record<number | string, string | number>;
-  for (const [name, value] of Object.entries({ Namespace: 1, Class: 4, Method: 6, Function: 12, Variable: 13 })) SymbolKind[value as number] = name;
+  const SymbolKind = { File: 0, Module: 1, Namespace: 2, Package: 3, Class: 4, Method: 5, Property: 6, Field: 7, Constructor: 8, Enum: 9, Interface: 10, Function: 11, Variable: 12, Constant: 13 } as Record<number | string, string | number>;
+  for (const [name, value] of Object.entries({ File: 0, Module: 1, Namespace: 2, Package: 3, Class: 4, Method: 5, Property: 6, Field: 7, Constructor: 8, Enum: 9, Interface: 10, Function: 11, Variable: 12, Constant: 13 })) SymbolKind[value as number] = name;
   const DiagnosticSeverity = { Error: 0, Warning: 1, Information: 2, Hint: 3 } as Record<number | string, string | number>;
   for (const [name, value] of Object.entries({ Error: 0, Warning: 1, Information: 2, Hint: 3 })) DiagnosticSeverity[value as number] = name;
   return {
     Uri: {
-      parse: (value: string): FakeUri => {
-        const fsPath = decodeURIComponent(value.replace(/^file:\/\//, ""));
-        return { scheme: value.startsWith("file:") ? "file" : value.split(":")[0], fsPath, toString: () => value };
-      },
+      parse: (value: string): FakeUri => ({ scheme: value.split(":")[0], fsPath: decodeURIComponent(value.replace(/^file:\/\//, "")), toString: () => value }),
       file: (fsPath: string): FakeUri => fileUri(fsPath),
     },
     Position: class {
@@ -31,8 +27,8 @@ const vscodeMock = vi.hoisted(() => {
     },
     workspace: {
       asRelativePath: (uri: FakeUri): string => uri.fsPath.replace(/^\/w\//, ""),
-      textDocuments: [] as Array<{ uri: FakeUri; version: number }>,
-      workspaceFolders: undefined as Array<{ uri: FakeUri }> | undefined,
+      workspaceFolders: [{ uri: { scheme: "file", fsPath: "/w", toString: () => "file:///w" } }] as Array<{ uri: FakeUri }> | undefined,
+      findFiles: vi.fn(),
     },
     commands: { executeCommand: vi.fn() },
     languages: { getDiagnostics: vi.fn() },
@@ -45,251 +41,143 @@ vi.mock("vscode", () => ({ default: vscodeMock, ...vscodeMock }));
 
 const range = { start: { line: 2, character: 0 }, end: { line: 9, character: 1 } };
 const mockRange = { start: { line: 2, character: 0 }, end: { line: 9, character: 1 } };
+const token = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => undefined }) };
 
 beforeEach(() => {
   vscodeMock.commands.executeCommand.mockReset();
   vscodeMock.languages.getDiagnostics.mockReset();
-  vscodeMock.workspace.textDocuments = [];
+  vscodeMock.workspace.findFiles.mockReset();
 });
 
 describe("createVscodeLanguageApi documentSymbols", () => {
-  it("flattens DocumentSymbols with kind names and relative paths", async () => {
+  it("flattens DocumentSymbols into LSP SymbolInformation records with mapped kinds", async () => {
     vscodeMock.commands.executeCommand.mockResolvedValue([
       {
         name: "Thing",
         kind: 4,
         range: mockRange,
         selectionRange: mockRange,
-        children: [{ name: "build", kind: 6, range: mockRange, selectionRange: mockRange, children: [] }],
+        children: [{ name: "build", kind: 5, range: mockRange, selectionRange: mockRange, children: [] }],
       },
     ]);
-    const api = createVscodeLanguageApi();
-    const symbols = await api.documentSymbols("file:///w/src/a.ts");
+    const api = createVscodeLanguageApi({ cwd: "/w" });
+    const symbols = await api.documentSymbols({ textDocument: { uri: "file:///w/src/a.ts" } }, token);
     expect(vscodeMock.commands.executeCommand).toHaveBeenCalledWith("vscode.executeDocumentSymbolProvider", expect.objectContaining({ fsPath: "/w/src/a.ts" }));
     expect(symbols).toEqual([
-      { name: "Thing", kind: "Class", uri: "file:///w/src/a.ts", path: "src/a.ts", range },
-      { name: "build", kind: "Method", uri: "file:///w/src/a.ts", path: "src/a.ts", range, containerName: "Thing" },
+      { name: "Thing", kind: 5, location: { uri: "file:///w/src/a.ts", range } },
+      { name: "build", kind: 6, location: { uri: "file:///w/src/a.ts", range }, containerName: "Thing" },
     ]);
   });
 
-  it("converts SymbolInformation results", async () => {
+  it("converts SymbolInformation results and returns empty for undefined", async () => {
     vscodeMock.commands.executeCommand.mockResolvedValue([
-      { name: "helper", kind: 12, containerName: "Thing", location: { uri: fileUri("/w/src/b.ts"), range: mockRange } },
+      { name: "helper", kind: 11, containerName: "Thing", location: { uri: fileUri("/w/src/b.ts"), range: mockRange } },
     ]);
-    const api = createVscodeLanguageApi();
-    const symbols = await api.documentSymbols("file:///w/src/a.ts");
-    expect(symbols).toEqual([
-      { name: "helper", kind: "Function", uri: "file:///w/src/b.ts", path: "src/b.ts", range, containerName: "Thing" },
-    ]);
-  });
+    const api = createVscodeLanguageApi({ cwd: "/w" });
+    const symbols = await api.documentSymbols({ textDocument: { uri: "file:///w/src/a.ts" } }, token);
+    expect(symbols).toEqual([{ name: "helper", kind: 12, location: { uri: "file:///w/src/b.ts", range }, containerName: "Thing" }]);
 
-  it("returns an empty list when the provider answers nothing", async () => {
     vscodeMock.commands.executeCommand.mockResolvedValue(undefined);
-    const api = createVscodeLanguageApi();
-    await expect(api.documentSymbols("file:///w/src/a.ts")).resolves.toEqual([]);
+    await expect(api.documentSymbols({ textDocument: { uri: "file:///w/src/a.ts" } }, token)).resolves.toEqual([]);
   });
 });
 
-describe("createVscodeLanguageApi workspaceSymbols", () => {
-  it("runs the workspace symbol provider with the query", async () => {
-    vscodeMock.commands.executeCommand.mockResolvedValue([
-      { name: "Thing", kind: 4, location: { uri: fileUri("/w/src/a.ts"), range: mockRange } },
-    ]);
-    const api = createVscodeLanguageApi();
-    const symbols = await api.workspaceSymbols("Thing");
+describe("createVscodeLanguageApi workspaceSymbols and locations", () => {
+  it("converts workspace symbols", async () => {
+    vscodeMock.commands.executeCommand.mockResolvedValue([{ name: "Thing", kind: 4, location: { uri: fileUri("/w/src/a.ts"), range: mockRange } }]);
+    const api = createVscodeLanguageApi({ cwd: "/w" });
+    const symbols = await api.workspaceSymbols({ query: "Thing" }, token);
     expect(vscodeMock.commands.executeCommand).toHaveBeenCalledWith("vscode.executeWorkspaceSymbolProvider", "Thing");
-    expect(symbols).toEqual([{ name: "Thing", kind: "Class", uri: "file:///w/src/a.ts", path: "src/a.ts", range }]);
-  });
-});
-
-describe("createVscodeLanguageApi definitions", () => {
-  it("converts Location results", async () => {
-    vscodeMock.commands.executeCommand.mockResolvedValue([{ uri: fileUri("/w/src/a.ts"), range: mockRange }]);
-    const api = createVscodeLanguageApi();
-    const locations = await api.definitions("file:///w/src/b.ts", { line: 4, character: 6 });
-    expect(vscodeMock.commands.executeCommand).toHaveBeenCalledWith("vscode.executeDefinitionProvider", expect.anything(), { line: 4, character: 6 });
-    expect(locations).toEqual([{ uri: "file:///w/src/a.ts", path: "src/a.ts", range }]);
+    expect(symbols).toEqual([{ name: "Thing", kind: 5, location: { uri: "file:///w/src/a.ts", range } }]);
   });
 
-  it("converts a single Location result", async () => {
+  it("normalizes Location, arrays, and LocationLink results", async () => {
+    const api = createVscodeLanguageApi({ cwd: "/w" });
     vscodeMock.commands.executeCommand.mockResolvedValue({ uri: fileUri("/w/src/a.ts"), range: mockRange });
-    const api = createVscodeLanguageApi();
-    const locations = await api.definitions("file:///w/src/b.ts", { line: 0, character: 0 });
-    expect(locations).toEqual([{ uri: "file:///w/src/a.ts", path: "src/a.ts", range }]);
+    await expect(api.definitions({ textDocument: { uri: "file:///w/src/b.ts" }, position: { line: 0, character: 0 } }, token)).resolves.toEqual([
+      { uri: "file:///w/src/a.ts", range },
+    ]);
+
+    const selection = { start: { line: 10, character: 6 }, end: { line: 10, character: 15 } };
+    vscodeMock.commands.executeCommand.mockResolvedValue([{ targetUri: fileUri("/w/src/a.ts"), targetRange: mockRange, targetSelectionRange: selection }]);
+    await expect(api.definitions({ textDocument: { uri: "file:///w/src/b.ts" }, position: { line: 0, character: 0 } }, token)).resolves.toEqual([
+      { uri: "file:///w/src/a.ts", range: selection },
+    ]);
   });
 
-  it("converts LocationLink results using the selection range", async () => {
-    const targetRange = { start: { line: 10, character: 0 }, end: { line: 20, character: 0 } };
-    const selectionRange = { start: { line: 10, character: 6 }, end: { line: 10, character: 15 } };
-    vscodeMock.commands.executeCommand.mockResolvedValue([
-      { targetUri: fileUri("/w/src/a.ts"), targetRange, targetSelectionRange: selectionRange },
-    ]);
-    const api = createVscodeLanguageApi();
-    const locations = await api.definitions("file:///w/src/b.ts", { line: 0, character: 0 });
-    expect(locations).toEqual([{ uri: "file:///w/src/a.ts", path: "src/a.ts", range: selectionRange }]);
-  });
-});
-
-describe("createVscodeLanguageApi references", () => {
-  it("converts Location arrays", async () => {
-    vscodeMock.commands.executeCommand.mockResolvedValue([
-      { uri: fileUri("/w/src/a.ts"), range: mockRange },
-      { uri: fileUri("/w/src/c.ts"), range: mockRange },
-    ]);
-    const api = createVscodeLanguageApi();
-    const references = await api.references("file:///w/src/a.ts", { line: 1, character: 2 });
+  it("passes the reference context and returns locations", async () => {
+    vscodeMock.commands.executeCommand.mockResolvedValue([{ uri: fileUri("/w/src/a.ts"), range: mockRange }]);
+    const api = createVscodeLanguageApi({ cwd: "/w" });
+    const references = await api.references(
+      { textDocument: { uri: "file:///w/src/a.ts" }, position: { line: 1, character: 2 }, context: { includeDeclaration: true } },
+      token,
+    );
     expect(vscodeMock.commands.executeCommand).toHaveBeenCalledWith("vscode.executeReferenceProvider", expect.anything(), { line: 1, character: 2 });
-    expect(references).toHaveLength(2);
-    expect(references[1]).toEqual({ uri: "file:///w/src/c.ts", path: "src/c.ts", range });
+    expect(references).toEqual([{ uri: "file:///w/src/a.ts", range }]);
   });
 });
 
-describe("createVscodeLanguageApi diagnostics", () => {
-  it("reads live diagnostics with severity names", async () => {
+describe("createVscodeLanguageApi diagnostics and files", () => {
+  it("maps VS Code diagnostics to LSP severities", async () => {
     vscodeMock.languages.getDiagnostics.mockReturnValue([
       { severity: 0, source: "tsc", range: mockRange, message: "boom" },
       { severity: 1, range: mockRange, message: "careful" },
     ]);
-    const api = createVscodeLanguageApi();
-    const diagnostics = await api.diagnostics("file:///w/src/a.ts");
+    const api = createVscodeLanguageApi({ cwd: "/w" });
+    const diagnostics = await api.diagnostics("file:///w/src/a.ts", token);
     expect(vscodeMock.languages.getDiagnostics).toHaveBeenCalledWith(expect.objectContaining({ fsPath: "/w/src/a.ts" }));
     expect(diagnostics).toEqual([
-      { uri: "file:///w/src/a.ts", path: "src/a.ts", range, severity: "Error", source: "tsc", message: "boom" },
-      { uri: "file:///w/src/a.ts", path: "src/a.ts", range, severity: "Warning", message: "careful" },
+      { range, severity: 1, source: "tsc", message: "boom" },
+      { range, severity: 2, message: "careful" },
     ]);
+  });
+
+  it("lists workspace files through findFiles", async () => {
+    vscodeMock.workspace.findFiles.mockResolvedValue([fileUri("/w/src/a.ts"), fileUri("/w/credentials.json")]);
+    const api = createVscodeLanguageApi({ cwd: "/w" });
+    if (!api.workspaceFiles) throw new Error("workspaceFiles missing");
+    await expect(api.workspaceFiles(token)).resolves.toEqual(["src/a.ts", "credentials.json"]);
+  });
+
+  it("resolves paths and URIs inside the root", () => {
+    const api = createVscodeLanguageApi({ cwd: "/w" });
+    expect(api.uriOf("src/a.ts")).toBe("file:///w/src/a.ts");
+    expect(api.pathOf("file:///w/src/a.ts")).toBe("src/a.ts");
+    expect(api.uriOf("/etc/passwd")).toBeUndefined();
+    expect(api.pathOf("untitled:1")).toBeUndefined();
   });
 });
 
-describe("createVscodeLanguageApi textSearch", () => {
+describe("createVscodeLanguageApi text search", () => {
   const jsonLine = (data: object): string => `${JSON.stringify({ type: "match", data })}\n`;
 
-  it("runs rg with --json, the max count and the query, and parses match lines", async () => {
+  it("runs the bundled binary with --json and parses matches", async () => {
     const rg = vi.fn(async (): Promise<ExecResult> => ({
       ok: true,
       stdout:
         jsonLine({ path: { text: "src/a.ts" }, line_number: 5, submatches: [{ start: 2, end: 10 }], lines: { text: "  const x = makeThing();\n" } }) +
         jsonLine({ path: { text: "src/b.ts" }, line_number: 1, submatches: [{ start: 0, end: 9 }], lines: { text: "makeThing()" } }),
     }));
-    const api = createVscodeLanguageApi({ cwd: "/w", rg });
-    const matches = await api.textSearch("makeThing", { maxResults: 50 });
-    expect(rg).toHaveBeenCalledWith(["--json", "--max-count", "50", "--", "makeThing"], "/w");
+    const api = createVscodeLanguageApi({ cwd: "/w", rgPath: "/w/dist/rg", runRipgrep: rg });
+    const matches = await api.search("makeThing", { maxResults: 50 });
+    expect(rg).toHaveBeenCalledWith("/w/dist/rg", ["--json", "--max-count", "50", "--", "makeThing"], "/w");
     expect(matches).toEqual([
       { uri: "file:///w/src/a.ts", path: "src/a.ts", range: { start: { line: 4, character: 2 }, end: { line: 4, character: 10 } }, preview: "  const x = makeThing();\n" },
       { uri: "file:///w/src/b.ts", path: "src/b.ts", range: { start: { line: 0, character: 0 }, end: { line: 0, character: 9 } }, preview: "makeThing()" },
     ]);
   });
 
-  it("drops absolute paths and paths outside the workspace", async () => {
-    const rg = vi.fn(async (): Promise<ExecResult> => ({
-      ok: true,
-      stdout:
-        jsonLine({ path: { text: "/etc/hosts" }, line_number: 1, submatches: [{ start: 0, end: 1 }], lines: { text: "x" } }) +
-        jsonLine({ path: { text: "../outside.ts" }, line_number: 1, submatches: [{ start: 0, end: 1 }], lines: { text: "x" } }) +
-        jsonLine({ path: { text: "kept.ts" }, line_number: 1, submatches: [{ start: 0, end: 1 }], lines: { text: "x" } }),
-    }));
-    const api = createVscodeLanguageApi({ cwd: "/w", rg });
-    const matches = await api.textSearch("x", { maxResults: 50 });
-    expect(matches.map((m) => m.path)).toEqual(["kept.ts"]);
-  });
-
-  it("skips non-match lines and malformed lines", async () => {
-    const rg = vi.fn(async (): Promise<ExecResult> => ({
-      ok: true,
-      stdout: `${JSON.stringify({ type: "begin", data: { path: { text: "a.ts" } } })}\nnot json\n${jsonLine({ path: { text: "a.ts" }, line_number: 2, submatches: [{ start: 0, end: 1 }], lines: { text: "x" } })}`,
-    }));
-    const api = createVscodeLanguageApi({ cwd: "/w", rg });
-    const matches = await api.textSearch("x", { maxResults: 50 });
-    expect(matches).toHaveLength(1);
-  });
-
-  it("throws with code ENOENT when rg is missing", async () => {
+  it("maps a missing binary to ENOENT", async () => {
     const rg = vi.fn(async (): Promise<ExecResult> => ({ ok: false, code: "ENOENT", stderr: "spawn rg ENOENT" }));
-    const api = createVscodeLanguageApi({ cwd: "/w", rg });
-    await expect(api.textSearch("x", { maxResults: 50 })).rejects.toMatchObject({ code: "ENOENT" });
+    const api = createVscodeLanguageApi({ cwd: "/w", rgPath: "/w/dist/rg", runRipgrep: rg });
+    await expect(api.search("x", { maxResults: 50 })).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("throws with the code and stderr on other rg failures", async () => {
-    const rg = vi.fn(async (): Promise<ExecResult> => ({ ok: false, code: undefined, stderr: "unrecognized flag" }));
-    const api = createVscodeLanguageApi({ cwd: "/w", rg });
-    await expect(api.textSearch("x", { maxResults: 50 })).rejects.toThrow("unrecognized flag");
-  });
-});
-
-describe("createVscodeLanguageApi probe and openDocuments", () => {
-  const openDoc = { uri: fileUri("/w/src/a.ts"), version: 1 };
-
-  it("returns null with no open document for the uri", async () => {
-    const api = createVscodeLanguageApi();
-    await expect(api.probe("file:///w/src/a.ts")).resolves.toBeNull();
-  });
-
-  it("probes every provider once and caches by uri@version", async () => {
-    vscodeMock.workspace.textDocuments = [openDoc];
-    vscodeMock.commands.executeCommand.mockResolvedValue([]);
-    vscodeMock.languages.getDiagnostics.mockReturnValue([]);
-    const api = createVscodeLanguageApi();
-    const capabilities = await api.probe("file:///w/src/a.ts");
-    expect(capabilities).toEqual({ documentSymbols: true, workspaceSymbols: true, definitions: true, references: true, diagnostics: true });
-    const firstCalls = vscodeMock.commands.executeCommand.mock.calls.length;
-    await api.probe("file:///w/src/a.ts");
-    expect(vscodeMock.commands.executeCommand.mock.calls.length).toBe(firstCalls);
-    // A new document version invalidates the cache entry.
-    vscodeMock.workspace.textDocuments = [{ ...openDoc, version: 2 }];
-    await api.probe("file:///w/src/a.ts");
-    expect(vscodeMock.commands.executeCommand.mock.calls.length).toBeGreaterThan(firstCalls);
-  });
-
-  it("threads the signal through the probe and treats a null probe as unavailable", async () => {
-    vscodeMock.workspace.textDocuments = [openDoc];
-    vscodeMock.commands.executeCommand.mockResolvedValue([]);
-    vscodeMock.languages.getDiagnostics.mockReturnValue([]);
-    const controller = new AbortController();
-    controller.abort();
-    const api = createVscodeLanguageApi();
-    await expect(api.probe("file:///w/src/a.ts", controller.signal)).rejects.toMatchObject({ code: "cancelled" });
-  });
-
-  it("keeps one cache entry per uri and recomputes when a version is seen again", async () => {
-    vscodeMock.workspace.textDocuments = [openDoc];
-    vscodeMock.commands.executeCommand.mockResolvedValue([]);
-    vscodeMock.languages.getDiagnostics.mockReturnValue([]);
-    const api = createVscodeLanguageApi();
-    await api.probe("file:///w/src/a.ts"); // version 1 computed
-    vscodeMock.workspace.textDocuments = [{ ...openDoc, version: 2 }];
-    await api.probe("file:///w/src/a.ts"); // version 2 computed
-    const callsAfterTwoVersions = vscodeMock.commands.executeCommand.mock.calls.length;
-    vscodeMock.workspace.textDocuments = [openDoc]; // back to version 1
-    await api.probe("file:///w/src/a.ts");
-    // One entry per uri: version 1 is no longer cached after the version 2
-    // probe replaced it, so this must recompute instead of serving a stale hit.
-    expect(vscodeMock.commands.executeCommand.mock.calls.length).toBeGreaterThan(callsAfterTwoVersions);
-  });
-
-  it("caches falsy capabilities for the version, not just truthy ones", async () => {
-    vscodeMock.workspace.textDocuments = [openDoc];
-    vscodeMock.commands.executeCommand.mockRejectedValue(new Error("no providers"));
-    const api = createVscodeLanguageApi();
-    await expect(api.probe("file:///w/src/a.ts")).resolves.toEqual({
-      documentSymbols: false,
-      workspaceSymbols: false,
-      definitions: false,
-      references: false,
-      diagnostics: false,
-    });
-    const callsAfterFirst = vscodeMock.commands.executeCommand.mock.calls.length;
-    await expect(api.probe("file:///w/src/a.ts")).resolves.toEqual({
-      documentSymbols: false,
-      workspaceSymbols: false,
-      definitions: false,
-      references: false,
-      diagnostics: false,
-    });
-    expect(vscodeMock.commands.executeCommand.mock.calls.length).toBe(callsAfterFirst);
-  });
-
-  it("lists open file documents with POSIX relative paths", () => {
-    vscodeMock.workspace.textDocuments = [openDoc, { uri: { scheme: "untitled", fsPath: "Untitled-1", toString: () => "untitled:Untitled-1" }, version: 3 }];
-    const api = createVscodeLanguageApi();
-    expect(api.openDocuments()).toEqual([{ uri: "file:///w/src/a.ts", path: "src/a.ts" }]);
+  it("lists files through rg --files", async () => {
+    const rg = vi.fn(async (): Promise<ExecResult> => ({ ok: true, stdout: "src/a.ts\nsrc/b.ts\n" }));
+    const api = createVscodeLanguageApi({ cwd: "/w", rgPath: "/w/dist/rg", runRipgrep: rg });
+    if (!api.listFiles) throw new Error("listFiles missing");
+    await expect(api.listFiles({ maxResults: 50 })).resolves.toEqual(["src/a.ts", "src/b.ts"]);
+    expect(rg).toHaveBeenCalledWith("/w/dist/rg", ["--files"], "/w");
   });
 });

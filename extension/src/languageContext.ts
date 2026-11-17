@@ -1,6 +1,6 @@
-// Language context providers (ticket #37): LSP-backed semantics without an
-// AST service. Pure module: no vscode import, no child_process. The VS Code
-// adapter lives in vscodeLanguageApi.ts and is the only platform seam.
+// Language context sources (ticket #37) on top of the agent code tools.
+// Pure module: no vscode import. The VS Code adapter implements the LSP
+// protocol port; `codeTools.ts` owns policy, caps, fallback, and conversion.
 import {
   SOURCE_PRIORITIES,
   estimateTokens,
@@ -9,142 +9,43 @@ import {
   type ContextSourceId,
   type ContextSourceResult,
 } from "@prompt-preflight/core";
-import { isOutsideWorkspace, shouldInclude, type IncludePolicy } from "./privacy";
+import type { Position, Range } from "vscode-languageserver-types";
+import {
+  CODE_TOOL_CAPS,
+  type CodebaseTools,
+  type TextSearchMatch,
+  type ToolDiagnostic,
+  type ToolLocation,
+  type ResultFacts,
+  type ToolResult,
+  type ToolSymbol,
+} from "./codeTools";
+import { shouldInclude, type IncludePolicy } from "./privacy";
 
 /** A 0-based editor position with VS Code semantics; display adds 1. */
-export interface LanguagePosition {
-  line: number;
-  character: number;
-}
+export type LanguagePosition = Position;
 
 /** A half-open editor range. */
-export interface LanguageRange {
-  start: LanguagePosition;
-  end: LanguagePosition;
-}
+export type LanguageRange = Range;
 
-/** Where one language result points: the raw uri plus a workspace path when known. */
-export interface LanguageAnchor {
-  uri: string;
-  /** Workspace-relative POSIX path, or undefined for untitled/virtual documents. */
-  path?: string;
-  range: LanguageRange;
-}
+/** One symbol result. */
+export type LanguageSymbol = ToolSymbol;
 
-export interface LanguageLocation extends LanguageAnchor {
-  name?: string;
-}
+/** One location result. */
+export type LanguageLocation = ToolLocation;
 
-export interface LanguageSymbol {
-  name: string;
-  kind: string;
-  uri?: string;
-  path?: string;
-  range?: LanguageRange;
-  containerName?: string;
-}
+/** One diagnostic result. */
+export type LanguageDiagnostic = ToolDiagnostic;
 
-export interface LanguageDiagnostic extends LanguageAnchor {
-  severity: string;
-  source?: string;
-  message: string;
-}
-
-export interface TextSearchMatch extends LanguageAnchor {
-  preview?: string;
-}
-
-export interface TextSearchOptions {
-  cwd?: string;
-  maxResults: number;
-}
-
-/** Everything searchFallback needs to stand in for one LSP source. */
-export interface SearchFallbackOptions {
-  /** The LSP source id the fragment replaces; also the fragment's source. */
-  sourceId: ContextSourceId;
-  /** The LSP source priority the fragment keeps. */
-  priority: number;
-  cwd?: string;
-  maxResults?: number;
-  folderUri?: string;
-  /** Extra privacy filter on workspace-relative paths; workspace boundary and #41 exclusions stay mandatory. */
-  allowPath?: (path: string) => boolean;
-}
-
-/** The injected port the pure module calls; the adapter implements it over vscode. */
-export interface LanguageApi {
-  documentSymbols(uri: string): Promise<LanguageSymbol[]>;
-  workspaceSymbols(query: string): Promise<LanguageSymbol[]>;
-  definitions(uri: string, position: LanguagePosition): Promise<LanguageLocation[]>;
-  references(uri: string, position: LanguagePosition): Promise<LanguageLocation[]>;
-  diagnostics(uri: string): Promise<LanguageDiagnostic[]>;
-  textSearch(query: string, options: TextSearchOptions): Promise<TextSearchMatch[]>;
-}
-
-/** Which language providers answered the probe. */
-export interface LanguageCapabilities {
-  documentSymbols: boolean;
-  workspaceSymbols: boolean;
-  definitions: boolean;
-  references: boolean;
-  diagnostics: boolean;
-}
+export type { TextSearchMatch };
 
 /** Per-source caps; every cap hit is recorded in provenance.truncated. */
-export const MAX_DIAGNOSTICS = 200;
-export const MAX_DOCUMENT_SYMBOLS = 100;
-export const MAX_WORKSPACE_SYMBOLS = 50;
-export const MAX_DEFINITIONS = 20;
-export const MAX_REFERENCES = 50;
-export const MAX_TEXT_SEARCH_MATCHES = 50;
-
-const MAX_TIMEOUT_MS = 3000;
-
-/** The abort error every cancelled call rejects with, per the ticket contract. */
-function cancelledError(): Error {
-  return Object.assign(new Error("cancelled"), { code: "cancelled" });
-}
-
-/** Rejects when the caller aborted; a cancelled request never resolves. */
-function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) throw cancelledError();
-}
-
-/**
- * Rejects after `ms` milliseconds or on abort, whichever comes first. One
- * settle path clears the timer and removes the abort listener on resolve,
- * reject, abort, and timeout, so nothing stays attached afterwards. A
- * timed-out call rejects with a `code: "timeout"` error; an abort rejects
- * with `code: "cancelled"`.
- */
-export function withTimeout<T>(promise: Promise<T>, ms: number, signal?: AbortSignal): Promise<T> {
-  if (signal?.aborted) return Promise.reject(cancelledError());
-  return new Promise<T>((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let onAbort: (() => void) | undefined;
-    let settled = false;
-    const settle = (finish: () => void): void => {
-      if (settled) return;
-      settled = true;
-      if (timer !== undefined) clearTimeout(timer);
-      if (signal !== undefined && onAbort !== undefined) signal.removeEventListener("abort", onAbort);
-      finish();
-    };
-    timer = setTimeout(
-      () => settle(() => reject(Object.assign(new Error(`timed out after ${ms} ms`), { code: "timeout" }))),
-      ms,
-    );
-    if (signal !== undefined) {
-      onAbort = () => settle(() => reject(cancelledError()));
-      signal.addEventListener("abort", onAbort, { once: true });
-    }
-    promise.then(
-      (value) => settle(() => resolve(value)),
-      (error) => settle(() => reject(error)),
-    );
-  });
-}
+export const MAX_DIAGNOSTICS = CODE_TOOL_CAPS.diagnostics;
+export const MAX_DOCUMENT_SYMBOLS = CODE_TOOL_CAPS.documentSymbols;
+export const MAX_WORKSPACE_SYMBOLS = CODE_TOOL_CAPS.workspaceSymbols;
+export const MAX_DEFINITIONS = CODE_TOOL_CAPS.definitions;
+export const MAX_REFERENCES = CODE_TOOL_CAPS.references;
+export const MAX_TEXT_SEARCH_MATCHES = CODE_TOOL_CAPS.textSearch;
 
 /** One display position: 1-based `line:col` from the 0-based editor position. */
 function positionLabel(position: LanguagePosition): string {
@@ -222,7 +123,6 @@ function symbolLine(symbol: LanguageSymbol): string {
 export function buildSymbolsFragment(symbols: LanguageSymbol[], folderUri?: string): ContextFragment | null {
   if (symbols.length === 0) return null;
   const included = symbols.slice(0, MAX_DOCUMENT_SYMBOLS);
-  // provenance.path only when every capped symbol is in the same known file.
   const paths = new Set(included.map((symbol) => symbol.path));
   const sharedPath = paths.size === 1 && paths.values().next().value !== undefined ? paths.values().next().value : undefined;
   return buildFragment({
@@ -288,303 +188,190 @@ export function buildReferencesFragment(references: LanguageLocation[], folderUr
   });
 }
 
-/**
- * Text-search fallback that stands in for one LSP source: same source id,
- * same priority, provenance kind `text-search`. Never runs without a query.
- * An `rg` failure with code ENOENT rethrows so the source can omit with
- * `unsupported`; matches outside the workspace or rejected by `allowPath`
- * are dropped.
- */
-export async function searchFallback(api: LanguageApi, query: string, options: SearchFallbackOptions, signal?: AbortSignal): Promise<ContextFragment | null> {
-  if (query.trim() === "") return null;
-  const cap = Math.min(options.maxResults ?? MAX_TEXT_SEARCH_MATCHES, MAX_TEXT_SEARCH_MATCHES);
-  let matches: TextSearchMatch[];
-  try {
-    matches = await withTimeout(api.textSearch(query, { cwd: options.cwd, maxResults: cap }), MAX_TIMEOUT_MS, signal);
-  } catch (error) {
-    if (signal?.aborted) throw cancelledError();
-    if ((error as { code?: unknown } | null)?.code === "ENOENT") {
-      throw Object.assign(new Error("rg is not available"), { code: "ENOENT" });
-    }
-    throw error;
-  }
-  const allowed = matches.filter((m) => {
-    const path = m.path;
-    if (path === undefined || path === "" || isOutsideWorkspace(path)) return false;
-    return options.allowPath === undefined || options.allowPath(path);
+/** Renders one text-search match per line, capped at MAX_TEXT_SEARCH_MATCHES. */
+export function buildTextSearchFragment(
+  matches: TextSearchMatch[],
+  source: ContextSourceId,
+  folderUri?: string,
+): ContextFragment | null {
+  if (matches.length === 0) return null;
+  const included = matches.slice(0, MAX_TEXT_SEARCH_MATCHES);
+  return buildFragment({
+    source,
+    kind: "text-search",
+    lines: included.map((match) => {
+      const base = `${match.path ?? match.uri}:${positionLabel(match.range.start)}`;
+      return match.preview !== undefined ? `${base} ${collapse(match.preview)}` : base;
+    }),
+    capped: matches.length > MAX_TEXT_SEARCH_MATCHES,
+    folderUri,
   });
-  if (allowed.length === 0) return null;
-  const included = allowed.slice(0, cap);
-  const content = included.map((m) => {
-    const base = `${m.path ?? m.uri}:${positionLabel(m.range.start)}`;
-    const preview = m.preview !== undefined ? ` ${collapse(m.preview)}` : "";
-    return `${base}${preview}`;
-  });
-  const joined = content.join("\n");
-  return {
-    source: options.sourceId,
-    priority: options.priority,
-    content: joined,
-    tokens: estimateTokens(joined),
-    provenance: {
-      kind: "text-search",
-      truncated: allowed.length > included.length,
-      chars: joined.length,
-      ...(options.folderUri !== undefined ? { folderUri: options.folderUri } : {}),
-    },
-  };
 }
 
-/** Everything the language sources need: the injected port, policy and per-request probe. */
+/** Everything the language sources need: the tools, the policy, and the inputs. */
 export interface LanguageSourceDeps {
-  api: LanguageApi;
+  tools: CodebaseTools;
   policy: IncludePolicy;
   folderUri?: string;
-  cwd?: string;
-  activeUri?: string;
+  /** Workspace-relative path of the active document, when one exists. */
   activePath?: string;
+  /** Cursor position in the active document, for definitions and references. */
   activePosition?: LanguagePosition;
+  /** Open file documents, for diagnostics. */
   openDocuments?: Array<{ uri: string; path: string }>;
   /** Workspace-symbol query: the selected identifier or a draft identifier. */
   query?: string;
-  /** Per-request capability probe; the adapter caches per document version. */
-  probe?: (signal?: AbortSignal) => Promise<LanguageCapabilities | null>;
-  timeoutMs?: number;
 }
 
-/** Runs one provider call under the provider timeout and the cancellation rules. */
-async function providerCall<T>(deps: LanguageSourceDeps, run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-  return withTimeout(run(), deps.timeoutMs ?? MAX_TIMEOUT_MS, signal);
+/** Maps one tool result to the source's omitted reason. */
+function omittedReason(result: { omittedReason?: string }): "empty" | "excluded" | "unsupported" | "error" {
+  const reason = result.omittedReason;
+  return reason === "excluded" || reason === "unsupported" || reason === "error" ? reason : "empty";
 }
 
-/** The fallback options shared by every LSP source. */
-function fallbackOptions(deps: LanguageSourceDeps, sourceId: ContextSourceId): SearchFallbackOptions {
+/** The manifest details shared by the language sources. */
+function detailsOf(result: ResultFacts, count: number): Record<string, number | boolean> {
   return {
-    sourceId,
-    priority: SOURCE_PRIORITIES[sourceId],
-    cwd: deps.cwd,
-    folderUri: deps.folderUri,
-    allowPath: (path) => shouldInclude(path, "workspace", deps.policy),
+    count,
+    dropped: result.dropped,
+    ...(result.fallback === "text-search" ? { textSearch: true } : {}),
   };
+}
+
+/** The empty result with the tool's facts. */
+function emptyResult(result: ResultFacts, extra: Record<string, number | boolean> = {}): ContextSourceResult {
+  return {
+    fragments: [],
+    omittedReason: omittedReason(result),
+    details: { count: 0, dropped: result.dropped, ...extra, ...(result.fallback === "text-search" ? { textSearch: true } : {}) },
+  };
+}
+
+/** Builds the fallback or LSP fragment for a symbol-like result. */
+function symbolFragment(
+  result: Awaited<ReturnType<CodebaseTools["documentSymbols"]>>,
+  source: "symbols" | "workspace-symbols",
+  folderUri?: string,
+): ContextFragment | null {
+  if (result.fallback === "text-search") return buildTextSearchFragment(result.items, source, folderUri);
+  return source === "symbols" ? buildSymbolsFragment(result.items, folderUri) : buildWorkspaceSymbolsFragment(result.items, folderUri);
+}
+
+/** Builds the fallback or LSP fragment for a location-like result. */
+function locationFragment(
+  result: Awaited<ReturnType<CodebaseTools["definitions"]>>,
+  source: "definitions" | "references",
+  folderUri?: string,
+): ContextFragment | null {
+  if (result.fallback === "text-search") return buildTextSearchFragment(result.items, source, folderUri);
+  return source === "definitions" ? buildDefinitionsFragment(result.items, folderUri) : buildReferencesFragment(result.items, folderUri);
 }
 
 /**
  * The diagnostics source: live diagnostics for every included open document,
- * flattened, capped at MAX_DIAGNOSTICS. #36 never calls getDiagnostics;
- * this source owns it. No cache: diagnostics are read fresh per request.
+ * flattened and capped. It never falls back to text search because text
+ * search cannot produce diagnostics.
  */
 export function createDiagnosticsSource(deps: LanguageSourceDeps): ContextSource {
   return {
     id: "diagnostics",
     priority: SOURCE_PRIORITIES.diagnostics,
     collect: async (signal?: AbortSignal) => {
-      throwIfAborted(signal);
       const documents = deps.openDocuments ?? [];
       if (documents.length === 0) return { fragments: [], omittedReason: "empty" as const };
-      const included = documents.filter((document) => shouldInclude(document.path, "diagnostic", deps.policy));
+      const included = documents.filter((document) => shouldInclude(document.path, "prompt-file", deps.policy));
       if (included.length === 0) return { fragments: [], omittedReason: "excluded" as const };
-      if (await capabilityMissing(deps, "diagnostics", signal)) return { fragments: [], omittedReason: "unsupported" as const };
-      let collected: LanguageDiagnostic[];
-      try {
-        const perDocument = await Promise.all(included.map((document) => providerCall(deps, () => deps.api.diagnostics(document.uri), signal)));
-        collected = perDocument.flat();
-      } catch (error) {
-        if (signal?.aborted) throw cancelledError();
-        return { fragments: [], omittedReason: "error" as const };
+      const result = await deps.tools.diagnostics({ paths: included.map((document) => document.path) }, signal);
+      if (result.items.length === 0) {
+        return emptyResult(result, { files: included.length, dropped: documents.length - included.length + result.dropped });
       }
-      if (collected.length === 0) return { fragments: [], omittedReason: "empty" as const };
-      const fragment = buildDiagnosticsFragment(collected, deps.folderUri);
-      if (fragment === null) return { fragments: [], omittedReason: "empty" as const };
+      const fragment = buildDiagnosticsFragment(result.items, deps.folderUri);
+      if (fragment === null) return emptyResult(result, { files: included.length });
       return {
         fragments: [fragment],
-        details: { files: included.length, count: fragment.content.split("\n").length, dropped: documents.length - included.length },
+        details: {
+          files: included.length,
+          count: fragment.content.split("\n").length,
+          dropped: documents.length - included.length + result.dropped,
+        },
       };
     },
   };
 }
 
-/**
- * Probes which language providers answer for one document. Runs every port
- * method under the timeout and turns each result into a boolean; a timeout
- * or a throw, synchronous or not, is false. The full lists are discarded:
- * the probe never collects symbols into a fragment. An empty uri means no
- * document: null. The signal rejects the whole probe on abort.
- */
-export async function probeCapabilities(api: LanguageApi, uri: string, timeoutMs = MAX_TIMEOUT_MS, signal?: AbortSignal): Promise<LanguageCapabilities | null> {
-  if (uri === "") return null;
-  // The wrapper turns a synchronous provider throw into a rejection so the
-  // catch below still records `false` for that capability.
-  const calls: Array<[keyof LanguageCapabilities, () => Promise<unknown>]> = [
-    ["documentSymbols", () => api.documentSymbols(uri)],
-    ["workspaceSymbols", () => api.workspaceSymbols("probe")],
-    ["definitions", () => api.definitions(uri, { line: 0, character: 0 })],
-    ["references", () => api.references(uri, { line: 0, character: 0 })],
-    ["diagnostics", () => api.diagnostics(uri)],
-  ];
-  const capabilities = { documentSymbols: false, workspaceSymbols: false, definitions: false, references: false, diagnostics: false };
-  await Promise.all(
-    calls.map(async ([key, run]) => {
-      try {
-        const value = await withTimeout(Promise.resolve().then(run), timeoutMs, signal);
-        capabilities[key] = value !== null && value !== undefined;
-      } catch (error) {
-        if (signal?.aborted) throw cancelledError();
-        capabilities[key] = false; // a timeout or a throw means the provider is unavailable
-      }
-    }),
-  );
-  return capabilities;
-}
-
-/** Drops results that cannot be resolved inside a workspace folder or fail the policy. */
-function filterByPolicy<T extends { path?: string }>(items: T[], policy: IncludePolicy): T[] {
-  return items.filter((item) => {
-    const path = item.path;
-    if (path === undefined) return false; // pathless results are outside the workspace
-    return shouldInclude(path, "workspace", policy);
-  });
-}
-
-/** True when the per-request probe is missing or says the capability is unavailable. */
-async function capabilityMissing(deps: LanguageSourceDeps, capability: keyof LanguageCapabilities, signal?: AbortSignal): Promise<boolean> {
-  if (deps.probe === undefined) return false;
-  const capabilities = await deps.probe(signal);
-  return capabilities === null || !capabilities[capability];
-}
-
-/** The successful source result: one fragment plus the manifest detail. */
-function collected(fragment: ContextFragment, count: number, dropped = 0, textSearch = false): { fragments: ContextFragment[]; details: Record<string, number | boolean> } {
+/** The symbols source: document symbols of the active file. */
+export function createSymbolsSource(deps: LanguageSourceDeps): ContextSource {
   return {
-    fragments: [fragment],
-    details: textSearch ? { count, textSearch: true, dropped } : { count, dropped },
-  };
-}
-
-/**
- * Shared collect logic for the four LSP sources that can fall back to text
- * search: gate on #41's predicate, probe per request, call the provider
- * under the timeout, filter by policy, cap, and fall back when the LSP
- * layer is unavailable and a query exists. A provider failure omits with
- * `error`; an abort throws and rejects the whole assemble.
- */
-function createFallbackSource(
-  deps: LanguageSourceDeps,
-  options: {
-    id: ContextSourceId;
-    capability: keyof LanguageCapabilities;
-    /** Verifies the prerequisites; returns an omit reason, or null to continue. */
-    guard: (signal?: AbortSignal) => Promise<"empty" | "excluded" | null>;
-    /** Builds the LSP call; returns raw results before the policy filter. */
-    call: () => Promise<Array<{ path?: string }>>;
-    /** Wraps the filtered results into the fragment with this source's cap. */
-    build: (results: Array<{ path?: string }>, folderUri?: string) => ContextFragment | null;
-  },
-): ContextSource {
-  const { id, capability, guard, call, build } = options;
-  /**
-   * Runs the text-search fallback with one error contract: a missing `rg`
-   * (ENOENT) omits with `unsupported`, any other fallback failure omits
-   * with `error`, no matches omits with `empty`, and an abort rethrows.
-   */
-  const runFallback = async (signal?: AbortSignal): Promise<ContextSourceResult> => {
-    if (deps.query === undefined || deps.query.trim() === "") return { fragments: [], omittedReason: "empty" as const };
-    try {
-      const fragment = await searchFallback(deps.api, deps.query, fallbackOptions(deps, id), signal);
-      return fragment === null ? { fragments: [], omittedReason: "empty" as const } : collected(fragment, fragment.content.split("\n").length, 0, true);
-    } catch (error) {
-      if (signal?.aborted) throw cancelledError();
-      if ((error as { code?: unknown } | null)?.code === "ENOENT") return { fragments: [], omittedReason: "unsupported" as const };
-      return { fragments: [], omittedReason: "error" as const };
-    }
-  };
-  return {
-    id,
-    priority: SOURCE_PRIORITIES[id],
+    id: "symbols",
+    priority: SOURCE_PRIORITIES.symbols,
     collect: async (signal?: AbortSignal) => {
-      throwIfAborted(signal);
-      const reason = await guard(signal);
-      if (reason !== null) return { fragments: [], omittedReason: reason };
-      if (await capabilityMissing(deps, capability, signal)) {
-        // No LSP capability: fall back to text search when a query exists,
-        // otherwise the LSP layer is unavailable for this source.
-        if (deps.query === undefined || deps.query.trim() === "") {
-          return { fragments: [], omittedReason: "unsupported" as const };
-        }
-        return runFallback(signal);
-      }
-      let raw: Array<{ path?: string }>;
-      try {
-        raw = await providerCall(deps, call, signal);
-      } catch (error) {
-        if (signal?.aborted) throw cancelledError();
-        return { fragments: [], omittedReason: "error" as const };
-      }
-      const filtered = filterByPolicy(raw, deps.policy);
-      if (filtered.length === 0) {
-        // The provider answered but every result failed the policy: record
-        // the drops and never fall back to text search for hidden data.
-        if (raw.length > 0) {
-          return { fragments: [], omittedReason: "empty" as const, details: { count: 0, dropped: raw.length } };
-        }
-        return runFallback(signal);
-      }
-      const fragment = build(filtered, deps.folderUri);
-      if (fragment === null) return { fragments: [], omittedReason: "empty" as const };
-      return collected(fragment, fragment.content.split("\n").length, raw.length - filtered.length);
+      if (deps.activePath === undefined) return { fragments: [], omittedReason: "empty" as const };
+      if (!shouldInclude(deps.activePath, "prompt-file", deps.policy)) return { fragments: [], omittedReason: "excluded" as const };
+      const result = await deps.tools.documentSymbols({ path: deps.activePath, query: deps.query }, signal);
+      if (result.items.length === 0) return emptyResult(result);
+      const fragment = symbolFragment(result, "symbols", deps.folderUri);
+      if (fragment === null) return emptyResult(result);
+      return { fragments: [fragment], details: detailsOf(result, fragment.content.split("\n").length) };
     },
   };
 }
 
-/** The guard for the sources around the active editor: uri, path, position and the #41 predicate. */
-function activeGuard(deps: LanguageSourceDeps, withPosition: boolean): Promise<"empty" | "excluded" | null> {
-  if (deps.activeUri === undefined || deps.activePath === undefined) return Promise.resolve("empty");
-  if (withPosition && deps.activePosition === undefined) return Promise.resolve("empty");
-  if (!shouldInclude(deps.activePath, "workspace", deps.policy)) return Promise.resolve("excluded");
-  return Promise.resolve(null);
-}
-
-/** The symbols source: document symbols of the active file. */
-export function createSymbolsSource(deps: LanguageSourceDeps): ContextSource {
-  return createFallbackSource(deps, {
-    id: "symbols",
-    capability: "documentSymbols",
-    guard: (signal) => activeGuard(deps, false),
-    call: () => deps.api.documentSymbols(deps.activeUri as string),
-    build: (results, folderUri) => buildSymbolsFragment(results as LanguageSymbol[], folderUri),
-  });
-}
-
 /** The workspace-symbols source: never searches with an empty query. */
 export function createWorkspaceSymbolsSource(deps: LanguageSourceDeps): ContextSource {
-  return createFallbackSource(deps, {
+  return {
     id: "workspace-symbols",
-    capability: "workspaceSymbols",
-    guard: async () => (deps.query !== undefined && deps.query.trim() !== "" ? null : "empty"),
-    call: () => deps.api.workspaceSymbols(deps.query as string),
-    build: (results, folderUri) => buildWorkspaceSymbolsFragment(results as LanguageSymbol[], folderUri),
-  });
+    priority: SOURCE_PRIORITIES["workspace-symbols"],
+    collect: async (signal?: AbortSignal) => {
+      if (deps.query === undefined || deps.query.trim() === "") return { fragments: [], omittedReason: "empty" as const };
+      const result = await deps.tools.workspaceSymbols({ query: deps.query }, signal);
+      if (result.items.length === 0) return emptyResult(result);
+      const fragment = symbolFragment(result, "workspace-symbols", deps.folderUri);
+      if (fragment === null) return emptyResult(result);
+      return { fragments: [fragment], details: detailsOf(result, fragment.content.split("\n").length) };
+    },
+  };
 }
 
 /** The definitions source: where the active identifier is declared. */
 export function createDefinitionsSource(deps: LanguageSourceDeps): ContextSource {
-  return createFallbackSource(deps, {
+  return {
     id: "definitions",
-    capability: "definitions",
-    guard: (signal) => activeGuard(deps, true),
-    call: () => deps.api.definitions(deps.activeUri as string, deps.activePosition as LanguagePosition),
-    build: (results, folderUri) => buildDefinitionsFragment(results as LanguageLocation[], folderUri),
-  });
+    priority: SOURCE_PRIORITIES.definitions,
+    collect: async (signal?: AbortSignal) => {
+      if (deps.activePath === undefined) return { fragments: [], omittedReason: "empty" as const };
+      if (deps.activePosition === undefined) return { fragments: [], omittedReason: "empty" as const };
+      if (!shouldInclude(deps.activePath, "prompt-file", deps.policy)) return { fragments: [], omittedReason: "excluded" as const };
+      const result = await deps.tools.definitions(
+        { path: deps.activePath, position: deps.activePosition, query: deps.query },
+        signal,
+      );
+      if (result.items.length === 0) return emptyResult(result);
+      const fragment = locationFragment(result, "definitions", deps.folderUri);
+      if (fragment === null) return emptyResult(result);
+      return { fragments: [fragment], details: detailsOf(result, fragment.content.split("\n").length) };
+    },
+  };
 }
 
 /** The references source: where the active identifier is used. */
 export function createReferencesSource(deps: LanguageSourceDeps): ContextSource {
-  return createFallbackSource(deps, {
+  return {
     id: "references",
-    capability: "references",
-    guard: (signal) => activeGuard(deps, true),
-    call: () => deps.api.references(deps.activeUri as string, deps.activePosition as LanguagePosition),
-    build: (results, folderUri) => buildReferencesFragment(results as LanguageLocation[], folderUri),
-  });
+    priority: SOURCE_PRIORITIES.references,
+    collect: async (signal?: AbortSignal) => {
+      if (deps.activePath === undefined) return { fragments: [], omittedReason: "empty" as const };
+      if (deps.activePosition === undefined) return { fragments: [], omittedReason: "empty" as const };
+      if (!shouldInclude(deps.activePath, "prompt-file", deps.policy)) return { fragments: [], omittedReason: "excluded" as const };
+      const result = await deps.tools.references(
+        { path: deps.activePath, position: deps.activePosition, query: deps.query },
+        signal,
+      );
+      if (result.items.length === 0) return emptyResult(result);
+      const fragment = locationFragment(result, "references", deps.folderUri);
+      if (fragment === null) return emptyResult(result);
+      return { fragments: [fragment], details: detailsOf(result, fragment.content.split("\n").length) };
+    },
+  };
 }
 
 /** The five language sources in reserved order: diagnostics first. */

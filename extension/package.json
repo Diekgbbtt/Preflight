@@ -74,13 +74,19 @@
     }
   },
   "scripts": {
-    "build": "esbuild src/extension.ts --bundle --platform=node --target=node18 --format=cjs --external:vscode --outfile=dist/extension.js",
+    "build": "esbuild src/extension.ts --bundle --platform=node --target=node18 --format=cjs --external:vscode --outfile=dist/extension.js && node scripts/copy-rg.mjs",
     "watch": "npm run build -- --watch",
     "package": "npm run build && vsce package --no-dependencies"
   },
   "devDependencies": {
     "@prompt-preflight/core": "*",
     "@types/vscode": "~1.90.0",
+    "@vscode/ripgrep": "^1.18.0",
     "@vscode/vsce": "^3.2.0"
+  },
+  "dependencies": {
+    "vscode-jsonrpc": "^10.0.0",
+    "vscode-languageserver-protocol": "^3.18.5",
+    "vscode-languageserver-types": "^3.18.5"
   }
 }

@@ -1,203 +1,229 @@
-// The thin VS Code adapter for the LanguageApi port (ticket #37). This is
-// the only file in the ticket that imports vscode; the pure module stays
-// platform-free. The adapter converts vscode values to plain objects and
-// caches capability probes per document version.
-import * as path from "node:path";
+// The thin VS Code adapter for the LSP protocol port and the text-search port
+// (ticket #37). This is the only file in this layer that imports vscode.
+// It converts editor values to LSP types and delegates policy to the tools.
+import * as nodePath from "node:path";
 import * as vscode from "vscode";
 import {
-  MAX_TEXT_SEARCH_MATCHES,
-  probeCapabilities,
-  type LanguageApi,
-  type LanguageCapabilities,
-  type LanguageDiagnostic,
-  type LanguageLocation,
-  type LanguagePosition,
-  type LanguageRange,
-  type LanguageSymbol,
-  type TextSearchMatch,
-  type TextSearchOptions,
-} from "./languageContext";
-import { isOutsideWorkspace } from "./privacy";
-import { rg, type ExecResult } from "./exec";
+  DiagnosticSeverity,
+  SymbolKind,
+  type Diagnostic,
+  type DefinitionParams,
+  type DocumentSymbolParams,
+  type Location,
+  type Position,
+  type Range,
+  type ReferenceParams,
+  type SymbolInformation,
+  type WorkspaceSymbolParams,
+} from "vscode-languageserver-protocol";
+import type { CancellationToken } from "vscode-jsonrpc";
+import type { LanguageProtocol, TextSearchMatch, TextSearchPort } from "./codeTools";
+import { EXCLUDE_GLOB, isOutsideWorkspace } from "./privacy";
+import { parseRipgrepFiles, parseRipgrepJson, runRipgrep } from "./ripgrep";
 
 export interface VscodeLanguageApiOptions {
+  /** Workspace root for uriOf and rg. Defaults to the first workspace folder. */
   cwd?: string;
-  rg?: typeof rg;
+  /** The bundled rg binary. */
+  rgPath?: string;
+  /** Injectable executor for tests. */
+  runRipgrep?: typeof runRipgrep;
 }
 
-export function createVscodeLanguageApi(options: VscodeLanguageApiOptions = {}): LanguageApi & {
-  probe(uri: string, signal?: AbortSignal): Promise<LanguageCapabilities | null>;
-  openDocuments(): Array<{ uri: string; path: string }>;
-} {
-  const rgCommand = options.rg ?? rg;
-  // One entry per uri, replaced on every computed probe: bounded by the
-  // number of open documents, never by the number of edits.
-  const probeCache = new Map<string, { version: number; capabilities: LanguageCapabilities | null }>();
-
+export function createVscodeLanguageApi(options: VscodeLanguageApiOptions = {}): LanguageProtocol & TextSearchPort {
   const toUri = (uri: string): vscode.Uri => vscode.Uri.parse(uri);
-  const toPosition = (position: LanguagePosition): vscode.Position => new vscode.Position(position.line, position.character);
-
-  /** Workspace-relative POSIX path, or undefined for untitled and virtual documents. */
-  const relativePath = (uri: vscode.Uri): string | undefined => {
-    if (uri.scheme !== "file") return undefined;
-    return vscode.workspace.asRelativePath(uri, false).replace(/\\/g, "/");
-  };
-
-  const toRange = (range: vscode.Range): LanguageRange => ({
+  const toPosition = (position: Position): vscode.Position => new vscode.Position(position.line, position.character);
+  const toRange = (range: vscode.Range): Range => ({
     start: { line: range.start.line, character: range.start.character },
     end: { line: range.end.line, character: range.end.character },
   });
 
-  const convertSymbol = (symbol: vscode.SymbolInformation | vscode.DocumentSymbol, uri: vscode.Uri, containerName?: string): LanguageSymbol => {
+  const rootPath = (): string | undefined => options.cwd ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+  /** Workspace-relative POSIX path, or undefined for virtual and outside documents. */
+  const relativePath = (uri: vscode.Uri): string | undefined => {
+    if (uri.scheme !== "file") return undefined;
+    const relative = vscode.workspace.asRelativePath(uri, false).replace(/\\/g, "/").replace(/^\.\//, "");
+    if (relative === "" || isOutsideWorkspace(relative)) return undefined;
+    return relative;
+  };
+
+  const pathOf = (uri: string): string | undefined => {
+    try {
+      return relativePath(toUri(uri));
+    } catch {
+      return undefined;
+    }
+  };
+
+  const uriOf = (path: string): string | undefined => {
+    if (isOutsideWorkspace(path)) return undefined;
+    const root = rootPath();
+    if (!root) return undefined;
+    return vscode.Uri.file(nodePath.join(root, path)).toString();
+  };
+
+  const cancelledError = (): Error => Object.assign(new Error("cancelled"), { code: "cancelled" });
+  const checkToken = (token: CancellationToken): void => {
+    if (token.isCancellationRequested) throw cancelledError();
+  };
+
+  /** VS Code SymbolKind values are one lower than LSP values; map by name. */
+  const lspSymbolKind = (kind: vscode.SymbolKind): SymbolKind => {
+    const name = vscode.SymbolKind[kind];
+    return ((SymbolKind as unknown as Record<string, number>)[name] ?? SymbolKind.Variable) as SymbolKind;
+  };
+
+  /** VS Code DiagnosticSeverity values are one lower than LSP values; map by name. */
+  const lspSeverity = (severity: vscode.DiagnosticSeverity): DiagnosticSeverity => {
+    const name = vscode.DiagnosticSeverity[severity];
+    return ((DiagnosticSeverity as unknown as Record<string, number>)[name] ?? DiagnosticSeverity.Information) as DiagnosticSeverity;
+  };
+
+  const toSymbolInformation = (
+    symbol: vscode.DocumentSymbol | vscode.SymbolInformation,
+    documentUri: vscode.Uri,
+    containerName?: string,
+  ): SymbolInformation => {
     if ("location" in symbol) {
       return {
         name: symbol.name,
-        kind: vscode.SymbolKind[symbol.kind] ?? String(symbol.kind),
-        uri: symbol.location.uri.toString(),
-        path: relativePath(symbol.location.uri),
-        range: toRange(symbol.location.range),
+        kind: lspSymbolKind(symbol.kind),
+        location: { uri: symbol.location.uri.toString(), range: toRange(symbol.location.range) },
         ...(symbol.containerName !== undefined ? { containerName: symbol.containerName } : {}),
       };
     }
     return {
       name: symbol.name,
-      kind: vscode.SymbolKind[symbol.kind] ?? String(symbol.kind),
-      uri: uri.toString(),
-      path: relativePath(uri),
-      range: toRange(symbol.range),
+      kind: lspSymbolKind(symbol.kind),
+      location: { uri: documentUri.toString(), range: toRange(symbol.range) },
       ...(containerName !== undefined ? { containerName } : {}),
     };
   };
 
-  /** Flattens a document-symbol tree into the plain LanguageSymbol list. */
-  const flattenDocumentSymbols = (symbols: readonly (vscode.DocumentSymbol | vscode.SymbolInformation)[], uri: vscode.Uri, containerName?: string): LanguageSymbol[] => {
-    const result: LanguageSymbol[] = [];
+  /** Flattens a DocumentSymbol tree into LSP SymbolInformation records. */
+  const flattenSymbols = (
+    symbols: readonly (vscode.DocumentSymbol | vscode.SymbolInformation)[],
+    uri: vscode.Uri,
+    containerName?: string,
+  ): SymbolInformation[] => {
+    const out: SymbolInformation[] = [];
     for (const symbol of symbols) {
-      result.push(convertSymbol(symbol, uri, containerName));
+      out.push(toSymbolInformation(symbol, uri, containerName));
       if ("children" in symbol && Array.isArray(symbol.children)) {
-        result.push(...flattenDocumentSymbols(symbol.children, uri, symbol.name));
+        out.push(...flattenSymbols(symbol.children, uri, symbol.name));
       }
     }
-    return result;
+    return out;
   };
 
-  const convertLocation = (location: vscode.Location | vscode.LocationLink): LanguageLocation => {
-    if ("targetUri" in location) {
-      const range = location.targetSelectionRange ?? location.targetRange;
-      return { uri: location.targetUri.toString(), path: relativePath(location.targetUri), range: toRange(range) };
+  const toLocations = (value: unknown): Location[] => {
+    if (value === null || value === undefined) return [];
+    const list = Array.isArray(value) ? value : [value];
+    const out: Location[] = [];
+    for (const item of list) {
+      if (item === null || item === undefined) continue;
+      if ("targetUri" in item) {
+        const link = item as vscode.LocationLink;
+        out.push({ uri: link.targetUri.toString(), range: toRange(link.targetSelectionRange ?? link.targetRange) });
+      } else {
+        const location = item as vscode.Location;
+        out.push({ uri: location.uri.toString(), range: toRange(location.range) });
+      }
     }
-    return { uri: location.uri.toString(), path: relativePath(location.uri), range: toRange(location.range) };
+    return out;
   };
 
-  /** Accepts Location, Location | Location[], LocationLink[], or undefined. */
-  const toLocations = (result: unknown): LanguageLocation[] => {
-    if (result === null || result === undefined) return [];
-    const list = Array.isArray(result) ? result : [result];
-    return list
-      .filter((item): item is vscode.Location | vscode.LocationLink => item !== null && item !== undefined)
-      .map(convertLocation);
+  const rgPath = options.rgPath;
+  const rg = options.runRipgrep ?? runRipgrep;
+  const requireRg = (): string => {
+    if (!rgPath) throw Object.assign(new Error("rg is not available"), { code: "ENOENT" });
+    return rgPath;
   };
 
-  const api: LanguageApi = {
-    async documentSymbols(uri: string): Promise<LanguageSymbol[]> {
-      const target = toUri(uri);
+  return {
+    uriOf,
+    pathOf,
+
+    async documentSymbols(params: DocumentSymbolParams, token: CancellationToken): Promise<SymbolInformation[]> {
+      checkToken(token);
+      const target = toUri(params.textDocument.uri);
       const result = (await vscode.commands.executeCommand("vscode.executeDocumentSymbolProvider", target)) as
         | readonly (vscode.DocumentSymbol | vscode.SymbolInformation)[]
         | undefined;
       if (!Array.isArray(result)) return [];
-      return flattenDocumentSymbols(result, target);
+      return flattenSymbols(result, target);
     },
 
-    async workspaceSymbols(query: string): Promise<LanguageSymbol[]> {
-      const result = (await vscode.commands.executeCommand("vscode.executeWorkspaceSymbolProvider", query)) as readonly vscode.SymbolInformation[] | undefined;
+    async workspaceSymbols(params: WorkspaceSymbolParams, token: CancellationToken): Promise<SymbolInformation[]> {
+      checkToken(token);
+      const result = (await vscode.commands.executeCommand("vscode.executeWorkspaceSymbolProvider", params.query)) as
+        | readonly vscode.SymbolInformation[]
+        | undefined;
       if (!Array.isArray(result)) return [];
-      return result.map((symbol) => convertSymbol(symbol, toUri(symbol.location.uri.toString())));
+      return result.map((symbol) => toSymbolInformation(symbol, toUri(symbol.location.uri.toString())));
     },
 
-    async definitions(uri: string, position: LanguagePosition): Promise<LanguageLocation[]> {
-      const result = await vscode.commands.executeCommand("vscode.executeDefinitionProvider", toUri(uri), toPosition(position));
+    async definitions(params: DefinitionParams, token: CancellationToken): Promise<Location[]> {
+      checkToken(token);
+      const result = await vscode.commands.executeCommand(
+        "vscode.executeDefinitionProvider",
+        toUri(params.textDocument.uri),
+        toPosition(params.position),
+      );
       return toLocations(result);
     },
 
-    async references(uri: string, position: LanguagePosition): Promise<LanguageLocation[]> {
-      const result = await vscode.commands.executeCommand("vscode.executeReferenceProvider", toUri(uri), toPosition(position));
+    async references(params: ReferenceParams, token: CancellationToken): Promise<Location[]> {
+      checkToken(token);
+      const result = await vscode.commands.executeCommand(
+        "vscode.executeReferenceProvider",
+        toUri(params.textDocument.uri),
+        toPosition(params.position),
+      );
       return toLocations(result);
     },
 
-    async diagnostics(uri: string): Promise<LanguageDiagnostic[]> {
-      const target = toUri(uri);
-      const diagnostics = vscode.languages.getDiagnostics(target);
-      const base = { uri: target.toString(), path: relativePath(target) };
-      return diagnostics.map((diagnostic) => ({
-        ...base,
+    async diagnostics(uri: string, token: CancellationToken): Promise<Diagnostic[]> {
+      checkToken(token);
+      return vscode.languages.getDiagnostics(toUri(uri)).map((diagnostic) => ({
         range: toRange(diagnostic.range),
-        severity: vscode.DiagnosticSeverity[diagnostic.severity] ?? String(diagnostic.severity),
+        severity: lspSeverity(diagnostic.severity),
         ...(diagnostic.source !== undefined ? { source: diagnostic.source } : {}),
         message: diagnostic.message,
       }));
     },
 
-    async textSearch(query: string, textOptions: TextSearchOptions): Promise<TextSearchMatch[]> {
-      const cwd = textOptions.cwd ?? options.cwd ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
-      const max = textOptions.maxResults ?? MAX_TEXT_SEARCH_MATCHES;
-      const result: ExecResult = await rgCommand(["--json", "--max-count", String(max), "--", query], cwd);
+    async workspaceFiles(token: CancellationToken): Promise<string[]> {
+      checkToken(token);
+      const uris = await vscode.workspace.findFiles("**/*", EXCLUDE_GLOB, 2000);
+      const files: string[] = [];
+      for (const uri of uris) {
+        const relative = relativePath(uri);
+        if (relative !== undefined) files.push(relative);
+      }
+      return files;
+    },
+
+    async search(query: string, textOptions: { cwd?: string; maxResults: number }): Promise<TextSearchMatch[]> {
+      const cwd = textOptions.cwd ?? rootPath() ?? process.cwd();
+      const max = textOptions.maxResults;
+      const result = await rg(requireRg(), ["--json", "--max-count", String(max), "--", query], cwd);
       if (!result.ok) {
         if (result.code === "ENOENT") throw Object.assign(new Error("rg is not available"), { code: "ENOENT" });
         throw Object.assign(new Error(result.stderr || "rg failed"), { code: result.code });
       }
-      const matches: TextSearchMatch[] = [];
-      for (const line of result.stdout.split("\n")) {
-        if (line.trim() === "") continue;
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(line);
-        } catch {
-          continue; // not a JSON line: skip it
-        }
-        if (typeof parsed !== "object" || parsed === null || (parsed as { type?: unknown }).type !== "match") continue;
-        const data = (parsed as { data?: Record<string, unknown> }).data ?? {};
-        const relative = (data.path as { text?: unknown } | undefined)?.text;
-        if (typeof relative !== "string" || isOutsideWorkspace(relative)) continue;
-        const submatch = (data.submatches as Array<{ start?: unknown; end?: unknown }> | undefined)?.[0];
-        const lineNumber = typeof data.line_number === "number" ? data.line_number - 1 : 0;
-        const start = typeof submatch?.start === "number" ? submatch.start : 0;
-        const end = typeof submatch?.end === "number" ? submatch.end : start;
-        const preview = (data.lines as { text?: unknown } | undefined)?.text;
-        matches.push({
-          uri: vscode.Uri.file(path.join(cwd, relative)).toString(),
-          path: relative.replace(/\\/g, "/"),
-          range: { start: { line: lineNumber, character: start }, end: { line: lineNumber, character: end } },
-          ...(typeof preview === "string" ? { preview } : {}),
-        });
-        if (matches.length >= max) break;
+      return parseRipgrepJson(result.stdout, cwd, max);
+    },
+
+    async listFiles(fileOptions: { cwd?: string; maxResults: number }): Promise<string[]> {
+      const cwd = fileOptions.cwd ?? rootPath() ?? process.cwd();
+      const result = await rg(requireRg(), ["--files"], cwd);
+      if (!result.ok) {
+        if (result.code === "ENOENT") throw Object.assign(new Error("rg is not available"), { code: "ENOENT" });
+        throw Object.assign(new Error(result.stderr || "rg failed"), { code: result.code });
       }
-      return matches;
-    },
-  };
-
-  return {
-    ...api,
-    /**
-     * The per-request probe: null with no open document for the uri; cached
-     * by `uri@documentVersion` so repeated requests skip the provider calls.
-     * The activation probe is the caller's non-blocking job, never this.
-     */
-    async probe(uri: string, signal?: AbortSignal): Promise<LanguageCapabilities | null> {
-      const target = toUri(uri);
-      const document = vscode.workspace.textDocuments.find((candidate) => candidate.uri.toString() === target.toString());
-      if (!document) return null;
-      const cached = probeCache.get(uri);
-      if (cached !== undefined && cached.version === document.version) return cached.capabilities;
-      const capabilities = await probeCapabilities(api, uri, 3000, signal);
-      probeCache.set(uri, { version: document.version, capabilities });
-      return capabilities;
-    },
-
-    /** The open file documents, for the diagnostics source's input list. */
-    openDocuments(): Array<{ uri: string; path: string }> {
-      return vscode.workspace.textDocuments
-        .filter((document) => document.uri.scheme === "file")
-        .map((document) => ({ uri: document.uri.toString(), path: relativePath(document.uri) ?? "" }));
+      return parseRipgrepFiles(result.stdout, fileOptions.maxResults);
     },
   };
 }
