@@ -208,7 +208,7 @@ export function createVscodeCodeTools(options: VscodeCodeToolsOptions = {}): Lan
     async search(query: string, textOptions: { cwd?: string; maxResults: number }): Promise<TextSearchMatch[]> {
       const cwd = textOptions.cwd ?? rootPath() ?? process.cwd();
       const max = textOptions.maxResults;
-      const result = await rg(requireRg(), ["--json", "--max-count", String(max), "--", query], cwd);
+      const result = await rg(requireRg(), ["--json", "--max-count", String(max), "--", query, "."], cwd);
       if (!result.ok) {
         if (result.code === "ENOENT") throw Object.assign(new Error("rg is not available"), { code: "ENOENT" });
         throw Object.assign(new Error(result.stderr || "rg failed"), { code: result.code });

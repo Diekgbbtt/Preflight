@@ -160,7 +160,7 @@ describe("createVscodeCodeTools text search", () => {
     }));
     const api = createVscodeCodeTools({ cwd: "/w", rgPath: "/w/dist/rg", runRipgrep: rg });
     const matches = await api.search("makeThing", { maxResults: 50 });
-    expect(rg).toHaveBeenCalledWith("/w/dist/rg", ["--json", "--max-count", "50", "--", "makeThing"], "/w");
+    expect(rg).toHaveBeenCalledWith("/w/dist/rg", ["--json", "--max-count", "50", "--", "makeThing", "."], "/w");
     expect(matches).toEqual([
       { uri: "file:///w/src/a.ts", path: "src/a.ts", range: { start: { line: 4, character: 2 }, end: { line: 4, character: 10 } }, preview: "  const x = makeThing();\n" },
       { uri: "file:///w/src/b.ts", path: "src/b.ts", range: { start: { line: 0, character: 0 }, end: { line: 0, character: 9 } }, preview: "makeThing()" },

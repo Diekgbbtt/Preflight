@@ -46,8 +46,10 @@ export function parseRipgrepJson(stdout: string, cwd: string, maxResults = Numbe
     }
     if (typeof parsed !== "object" || parsed === null || (parsed as { type?: unknown }).type !== "match") continue;
     const data = (parsed as { data?: Record<string, unknown> }).data ?? {};
-    const relative = (data.path as { text?: unknown } | undefined)?.text;
-    if (typeof relative !== "string" || isOutsideWorkspace(relative)) continue;
+    const rawPath = (data.path as { text?: unknown } | undefined)?.text;
+    if (typeof rawPath !== "string") continue;
+    const relative = rawPath.replace(/^\.\//, "").replace(/\\/g, "/");
+    if (isOutsideWorkspace(relative)) continue;
     const submatch = (data.submatches as Array<{ start?: unknown; end?: unknown }> | undefined)?.[0];
     const lineNumber = typeof data.line_number === "number" ? data.line_number - 1 : 0;
     const start = typeof submatch?.start === "number" ? submatch.start : 0;
@@ -71,7 +73,7 @@ export function parseRipgrepFiles(stdout: string, maxResults = Number.POSITIVE_I
   for (const line of stdout.split("\n")) {
     const raw = line.trim();
     if (raw === "") continue;
-    const normalized = raw.replace(/\\/g, "/");
+    const normalized = raw.replace(/^\.\//, "").replace(/\\/g, "/");
     if (isOutsideWorkspace(normalized) || seen.has(normalized)) continue;
     seen.add(normalized);
     files.push(normalized);

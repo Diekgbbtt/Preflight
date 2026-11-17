@@ -35,7 +35,7 @@ describe("runRipgrep", () => {
 describe("parseRipgrepJson", () => {
   it("parses match lines into workspace-relative matches", () => {
     const matches = parseRipgrepJson(
-      jsonLine({ path: { text: "src/a.ts" }, line_number: 5, submatches: [{ start: 2, end: 10 }], lines: { text: "  const x = makeThing();\n" } }),
+      jsonLine({ path: { text: "./src/a.ts" }, line_number: 5, submatches: [{ start: 2, end: 10 }], lines: { text: "  const x = makeThing();\n" } }),
       "/w",
     );
     expect(matches).toEqual([
@@ -65,7 +65,7 @@ describe("parseRipgrepJson", () => {
 
 describe("parseRipgrepFiles", () => {
   it("returns unique workspace-relative paths and caps", () => {
-    expect(parseRipgrepFiles("src/a.ts\nsrc/a.ts\nsrc/b.ts\n")).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(parseRipgrepFiles("./src/a.ts\nsrc/a.ts\n./src/b.ts\n")).toEqual(["src/a.ts", "src/b.ts"]);
     expect(parseRipgrepFiles("a.ts\nb.ts\nc.ts\n", 2)).toEqual(["a.ts", "b.ts"]);
   });
 

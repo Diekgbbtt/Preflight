@@ -208,7 +208,7 @@ test("E8: an absent workspace symbol falls over to the bundled rg", async () => 
   const result = await tools.workspaceSymbols({ query: "MissingNeedle" });
   assert.equal(result.fallback, "text-search", `expected a text-search fallback, got ${JSON.stringify(result)}`);
   if (result.fallback === "text-search") {
-    assert.ok(result.items.some((item) => item.path === "src/needle.ts"), "needle match missing");
+    assert.ok(result.items.some((item) => item.path === "src/needle.ts"), `needle match missing: ${JSON.stringify(result)}`);
   }
 });
 
