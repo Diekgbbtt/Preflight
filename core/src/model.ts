@@ -8,8 +8,11 @@ import { createClaudeProvider } from "./claudeCli";
 
 export type ProviderId = "claude" | "codex";
 
-/** Must stay exactly the union used by schema.ts ScoreReport.thinkingEffort. */
-export type ThinkingEffort = "low" | "medium" | "high";
+/**
+ * Provider-native thinking effort. The value is passed through to the
+ * inference request unchanged; each provider validates its own vocabulary.
+ */
+export type ThinkingEffort = string;
 
 export interface ModelProfile {
   provider: ProviderId;

@@ -3,14 +3,14 @@ import { describe, expect, it } from "vitest";
 // It reproduces the D1 schema/review import cycle: before extractJson moved into schema.ts
 // this file failed with "ReferenceError: Cannot access 'RUBRIC_TEXT' before initialization".
 import { DEEP_REPLY_SCHEMA, QUICK_REPLY_SCHEMA, RUBRIC_TEXT, hashPrompt, parseScore } from "../src/schema";
-import { analyze, buildReviewRequest, extractJson, parseCliOutput, parseDeepReview, parseQuickReview, review, type ModelRunner, type ModelUsage, type ScoreMeta } from "../src";
+import { LEGACY_DEEP_REPLY_SCHEMA, analyze, buildReviewRequest, extractJson, parseCliOutput, parseDeepReview, parseQuickReview, review, type ModelRunner, type ModelUsage, type ScoreMeta } from "../src";
 
 describe("schema module standalone import", () => {
   it("exposes the rubric, hash and parser without review.ts evaluating first", () => {
     expect(RUBRIC_TEXT).toContain("target (where): 0 = no target at all");
     expect(hashPrompt("hello")).toBe("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
     const s = parseScore('{"dimensions":{"target":25,"action":25,"scope":25,"done":25}}', "p", {
-      source: "quick", provider: "p", model: "m", thinkingEffort: "low", scoredAt: "2026-01-01T00:00:00.000Z",
+      provider: "p", model: "m", thinkingEffort: "low", scoredAt: "2026-01-01T00:00:00.000Z",
     });
     expect(s?.score).toBe(100);
   });
@@ -29,7 +29,7 @@ describe("hashPrompt", () => {
 
 describe("parseScore", () => {
   const prompt = "Add a test for login";
-  const meta: ScoreMeta = { source: "quick", provider: "stub", model: "sonnet", thinkingEffort: "low", scoredAt: "2026-01-01T00:00:00.000Z" };
+  const meta: ScoreMeta = { provider: "stub", model: "sonnet", thinkingEffort: "low", scoredAt: "2026-01-01T00:00:00.000Z" };
   const res = (json: string) => json;
 
   it("sums the four dimensions and records versions", () => {
@@ -38,7 +38,6 @@ describe("parseScore", () => {
     expect(s?.dimensions).toEqual({ target: 20, action: 25, scope: 15, done: 20 });
     expect(s?.score).toBe(80);
     expect(s?.level).toBe("clear");
-    expect(s?.source).toBe("quick");
     expect(s?.provider).toBe("stub");
     expect(s?.model).toBe("sonnet");
     expect(s?.thinkingEffort).toBe("low");
@@ -79,7 +78,7 @@ describe("parseScore", () => {
 
 describe("parseQuickReview", () => {
   const prompt = "Improve the app";
-  const meta: ScoreMeta = { source: "quick", provider: "stub", model: "sonnet", thinkingEffort: "low", scoredAt: "2026-01-01T00:00:00.000Z" };
+  const meta: ScoreMeta = { provider: "stub", model: "sonnet", thinkingEffort: "low", scoredAt: "2026-01-01T00:00:00.000Z" };
 
   it("keeps score, issues and questions from a valid reply", () => {
     const text = JSON.stringify({
@@ -104,16 +103,20 @@ describe("parseQuickReview", () => {
     expect(r.issues[0]).toEqual({ quote: undefined, range: undefined, problem: "Missing", suggestion: "Fix" });
   });
 
-  it("caps issues and questions at 3 and drops empty problems", () => {
+  it("caps issues and questions at 20 and drops empty problems", () => {
     const issue = (p: string) => ({ problem: p, suggestion: "Fix" });
+    const issues = Array.from({ length: 21 }, (_, i) => issue(`i${i}`));
+    issues.splice(1, 0, issue(""));
+    const questions: Array<string | number> = Array.from({ length: 22 }, (_, i) => `q${i}`);
+    questions.splice(1, 0, 2);
     const text = JSON.stringify({
       dimensions: { target: 25, action: 25, scope: 25, done: 25 },
-      issues: [issue("a"), issue(""), issue("c"), issue("d")],
-      questions: ["1", 2, "3", "4"],
+      issues,
+      questions,
     });
     const r = parseQuickReview(text, prompt, meta);
-    expect(r.issues.map((i) => i.problem)).toEqual(["a", "c", "d"]);
-    expect(r.questions).toEqual(["1", "3", "4"]);
+    expect(r.issues.map((i) => i.problem)).toEqual(Array.from({ length: 20 }, (_, i) => `i${i}`));
+    expect(r.questions).toEqual(Array.from({ length: 20 }, (_, i) => `q${i}`));
   });
 
   it("returns score null and empty lists without throwing on malformed text", () => {
@@ -147,7 +150,7 @@ describe("parseQuickReview", () => {
 describe("parseDeepReview", () => {
   const prompt = "Fix the login bug";
   const usage = { inputTokens: 100, outputTokens: 20, costUsd: 0.001 };
-  const meta: ScoreMeta & { usage: ModelUsage; latency: number } = { source: "deep", provider: "stub", model: "sonnet", thinkingEffort: "high", scoredAt: "2026-01-01T00:00:00.000Z", usage, latency: 42 };
+  const meta: { usage: ModelUsage; latency: number } = { usage, latency: 42 };
 
   it("builds a full DeepReview with versions and injected usage", () => {
     const text = JSON.stringify({
@@ -160,13 +163,10 @@ describe("parseDeepReview", () => {
       contextGaps: ["No error text"],
     });
     const r = parseDeepReview(text, prompt, meta);
-    expect(r.score?.score).toBe(80);
-    expect(r.score?.level).toBe("clear");
-    expect(r.score?.rubricVersion).toBe("v1");
-    expect(r.score?.promptHash).toBe(hashPrompt(prompt));
+    expect(r).not.toHaveProperty("score");
+    expect(r).not.toHaveProperty("improvedPrompt");
     expect(r.issues).toHaveLength(1);
     expect(r.questions).toEqual([{ question: "What should happen?", why: "Done needs a goal", options: ["Redirect", "Error message", ""] }]);
-    expect(r.improvedPrompt).toBe("Fix [which bug?]");
     expect(r.assumptions).toEqual(["The bug is in the client"]);
     expect(r.contextGaps).toEqual(["No error text"]);
     expect(r.usage).toEqual(usage);
@@ -183,22 +183,23 @@ describe("parseDeepReview", () => {
     expect(r.questions).toEqual([{ question: "Keep me", why: "", options: [] }]);
   });
 
-  it("caps questions and options at 3 and keeps only string options", () => {
-    const q = (n: number) => ({ question: `q${n}`, options: ["a", 1, "b", "c"] });
-    const text = JSON.stringify({ dimensions: { target: 25, action: 25, scope: 25, done: 25 }, questions: [q(1), q(2), q(3), q(4)] });
+  it("caps questions at 20, options at 3, and keeps only string options", () => {
+    const q = (n: number) => ({ question: `q${n}`, options: ["a", 1, "b", "c", "d"] });
+    const text = JSON.stringify({
+      dimensions: { target: 25, action: 25, scope: 25, done: 25 },
+      questions: Array.from({ length: 21 }, (_, i) => q(i)),
+    });
     const r = parseDeepReview(text, prompt, meta);
-    expect(r.questions.map((x) => x.question)).toEqual(["q1", "q2", "q3"]);
+    expect(r.questions.map((x) => x.question)).toEqual(Array.from({ length: 20 }, (_, i) => `q${i}`));
     expect(r.questions[0].options).toEqual(["a", "b", "c"]);
   });
 
-  it("keeps only strings in assumptions and contextGaps and defaults improvedPrompt", () => {
+  it("keeps only strings in assumptions and contextGaps", () => {
     const text = JSON.stringify({
-      dimensions: { target: 25, action: 25, scope: 25, done: 25 },
       assumptions: ["ok", 5],
       contextGaps: [null, "gap"],
     });
     const r = parseDeepReview(text, prompt, meta);
-    expect(r.improvedPrompt).toBe("");
     expect(r.assumptions).toEqual(["ok"]);
     expect(r.contextGaps).toEqual(["gap"]);
   });
@@ -206,14 +207,14 @@ describe("parseDeepReview", () => {
   it("returns a safe empty review without throwing on malformed text", () => {
     for (const text of ["sorry, no", '{"dimensions":{"target":5.5}}', "[]", '{"questions":"no"}', '{"dimensions":{"target":25,"action":25,"scope":25,"done":25}} {"dimensions":{"target":5,"action":5,"scope":5,"done":5}}']) {
       const r = parseDeepReview(text, prompt, meta);
-      expect(r, text).toEqual({ score: null, issues: [], questions: [], improvedPrompt: "", assumptions: [], contextGaps: [], usage, latency: 42, promptVersion: "v1" });
+      expect(r, text).toEqual({ issues: [], questions: [], assumptions: [], contextGaps: [], usage, latency: 42, promptVersion: "v1" });
     }
   });
 
-  it("keeps issues when only the dimensions are invalid", () => {
+  it("ignores dimensions and keeps issues", () => {
     const text = JSON.stringify({ dimensions: { target: 30, action: 25, scope: 25, done: 25 }, issues: [{ problem: "Still here", suggestion: "Fix" }] });
     const r = parseDeepReview(text, prompt, meta);
-    expect(r.score).toBeNull();
+    expect(r).not.toHaveProperty("score");
     expect(r.issues.map((i) => i.problem)).toEqual(["Still here"]);
   });
 });
@@ -246,7 +247,7 @@ describe("buildReviewRequest", () => {
     for (const mode of ["quick", "deep"] as const) {
       const req = buildReviewRequest(prompt, mode, "sonnet");
       expect(req.system.match(new RegExp(RUBRIC_TEXT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))).toHaveLength(1);
-      const schema = mode === "quick" ? QUICK_REPLY_SCHEMA : DEEP_REPLY_SCHEMA;
+      const schema = mode === "quick" ? QUICK_REPLY_SCHEMA : LEGACY_DEEP_REPLY_SCHEMA;
       expect(req.system.match(new RegExp(schema.slice(0, 20).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))).toHaveLength(1);
       expect(req.system).toContain(schema);
     }
@@ -279,13 +280,13 @@ describe("rubric and reply schemas", () => {
 
   it("pins the quick reply schema", () => {
     expect(QUICK_REPLY_SCHEMA).toMatchInlineSnapshot(
-      `"{"dimensions":{"target":0-25,"action":0-25,"scope":0-25,"done":0-25},"confidence":0-1,"issues":[{"quote":"exact words from the prompt or empty","problem":"max 15 words","suggestion":"max 20 words"}],"questions":["max 3 short questions to the user"]}"`,
+      `"{"dimensions":{"target":0-25,"action":0-25,"scope":0-25,"done":0-25},"confidence":0-1,"issues":[{"quote":"exact words from the prompt or empty","problem":"max 15 words","suggestion":"max 20 words"}],"questions":["max 20 short questions to the user"]}"`,
     );
   });
 
   it("pins the deep reply schema", () => {
     expect(DEEP_REPLY_SCHEMA).toMatchInlineSnapshot(
-      `"{"dimensions":{"target":0-25,"action":0-25,"scope":0-25,"done":0-25},"confidence":0-1,"issues":[{"quote":"exact words from the prompt or empty","problem":"what is missing and why it matters","suggestion":"how to fix it"}],"questions":[{"question":"...","why":"why the agent needs it","options":["max 3 choices"]}],"improvedPrompt":"...","assumptions":["..."],"contextGaps":["..."]}"`,
+      `"{"issues":[{"quote":"exact words from the prompt or empty","problem":"what is missing and why it matters","suggestion":"how to fix it"}],"questions":[{"question":"...","why":"why the agent needs it","options":["max 3 choices"]}],"assumptions":["..."],"contextGaps":["..."]}"`,
     );
   });
 });

@@ -10,7 +10,7 @@ export function readModelConfig(): Config {
   return {
     provider: c.get<"claude" | "codex">("provider", "claude"),
     model: c.get("model", "sonnet"),
-    thinkingEffort: c.get<"low" | "medium" | "high">("thinkingEffort", "medium"),
+    thinkingEffort: c.get<string>("thinkingEffort", "medium"),
     quickModel: c.get("quickModel", "haiku"),
     deepModel: c.get("deepModel", "sonnet"),
     claudePath: c.get("claudePath", "claude"),

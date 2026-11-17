@@ -8,7 +8,7 @@ import type { ModelProfile } from "../src/model";
 const request = { system: "You review prompts.", user: "<prompt>\nhi\n</prompt>", model: "sonnet" };
 
 describe("buildClaudeArgs", () => {
-  it.each(["low", "medium", "high"] as const)("maps effort %s to the --effort argument", (effort) => {
+  it.each(["low", "medium", "high", "xhigh", "max", "provider-native"] as const)("maps effort %s to the --effort argument", (effort) => {
     const profile: ModelProfile = { provider: "claude", model: "sonnet", thinkingEffort: effort };
     expect(buildClaudeArgs(request, profile)).toEqual([
       "-p",

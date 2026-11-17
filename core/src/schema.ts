@@ -8,6 +8,9 @@ export const RUBRIC_VERSION = "v1";
 /** Version of the quick and deep review prompt prose. Bump when the prose changes. */
 export const PROMPT_VERSION = "v1";
 
+/** Version of the separate improved-prompt prose. Bump when that prose changes. */
+export const IMPROVE_PROMPT_VERSION = "v1";
+
 /** Shared scoring rubric with anchors for quick and deep review. The only copy of the rubric. */
 export const RUBRIC_TEXT = `Score the prompt on four dimensions, 0-25 each, in steps of 5.
 
@@ -17,10 +20,13 @@ scope (how much): 0 = no bound at all; 5 = a whole-project rewrite; 10 = broad, 
 done (how we know): 0 = no success criteria; 5 = only restates the problem; 10 = a hope such as "should work"; 15 = describes what is wrong but not the goal; 20 = the expected behaviour for the main case; 25 = the expected behaviour or a test that proves it is done.`;
 
 /** Quick review reply shape. The rubric and this schema are the only scoring references in the system prompt. */
-export const QUICK_REPLY_SCHEMA = `{"dimensions":{"target":0-25,"action":0-25,"scope":0-25,"done":0-25},"confidence":0-1,"issues":[{"quote":"exact words from the prompt or empty","problem":"max 15 words","suggestion":"max 20 words"}],"questions":["max 3 short questions to the user"]}`;
+export const QUICK_REPLY_SCHEMA = `{"dimensions":{"target":0-25,"action":0-25,"scope":0-25,"done":0-25},"confidence":0-1,"issues":[{"quote":"exact words from the prompt or empty","problem":"max 15 words","suggestion":"max 20 words"}],"questions":["max 20 short questions to the user"]}`;
 
-/** Deep review reply shape. The rubric and this schema are the only scoring references in the system prompt. */
-export const DEEP_REPLY_SCHEMA = `{"dimensions":{"target":0-25,"action":0-25,"scope":0-25,"done":0-25},"confidence":0-1,"issues":[{"quote":"exact words from the prompt or empty","problem":"what is missing and why it matters","suggestion":"how to fix it"}],"questions":[{"question":"...","why":"why the agent needs it","options":["max 3 choices"]}],"improvedPrompt":"...","assumptions":["..."],"contextGaps":["..."]}`;
+/** Deep review reply shape. Deep review never scores and never writes the improved prompt. */
+export const DEEP_REPLY_SCHEMA = `{"issues":[{"quote":"exact words from the prompt or empty","problem":"what is missing and why it matters","suggestion":"how to fix it"}],"questions":[{"question":"...","why":"why the agent needs it","options":["max 3 choices"]}],"assumptions":["..."],"contextGaps":["..."]}`;
+
+/** Improved-prompt reply shape. Unknown details stay as [placeholders]. */
+export const IMPROVE_REPLY_SCHEMA = `{"improvedPrompt":"..."}`;
 
 export function hashPrompt(text: string): string {
   return createHash("sha256").update(text.trim().replace(/\r\n/g, "\n"), "utf8").digest("hex");
@@ -35,10 +41,10 @@ export interface ScoreReport {
   /** 0-100, the sum of the four dimensions. Never clamped. */
   score: number;
   level: Level;
-  source: "quick" | "deep";
   provider: string;
   model: string;
-  thinkingEffort: "low" | "medium" | "high";
+  /** Provider-native effort value, passed through unchanged. */
+  thinkingEffort: string;
   rubricVersion: string;
   promptHash: string;
   scoredAt: string;
@@ -48,10 +54,10 @@ export interface ScoreReport {
 
 /** The caller-supplied part of a ScoreReport: everything except the parsed score itself. */
 export interface ScoreMeta {
-  source: "quick" | "deep";
   provider: string;
   model: string;
-  thinkingEffort: "low" | "medium" | "high";
+  /** Provider-native effort value, passed through unchanged. */
+  thinkingEffort: string;
   scoredAt: string;
 }
 
@@ -71,12 +77,18 @@ export interface DeepQuestion {
 }
 
 export interface DeepReview {
-  score: ScoreReport | null;
   issues: ReviewIssue[];
   questions: DeepQuestion[];
-  improvedPrompt: string;
   assumptions: string[];
   contextGaps: string[];
+  usage: ModelUsage;
+  latency: number;
+  promptVersion: string;
+}
+
+/** The separate rewrite the user requests after a deep review with questions. */
+export interface ImprovedPrompt {
+  text: string;
   usage: ModelUsage;
   latency: number;
   promptVersion: string;
@@ -131,7 +143,6 @@ export function parseScore(text: string, prompt: string, meta: ScoreMeta): Score
     dimensions,
     score,
     level: levelForScore(score),
-    source: meta.source,
     provider: meta.provider,
     model: meta.model,
     thinkingEffort: meta.thinkingEffort,
@@ -145,10 +156,11 @@ export function parseScore(text: string, prompt: string, meta: ScoreMeta): Score
   return report;
 }
 
-const MAX_ISSUES = 3;
-const MAX_QUESTIONS = 3;
+const MAX_ISSUES = 20;
+const MAX_QUESTIONS = 20;
+const MAX_OPTIONS = 3;
 
-/** Keep at most 3 issues with a non-empty problem. A quote survives only when it occurs in the prompt. */
+/** Keep at most 20 issues with a non-empty problem. A quote survives only when it occurs in the prompt. */
 function parseIssues(raw: unknown, prompt: string): ReviewIssue[] {
   const list = Array.isArray(raw) ? raw : [];
   const out: ReviewIssue[] = [];
@@ -186,10 +198,10 @@ export function parseQuickReview(text: string, prompt: string, meta: ScoreMeta):
   };
 }
 
-export function parseDeepReview(text: string, prompt: string, meta: ScoreMeta & { usage: ModelUsage; latency: number }): DeepReview {
+export function parseDeepReview(text: string, prompt: string, meta: { usage: ModelUsage; latency: number }): DeepReview {
   const raw = asObject(text);
   if (!raw) {
-    return { score: null, issues: [], questions: [], improvedPrompt: "", assumptions: [], contextGaps: [], usage: meta.usage, latency: meta.latency, promptVersion: PROMPT_VERSION };
+    return { issues: [], questions: [], assumptions: [], contextGaps: [], usage: meta.usage, latency: meta.latency, promptVersion: PROMPT_VERSION };
   }
   const questions: DeepQuestion[] = [];
   for (const item of Array.isArray(raw.questions) ? raw.questions : []) {
@@ -198,19 +210,26 @@ export function parseDeepReview(text: string, prompt: string, meta: ScoreMeta & 
     const question = typeof q.question === "string" ? q.question : "";
     if (!question) continue;
     const why = typeof q.why === "string" ? q.why : "";
-    const options = parseStringList(q.options, MAX_QUESTIONS);
+    const options = parseStringList(q.options, MAX_OPTIONS);
     questions.push({ question, why, options });
     if (questions.length >= MAX_QUESTIONS) break;
   }
   return {
-    score: parseScore(text, prompt, meta),
     issues: parseIssues(raw.issues, prompt),
     questions,
-    improvedPrompt: typeof raw.improvedPrompt === "string" ? raw.improvedPrompt : "",
     assumptions: parseStringList(raw.assumptions, Infinity),
     contextGaps: parseStringList(raw.contextGaps, Infinity),
     usage: meta.usage,
     latency: meta.latency,
     promptVersion: PROMPT_VERSION,
   };
+}
+
+/** Parses the separate improved-prompt reply. A blank or malformed rewrite is null. */
+export function parseImprovedPrompt(text: string, usage: ModelUsage, latency: number): ImprovedPrompt | null {
+  const raw = asObject(text);
+  if (!raw) return null;
+  const improved = typeof raw.improvedPrompt === "string" ? raw.improvedPrompt.trim() : "";
+  if (improved === "") return null;
+  return { text: improved, usage, latency, promptVersion: IMPROVE_PROMPT_VERSION };
 }

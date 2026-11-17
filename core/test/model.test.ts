@@ -47,6 +47,11 @@ describe("resolveProfile", () => {
     expect(profile.thinkingEffort).toBe("high");
   });
 
+  it("passes a provider-native effort value through untouched", () => {
+    const profile = resolveProfile({ ...base, thinkingEffort: "xhigh" }, "deep");
+    expect(profile.thinkingEffort).toBe("xhigh");
+  });
+
   it("resolves independently of any VS Code scope: two plain Config objects stay separate", () => {
     const user: Config = { ...base, thinkingEffort: "low" };
     const workspace: Config = { ...base, thinkingEffort: "high", deepModel: "opus" };
@@ -111,13 +116,16 @@ describe("createProvider", () => {
     expect(result.ok).toBe(false);
   });
 
-  it("rejects a thinking effort outside the enum", () => {
+  it("accepts any non-empty provider-native thinking effort", () => {
     const provider = createProvider(claudeProfile, config);
-    const result = provider.validateProfile({
-      provider: "claude",
-      model: "sonnet",
-      thinkingEffort: "urgent" as ModelProfile["thinkingEffort"],
-    });
+    for (const thinkingEffort of ["low", "medium", "high", "xhigh", "max", "custom"]) {
+      expect(provider.validateProfile({ provider: "claude", model: "sonnet", thinkingEffort })).toEqual({ ok: true });
+    }
+  });
+
+  it("rejects an empty thinking effort", () => {
+    const provider = createProvider(claudeProfile, config);
+    const result = provider.validateProfile({ provider: "claude", model: "sonnet", thinkingEffort: "   " });
     expect(result.ok).toBe(false);
   });
 

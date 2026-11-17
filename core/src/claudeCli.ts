@@ -20,19 +20,13 @@ export function buildClaudeArgs(request: ModelRequest, profile: ModelProfile): s
   ];
 }
 
-function isThinkingEffort(value: unknown): value is ThinkingEffort {
-  return value === "low" || value === "medium" || value === "high";
-}
-
 /** Module-private: the public seam is provider.validateProfile(profile). */
 function validateClaudeProfile(profile: ModelProfile): ProfileValidation {
   if (profile.provider !== "claude") {
     return { ok: false, message: `Provider "${String(profile.provider)}" is not claude; the Claude adapter only accepts claude profiles.` };
   }
   if (profile.model.trim() === "") return { ok: false, message: "Model must not be empty." };
-  if (!isThinkingEffort(profile.thinkingEffort)) {
-    return { ok: false, message: `Thinking effort "${String(profile.thinkingEffort)}" is not one of low, medium, high.` };
-  }
+  if (profile.thinkingEffort.trim() === "") return { ok: false, message: "Thinking effort must not be empty." };
   return { ok: true };
 }
 

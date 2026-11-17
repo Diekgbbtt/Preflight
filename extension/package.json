@@ -46,9 +46,8 @@
         },
         "promptPreflight.thinkingEffort": {
           "type": "string",
-          "enum": ["low", "medium", "high"],
           "default": "medium",
-          "description": "Thinking effort passed as --effort to the Claude CLI."
+          "description": "Provider-native thinking effort passed to the inference request. Claude Code accepts low, medium, high, xhigh, or max."
         },
         "promptPreflight.quickModel": { "type": "string", "default": "haiku", "description": "Model for the quick check when you pause typing. Empty falls back to promptPreflight.model, then haiku." },
         "promptPreflight.deepModel": { "type": "string", "default": "sonnet", "description": "Model for detailed feedback. Empty falls back to promptPreflight.model, then sonnet." },
