@@ -16,10 +16,10 @@ Every entry has a contract version and a change log.
 | #36 | merged | ticket/36-context-assembler | 495b52853631580933232fea1a3941c94adb5510 | `npm run typecheck && npm test && npm run build` -> 322 passed | PASS |
 | #37 | merged | ticket/37-language-context | 96ce4605b489049d8c6919c8bcbd429ff2cc66f3 | `npm run typecheck && npm test && npm run build` -> 442 passed | PASS |
 | #38 | merged | ticket/38-session-slice | e366d25df10a700bae886d3af3d342afe959455d | `npm run typecheck && npm test && npm run build` -> 518 passed | PASS |
-| Review fixes | in progress | lane-1/review-fixes | branch head | `npm run typecheck && npm test && npm run build` -> 524 passed; `npm run e2e` blocked by VS Code `SIGABRT` | pending |
+| Review fixes | merged | lane-1/control-plane | review-fixes tip | `npm run typecheck && npm test && npm run build` -> 524 passed three times; `npm run e2e` -> 9/9 passed | PASS |
 
-The review fixes are not merged into `lane-1/control-plane` yet.
-The e2e gate is not observed green.
+The review fixes are merged into `lane-1/control-plane` locally.
+The e2e gate is green: 9/9 passed on 2026-11-17.
 
 Source branch: `lane-1/control-plane`.
 Setup commit: `098e887` (`chore: set up lane 1 worktrees and extension tests`).
@@ -1461,7 +1461,8 @@ The fixture workspace is copied to a temp directory; the seeded session homes ar
 - `codesign --verify --deep --strict` reports the installed app signature as invalid.
 - An ad-hoc signed copy still exits 134.
 - Run `npm run e2e` from a normal GUI Terminal, or set `VSCODE_BIN` to a working VS Code executable.
-- The first e2e run passed 8 of 9 tests. E8 failed because rg read stdin instead of the workspace; the adapter now passes an explicit `.` search path. A rerun is pending.
+- The first e2e run passed 8 of 9 tests. E8 failed because rg read stdin instead of the workspace; the adapter now passes an explicit `.` search path.
+- The rerun passed all 9 tests on 2026-11-17.
 
 ## Change log for the review fixes
 

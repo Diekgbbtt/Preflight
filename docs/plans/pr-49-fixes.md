@@ -424,8 +424,8 @@ The runtime does not import the ESM package.
 | 4 LSP agent middleware | done | `codeTools.ts`, `vscodeCodeTools.ts`, `ripgrep.ts`; 26 tool tests, 11 adapter tests, 10 ripgrep tests |
 | 5 Handoff seams | done | contract deltas and `Panel integration seams` in `docs/handoff/lane-1.md` |
 | 6 Assertions catalogue | approved | `docs/assertions/lane-1.md` |
-| 7 E2E harness | first run 8/9; rerun pending | `e2e/` builds; E1-E7 and E9 passed; E8 failed on rg stdin and is fixed |
-| 8 Adversarial review and final gate | pending | adversarial review done; blocked on the e2e rerun |
+| 7 E2E harness | done | `e2e/` passed 9/9 on 2026-11-17 |
+| 8 Adversarial review and final gate | done locally; push pending | adversarial review done; 524 tests x3; e2e 9/9 |
 
 ### Current commits
 
@@ -446,5 +446,5 @@ The runtime does not import the ESM package.
 - E8 failed because `rg` read stdin instead of the workspace when no path was given.
 - The adapter now passes an explicit `.` search path, and the parser strips a leading `./`.
 - The E8 path was reproduced with the real binary and the tool layer: it returns `src/needle.ts`.
-- A rerun is pending.
+- The rerun passed 9/9 on 2026-11-17.
 - `node e2e/run.mjs --dry-run` prints the exact launch command.

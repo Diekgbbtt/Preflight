@@ -7,8 +7,8 @@
 ## Verdict
 
 The seven review comments are closed in code and tests.
-The e2e harness is built, but the e2e gate is not observed green because the local VS Code process is killed by `SIGABRT` before the extension host starts.
-The branch is not ready to merge until the e2e suite runs green in a normal environment.
+The e2e harness is built and the suite passed 9/9 on 2026-11-17.
+The branch is ready for the owner to push and update the PR.
 
 ## Review comments
 
@@ -45,7 +45,7 @@ The branch is not ready to merge until the e2e suite runs green in a normal envi
 
 ### Residual risks
 
-- The first e2e run passed 8 of 9 tests. E8 failed because rg read stdin instead of the workspace; the adapter now passes an explicit `.` search path. A rerun is pending.
+- The first e2e run passed 8 of 9 tests. E8 failed because rg read stdin instead of the workspace; the adapter now passes an explicit `.` search path. The rerun passed 9/9.
 - The live Windows run is not measured. Only `path.win32` unit tests run.
 - Python and Rust LSP parity are manual.
 - The legacy `Review`, `review()`, `parseReview`, and `LEGACY_DEEP_REPLY_SCHEMA` path remains until #46. New code does not use it.
@@ -57,5 +57,5 @@ The branch is not ready to merge until the e2e suite runs green in a normal envi
 - `npm run typecheck`: passed three times.
 - `npm test`: 20 files, 524 tests passed three times.
 - `npm run build`: passed three times; `extension/dist/rg` is 4.5 MB and reports ripgrep 15.0.0.
-- `npm run e2e`: first run 8/9; E8 fixed; rerun pending.
-- Final merge: blocked on a green e2e rerun.
+- `npm run e2e`: 9/9 passed on 2026-11-17.
+- Final merge: ready for the owner to push and update the PR.
