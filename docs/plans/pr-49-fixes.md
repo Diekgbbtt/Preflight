@@ -412,3 +412,38 @@ npm install -w extension --save-dev @vscode/ripgrep@1.18.0
 `@vscode/ripgrep` is a build-time dependency.
 The build copies the platform binary into `extension/dist/`.
 The runtime does not import the ESM package.
+
+## Status (2026-11-17)
+
+| Phase | State | Evidence |
+|---|---|---|
+| 0 Review record and plan | done | `docs/reviews/pr-49-feedback.md`, this file |
+| 1 Core review schema | done | 20 test files, 520 tests; typecheck and build green |
+| 2 Explicit `@` file context | done | prompt-files source, privacy policy, session code policy |
+| 3 Codex real events and Windows | done | real `item_completed` fixtures; `path.win32` tests |
+| 4 LSP agent middleware | done | `codeTools.ts`, `vscodeLanguageApi.ts`, `ripgrep.ts`; 24 tool tests, 11 adapter tests, 16 ripgrep tests |
+| 5 Handoff seams | done | contract deltas and `Panel integration seams` in `docs/handoff/lane-1.md` |
+| 6 Assertions catalogue | approved | `docs/assertions/lane-1.md` |
+| 7 E2E harness | harness ready; launch blocked | `e2e/` builds `e2e/dist/suite.cjs`; local VS Code is killed by `SIGABRT` |
+| 8 Adversarial review and final gate | pending | blocked on the e2e run |
+
+### Current commits
+
+- `97968f7` review record and plan
+- `be6faa0` schema and effort fixes
+- `4eb8a77` explicit `@` file context
+- `723ca64` real Codex events and Windows paths
+- `fd00206` assertion catalogue and panel seams
+- `1f8d17c` LSP-backed code tools with rg fallback
+- `ba0edb3` skip reads for excluded prompt files
+- `e200604` VS Code e2e harness
+- `41691fc` review contract deltas and e2e harness
+
+### E2E blocker
+
+- `npm run e2e` builds the suite and attempts to launch `/Applications/Visual Studio Code.app/Contents/MacOS/Code`.
+- The process is killed by `SIGABRT` before any output.
+- `codesign --verify --deep --strict` reports the installed app signature as invalid.
+- An ad-hoc signed copy also aborts.
+- `node e2e/run.mjs --dry-run` prints the exact launch command.
+- Run `npm run e2e` from a normal GUI Terminal, or set `VSCODE_BIN` to a working executable.

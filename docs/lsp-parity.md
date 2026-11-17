@@ -1,74 +1,72 @@
 # LSP parity record (ticket #37)
 
-The language context sources delegate to installed language servers through
-`vscode.commands.executeCommand`. This record shows, per language, whether the
-delegation is good enough or where it falls short. A measured gap becomes a new
-ticket; nothing here is fabricated.
+The language context sources use the agent tools in `extension/src/codeTools.ts`.
+The tools call the installed language providers through the adapter in
+`extension/src/vscodeLanguageApi.ts` and fall back to the bundled `rg`.
+A measured gap becomes a new ticket; nothing here is fabricated.
 
-## Environment facts (measured on this machine, 2026-11-16)
+## Environment facts (measured on this machine, 2026-11-17)
 
-- VS Code 1.146.0 (arm64) installed at `/Applications/Visual Studio Code.app`.
-- Installed extensions (`code --list-extensions`), relevant rows:
-  `ms-python.python`, `ms-python.vscode-pylance`, `rust-lang.rust-analyzer`,
-  `haskell.haskell`, `fwcd.kotlin`.
-- `ripgrep` (`rg`) is not installed. The text-search fallback therefore omits
-  with `unsupported` until `rg` is installed; no grep substitution.
-- No interactive VS Code window was available to the implementing agent, so
-  provider output could not be captured automatically.
+- VS Code 1.146.0 (arm64) is installed at `/Applications/Visual Studio Code.app`.
+- The installed app signature is invalid: `codesign --verify --deep --strict` reports "code or signature have been modified".
+- The VS Code binary aborts with `SIGABRT` before any output in the current agent sandbox.
+- An ad-hoc signed copy also aborts, so the sandbox is the likely blocker, not only the signature.
+- The `e2e` suite mounts the extension and opens the sample workspace when VS Code can launch.
+- `rg` is bundled: `@vscode/ripgrep` 1.18.0 copies ripgrep 15.0.0 to `extension/dist/rg`.
+- The system `rg` is not required.
+- The text-search fallback therefore works with the bundled binary; a missing binary omits `unsupported`.
+- The relevant editor extensions for the manual Python and Rust rows are `ms-python.python`, `ms-python.vscode-pylance`, and `rust-lang.rust-analyzer`.
+
+## Automated measurement
+
+Run this from a normal GUI Terminal:
+
+```bash
+npm run e2e
+```
+
+The suite includes:
+
+- E7: the built-in TypeScript provider returns a `greet` symbol from `src/greet.ts`.
+- E8: an absent workspace symbol (`MissingNeedle`) falls over to the bundled `rg` and finds `src/needle.ts`.
+
+The suite output is the measurement record.
+The current sandbox has not observed the suite green because VS Code aborts before the extension host starts.
 
 ## Parity table
 
-Columns per the ticket: language, provider available, symbol kind, location
-precision, truncation, measured or not, notes.
-
 | Language | Provider available | Symbol kind | Location precision | Truncation | Measured | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| TypeScript | not measured | not measured | not measured | not measured | **not measured** | No language server ships with VS Code for TS without a workspace open; no interactive window was available to run `executeDefinitionProvider` and record results. |
-| Python | not measured | not measured | not measured | not measured | **not measured** | Pylance (`ms-python.vscode-pylance`) is installed, so a real window should answer; the agent could not run an interactive session to capture its output. |
-| Rust | not measured | not measured | not measured | not measured | **not measured** | `rust-lang.rust-analyzer` is installed, the third language per the ticket; same capture blocker. |
+| TypeScript | expected built-in | expected `Function` | full LSP range | caps 100/50/20/50/200 | **not measured** | The E7 and E8 e2e tests measure it when VS Code launches. |
+| Python | `ms-python.python` + `ms-python.vscode-pylance` installed | not measured | not measured | not measured | **not measured** | Run the manual steps in a real window. |
+| Rust | `rust-lang.rust-analyzer` installed | not measured | not measured | not measured | **not measured** | Run the manual steps in a real window. |
 
-Reason for "not measured": running `vscode.executeDefinitionProvider`,
-`vscode.executeReferenceProvider`, and `vscode.executeDocumentSymbolProvider`
-requires an interactive VS Code window with an open document and a live
-language server. The `code` CLI exposes no headless command execution for
-provider calls. Do not trust this table as evidence until the manual steps
-below are run.
+Reason for "not measured": the agent sandbox kills the VS Code process with
+`SIGABRT` before the extension host starts.
+The e2e suite and the manual steps are ready; they must run in a normal window.
 
 ## Manual steps to fill the table
 
 For each of TypeScript, Python, and Rust:
 
-1. Open a VS Code window on a workspace containing a file in the language with
-   a known identifier (for example a function or class used in more than one
-   file). Confirm the language status shows a language server running.
-2. Open the file, place the cursor on the known identifier.
-3. Run the VS Code commands and record the output:
-   - `Developer: Go to Definition` / `vscode.executeDefinitionProvider` -
-     count the locations, note the range precision (start position only, or a
-     full range).
-   - `Go to References` / `vscode.executeReferenceProvider` - count the
-     references, note whether any point outside the workspace.
-   - `Go to Symbol in Editor...` / `vscode.executeDocumentSymbolProvider` -
-     note the symbol kinds shown and whether children are nested.
-4. Run the same queries through the extension's language sources (the
-   `symbols`, `references`, and `definitions` sources with
-   `promptPreflight.context.includeCode` on `workspace`) and compare the
-   fragment lines against step 3.
-5. Record per language: provider available (yes/no), symbol kind names
-   observed, location precision (line:col start only vs full range),
-   truncation (whether the 20/50/100 caps cut real results), and any missing
-   provider.
+1. Open a VS Code window on a workspace containing a file in the language with a known identifier used in more than one file.
+2. Confirm the language status shows a language server running.
+3. Open the file and place the cursor on the known identifier.
+4. Run `npm run e2e` for the automated TypeScript row.
+5. For Python and Rust, call the extension tools through the facade or run the equivalent provider commands:
+   - `vscode.executeDocumentSymbolProvider` - count symbols, note the kinds and whether children are nested.
+   - `vscode.executeDefinitionProvider` - count locations and note the range precision.
+   - `vscode.executeReferenceProvider` - count references and note any outside the workspace.
+6. Compare the tool output with the provider output.
+7. Record language, provider available, symbol kind names, location precision, truncation, measured date, and notes.
 
-Expected fields to record: language, provider available, symbol kind, location
-precision, truncation, measured date, notes. Add a measured row per language
-and delete the "not measured" row only when the fields are filled from a real
-run.
+Delete a "not measured" row only when every field comes from a real run.
 
 ## Fallback behavior when no server answers
 
-If a language has no language server, the probe returns false for that
-capability and the source falls back to `rg` text search with the fragment
-marked provenance kind `text-search`, keeping the same source id and priority.
-With `rg` missing the source omits with `unsupported`; grep is never
-substituted. A measured gap here (for example a language where the fallback is
-unusable) should be recorded above and turned into a new ticket.
+- A tool with a query falls back to the bundled `rg` when the LSP result is empty.
+- The fragment keeps the source id and priority and records provenance kind `text-search`.
+- A policy-hidden result never falls back.
+- Diagnostics never fall back.
+- A missing bundled binary omits `unsupported`; grep is never substituted.
+- A measured gap here should be recorded above and turned into a new ticket.

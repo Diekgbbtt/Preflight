@@ -85,10 +85,10 @@ const child = spawn(vscodeBin, args, {
 child.on("error", (error) => {
   console.error(`Failed to start VS Code: ${error.message}`);
 });
-const code = await new Promise((resolveCode) => child.on("exit", resolveCode));
+const [code, signal] = await new Promise((resolveExit) => child.on("exit", (exitCode, exitSignal) => resolveExit([exitCode, exitSignal])));
 if (process.env.PREFLIGHT_E2E_KEEP !== "1") await rm(temp, { recursive: true, force: true });
 if (code !== 0) {
-  console.error(`VS Code exited with code ${code ?? "unknown"}.`);
+  console.error(signal ? `VS Code was killed by ${signal}.` : `VS Code exited with code ${code ?? "unknown"}.`);
   console.error("If the process aborts before any output, run this command from a normal GUI Terminal.");
   console.error("Set VSCODE_BIN to a working VS Code executable if needed.");
 }

@@ -138,7 +138,13 @@ test("E5: Claude slice keeps code only for prompt-files", async () => {
   const home = await makeHome();
   const projectDir = path.join(home, ".claude", "projects", "-Users-alice-proj");
   await fs.mkdir(projectDir, { recursive: true });
-  await fs.copyFile(path.join(fixtureDir(), "claude", "session-basic.jsonl"), path.join(projectDir, "sess-claude-1.jsonl"));
+  const lines = [
+    { type: "user", sessionId: "sess-e2e", timestamp: "2026-01-02T10:00:00.000Z", cwd: "/Users/alice/proj", message: { role: "user", content: "Use sk-ant-0123456789abcdefghij and add the helper." } },
+    { type: "assistant", sessionId: "sess-e2e", timestamp: "2026-01-02T10:00:05.000Z", cwd: "/Users/alice/proj", message: { role: "assistant", content: [{ type: "text", text: "I will add it.\n\n```ts src/greet.ts\nexport function greet(name: string) {\n  return `Hello ${name}`;\n}\n```\n\n```ts src/other.ts\nexport const other = 1;\n```" }] } },
+    { type: "assistant", sessionId: "sess-e2e", timestamp: "2026-01-02T10:00:10.000Z", cwd: "/Users/alice/proj", message: { role: "assistant", content: [{ type: "tool_use", id: "tu-1", name: "Write", input: { file_path: "/Users/alice/proj/src/greet.ts", content: "export function greet() {}" } }] } },
+    { type: "user", sessionId: "sess-e2e", timestamp: "2026-01-02T10:00:12.000Z", cwd: "/Users/alice/proj", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tu-1", content: "File written.", is_error: false }] } },
+  ];
+  await fs.writeFile(path.join(projectDir, "sess-e2e.jsonl"), lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
   const slice = await readSeededSlice({
     homeDir: home,
     folderUri: FIXTURE_FOLDER,
@@ -146,12 +152,12 @@ test("E5: Claude slice keeps code only for prompt-files", async () => {
     promptFiles: ["src/greet.ts"],
   });
   assert.equal(slice.provider, "claude");
-  assert.equal(slice.changedFiles.join(","), "src/app.ts,src/greet.ts");
+  assert.equal(slice.changedFiles.join(","), "src/greet.ts");
   const coded = slice.turns.find((turn) => turn.code !== undefined);
   assert.ok(coded, "code turn missing");
   assert.equal(coded.codePath, "src/greet.ts");
   assert.match(coded.code?.join("\n") ?? "", /export function greet/);
-  assert.equal(slice.testResults[0]?.status, "passed");
+  assert.equal(slice.provenance.redactions, 1, "the secret must be redacted once");
   assert.ok(slice.tokens <= 8000);
 });
 
@@ -199,7 +205,7 @@ test("E7: the TypeScript language provider returns greet symbols", async () => {
 
 test("E8: an absent workspace symbol falls over to the bundled rg", async () => {
   const { tools } = workspaceTools();
-  const result = await tools.workspaceSymbols({ query: "preflight-e2e-needle" });
+  const result = await tools.workspaceSymbols({ query: "MissingNeedle" });
   assert.equal(result.fallback, "text-search", `expected a text-search fallback, got ${JSON.stringify(result)}`);
   if (result.fallback === "text-search") {
     assert.ok(result.items.some((item) => item.path === "src/needle.ts"), "needle match missing");
@@ -215,8 +221,12 @@ test("E9: a missing CLI maps to provider-missing without a review event", async 
     assert.equal(health.error.code, "provider-missing");
     assert.equal(health.error.retryable, false);
   }
-  const mapped = mapError(new Error("spawn /nonexistent/claude ENOENT"));
-  assert.equal(mapped.code, "provider-missing");
+  try {
+    await quickReview("Fix it", "/nonexistent/claude");
+    assert.fail("the missing CLI must fail");
+  } catch (error) {
+    assert.equal(mapError(error).code, "provider-missing");
+  }
 });
 
 export async function run(): Promise<void> {
