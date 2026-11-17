@@ -446,7 +446,8 @@ The runtime does not import the ESM package.
 - E8 failed because `rg` read stdin instead of the workspace when no path was given.
 - The adapter now passes an explicit `.` search path, and the parser strips a leading `./`.
 - The E8 path was reproduced with the real binary and the tool layer: it returns `src/needle.ts`.
-- The rerun passed 9/9 on 2026-11-17.
+- The E8 rerun passed 9/9 on 2026-11-17.
+- The later Codex custom tool fix passed 11/11 on 2026-11-17.
 - `node e2e/run.mjs --dry-run` prints the exact launch command.
 
 ## Follow-up: Codex custom tool calls (2026-11-17)

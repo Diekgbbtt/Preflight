@@ -17,9 +17,11 @@ Every entry has a contract version and a change log.
 | #37 | merged | ticket/37-language-context | 96ce4605b489049d8c6919c8bcbd429ff2cc66f3 | `npm run typecheck && npm test && npm run build` -> 442 passed | PASS |
 | #38 | merged | ticket/38-session-slice | e366d25df10a700bae886d3af3d342afe959455d | `npm run typecheck && npm test && npm run build` -> 518 passed | PASS |
 | Review fixes | merged | lane-1/control-plane | review-fixes tip | `npm run typecheck && npm test && npm run build` -> 524 passed three times; `npm run e2e` -> 9/9 passed | PASS |
+| Codex custom tool fix | stacked | lane-1/codex-custom-tool-call | c863094 | `npm run typecheck && npm test && npm run build` -> 527 passed three times; `npm run e2e` -> 11/11 passed | PASS |
 
 The review fixes are merged into `lane-1/control-plane` locally.
 The e2e gate is green: 9/9 passed on 2026-11-17.
+The Codex custom tool fix is stacked on `lane-1/control-plane` in PR #50; its e2e gate is 11/11.
 
 Source branch: `lane-1/control-plane`.
 Setup commit: `098e887` (`chore: set up lane 1 worktrees and extension tests`).
@@ -1462,12 +1464,10 @@ The fixture workspace is copied to a temp directory; the seeded session homes ar
 
 - The suite builds: `e2e/dist/suite.cjs` is about 398 kB.
 - The fixture workspace and session homes are created by the launcher.
-- The local launch is blocked in the current agent sandbox: `/Applications/Visual Studio Code.app/Contents/MacOS/Code` exits with code 134 before any output.
-- `codesign --verify --deep --strict` reports the installed app signature as invalid.
-- An ad-hoc signed copy still exits 134.
 - Run `npm run e2e` from a normal GUI Terminal, or set `VSCODE_BIN` to a working VS Code executable.
 - The first e2e run passed 8 of 9 tests. E8 failed because rg read stdin instead of the workspace; the adapter now passes an explicit `.` search path.
-- The rerun passed all 9 tests on 2026-11-17.
+- The E8 rerun passed 9 of 9 on 2026-11-17.
+- The Codex custom tool fix passed 11 of 11 on 2026-11-17, including E11.
 
 ## Change log for the review fixes
 

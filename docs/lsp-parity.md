@@ -31,7 +31,7 @@ The suite includes:
 - E8: an absent workspace symbol (`MissingNeedle`) falls over to the bundled `rg` and finds `src/needle.ts`.
 
 The suite output is the measurement record.
-The e2e suite passed 9/9 on 2026-11-17, including E7 (TypeScript symbols) and E8 (rg fallback).
+The e2e suite passed 11/11 on 2026-11-17, including E7 (TypeScript symbols) and E8 (rg fallback). E11 is the Codex custom tool call test, not an LSP test.
 
 ## Parity table
 
