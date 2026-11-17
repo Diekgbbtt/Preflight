@@ -424,8 +424,8 @@ The runtime does not import the ESM package.
 | 4 LSP agent middleware | done | `codeTools.ts`, `vscodeCodeTools.ts`, `ripgrep.ts`; 26 tool tests, 11 adapter tests, 10 ripgrep tests |
 | 5 Handoff seams | done | contract deltas and `Panel integration seams` in `docs/handoff/lane-1.md` |
 | 6 Assertions catalogue | approved | `docs/assertions/lane-1.md` |
-| 7 E2E harness | done | `e2e/` passed 9/9 on 2026-11-17 |
-| 8 Adversarial review and final gate | done locally; push pending | adversarial review done; 524 tests x3; e2e 9/9 |
+| 7 E2E harness | done | `e2e/` passed 11/11 on 2026-11-17; E11 covers Codex custom tool calls |
+| 8 Adversarial review and final gate | done; stacked fix PR open | adversarial review done; 527 tests; e2e 11/11 |
 
 ### Current commits
 
@@ -448,3 +448,12 @@ The runtime does not import the ESM package.
 - The E8 path was reproduced with the real binary and the tool layer: it returns `src/needle.ts`.
 - The rerun passed 9/9 on 2026-11-17.
 - `node e2e/run.mjs --dry-run` prints the exact launch command.
+
+## Follow-up: Codex custom tool calls (2026-11-17)
+
+- The Codex parser now handles `custom_tool_call` and `custom_tool_call_output` for `apply_patch`.
+- Every `*** Update|Add|Delete File:` path is kept, and a matching `FileChange` is deduped by id.
+- New fixture: `extension/test/fixtures/codex/session-custom-tool.jsonl`.
+- Tests: 527 passed; e2e 11/11.
+- Branch: `lane-1/codex-custom-tool-call`, stacked on `lane-1/control-plane`.
+- PR #49 stays draft; the stacked fix PR carries this change.

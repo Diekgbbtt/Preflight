@@ -7,8 +7,8 @@
 ## Verdict
 
 The seven review comments are closed in code and tests.
-The e2e harness is built and the suite passed 9/9 on 2026-11-17.
-The branch is ready for the owner to push and update the PR.
+The e2e suite passed 11 of 11 tests on 2026-11-17, including E11 for Codex custom tool calls.
+The branch is pushed; PR #49 is a draft. A stacked fix PR covers the Codex `custom_tool_call` gap.
 
 ## Review comments
 
@@ -29,7 +29,7 @@ The branch is ready for the owner to push and update the PR.
 | Use the ripgrep library, not a system CLI | closed | `@vscode/ripgrep` dev dependency; build copies `rg` or `rg.exe` to `extension/dist`; no system `rg`. |
 | Coexist with codebase access and fail over | closed | LSP tools try first; empty results with a query fall over to text search; hidden results never fall over; diagnostics never fall over. |
 | Handoff covers concrete panel seams | closed | `docs/handoff/lane-1.md` has the delta table, contract deltas, panel seam calls, persistence shapes, and code tool calls. |
-| Add tests, Windows, and real Codex events | closed in unit/integration; e2e blocked | 524 tests; `path.win32` tests; real `item_completed` fixtures; e2e harness ready. |
+| Add tests, Windows, and real Codex events | closed | 527 tests; `path.win32` tests; real `item_completed` and `custom_tool_call` fixtures; e2e 11/11. |
 
 ## Findings from the adversarial pass
 
@@ -42,20 +42,30 @@ The branch is ready for the owner to push and update the PR.
 - Windows duplicate references were compared case-sensitively. The resolver now lowercases the dedupe key when the path API is win32.
 - UNC paths were dropped by `relativeToWorkspace`. They now use the injected path API and are tested with `path.win32`.
 - `--disable-extensions` would have disabled the built-in TypeScript provider in e2e. The launcher no longer passes it; the extensions directory is empty.
+- The Codex parser skipped `custom_tool_call` and `custom_tool_call_output` apply_patch events. It now records them, extracts every patch path, and dedupes the matching `FileChange`.
 
 ### Residual risks
 
-- The first e2e run passed 8 of 9 tests. E8 failed because rg read stdin instead of the workspace; the adapter now passes an explicit `.` search path. The rerun passed 9/9.
+- The e2e suite passed 11 of 11 tests after the E8 rg stdin fix. E11 covers the Codex custom tool call path.
 - The live Windows run is not measured. Only `path.win32` unit tests run.
 - Python and Rust LSP parity are manual.
 - The legacy `Review`, `review()`, `parseReview`, and `LEGACY_DEEP_REPLY_SCHEMA` path remains until #46. New code does not use it.
 - The panel is not wired to the new provider, context, session, or repository paths. #43, #46, and #47 own that integration.
 - The #36 collectors and the #37 prompt-files adapter still have no direct VS Code mock test. The e2e suite is the coverage.
 
+## Follow-up: Codex custom tool calls
+
+- Trigger: an audit of 73 local Codex sessions found 359 `custom_tool_call` `apply_patch` events and 108 matching `FileChange` events.
+- The parser had no branch for either event, so it dropped the calls and could miss changed files.
+- Fix: parse `custom_tool_call` and `custom_tool_call_output`, extract every `*** Update|Add|Delete File:` path, use the call status as the failure hint, and dedupe the matching `FileChange` by id.
+- Fixture: `extension/test/fixtures/codex/session-custom-tool.jsonl`.
+- Tests: C35 and E11; `npm test` -> 527 passed; `npm run e2e` -> 11/11.
+- Re-audit: 359 of 359 custom calls parsed; 2,799 unique tool calls; 0 duplicate FileChange calls.
+
 ## Gate status
 
-- `npm run typecheck`: passed three times.
-- `npm test`: 20 files, 524 tests passed three times.
-- `npm run build`: passed three times; `extension/dist/rg` is 4.5 MB and reports ripgrep 15.0.0.
-- `npm run e2e`: 9/9 passed on 2026-11-17.
-- Final merge: ready for the owner to push and update the PR.
+- `npm run typecheck`: passed.
+- `npm test`: 20 files, 527 tests passed.
+- `npm run build`: passed; `extension/dist/rg` is 4.5 MB and reports ripgrep 15.0.0.
+- `npm run e2e`: 11/11 passed on 2026-11-17.
+- Final merge: PR #49 stays draft; the stacked fix PR is open for owner review.

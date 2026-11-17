@@ -11,6 +11,7 @@ import { redact } from "../src/privacy";
 const claudeFixture = readFileSync(new URL("./fixtures/claude/session-basic.jsonl", import.meta.url), "utf8");
 const codexFixture = readFileSync(new URL("./fixtures/codex/session-basic.jsonl", import.meta.url), "utf8");
 const codexRealFixture = readFileSync(new URL("./fixtures/codex/session-real-events.jsonl", import.meta.url), "utf8");
+const codexCustomFixture = readFileSync(new URL("./fixtures/codex/session-custom-tool.jsonl", import.meta.url), "utf8");
 
 const CWD = "/Users/alice/proj";
 const at = (n: number) => `2026-01-02T10:00:${String(n).padStart(2, "0")}.000Z`;
@@ -149,6 +150,48 @@ describe("parseCodexSession", () => {
     expect(parsed.testResults).toEqual([{ name: "exec_command npm test", status: "failed", at: "2026-04-10T20:18:21.000Z" }]);
     expect(parsed.errors).toEqual([{ message: "1 failed, 1 passed", status: "error", at: "2026-04-10T20:18:22.000Z" }]);
     expect(parsed.changedFiles).toEqual(["/Users/alice/proj/src/app.ts"]);
+  });
+
+  it("parses a custom_tool_call apply_patch with multiple files and dedupes its FileChange", () => {
+    const parsed = parseCodexSession(codexCustomFixture);
+    expect(parsed.sessionId).toBe("sess-codex-custom");
+    expect(parsed.toolCalls).toHaveLength(1);
+    expect(parsed.toolCalls[0]).toMatchObject({ name: "apply_patch", status: "ok", summary: "apply_patch src/app.ts" });
+    expect(parsed.toolCalls.filter((call) => call.name === "FileChange")).toHaveLength(0);
+    expect(parsed.changedFiles).toEqual(
+      expect.arrayContaining([
+        "src/app.ts",
+        "src/helper.ts",
+        "/Users/alice/proj/src/app.ts",
+        "/Users/alice/proj/src/helper.ts",
+      ]),
+    );
+  });
+
+  it("keeps a failed custom_tool_call failed when the output has no is_error", () => {
+    const text = [
+      JSON.stringify({ timestamp: at(0), type: "session_meta", payload: { id: "sess-custom-fail", timestamp: at(0), cwd: CWD } }),
+      JSON.stringify({
+        timestamp: at(1),
+        type: "response_item",
+        payload: {
+          type: "custom_tool_call",
+          status: "failed",
+          call_id: "call-fail",
+          name: "apply_patch",
+          input: "*** Begin Patch\n*** Update File: src/app.ts\n*** End Patch\n",
+        },
+      }),
+      JSON.stringify({
+        timestamp: at(2),
+        type: "response_item",
+        payload: { type: "custom_tool_call_output", call_id: "call-fail", output: "error: patch failed\n" },
+      }),
+    ].join("\n") + "\n";
+    const parsed = parseCodexSession(text);
+    expect(parsed.toolCalls).toHaveLength(1);
+    expect(parsed.toolCalls[0]).toMatchObject({ name: "apply_patch", status: "error" });
+    expect(parsed.errors).toEqual([{ message: "error: patch failed", status: "error", at: at(2) }]);
   });
 });
 
@@ -507,6 +550,20 @@ describe("readSlice", () => {
     expect(slice.changedFiles).toEqual(["src/app.ts"]);
     expect(slice.turns[1].code).toEqual(["export const app = 2;"]);
     expect(slice.turns[1].codePath).toBe("src/app.ts");
+  });
+
+  it("derives a slice from a real custom_tool_call apply_patch", async () => {
+    const slice = await readSlice(
+      fileURLToPath(new URL("./fixtures/codex/session-custom-tool.jsonl", import.meta.url)),
+      "codex",
+      DEFAULT_SESSION_CAPS,
+      { now: () => 0 },
+      { includeCode: "workspace", redact },
+    );
+    expect(slice.toolCalls).toHaveLength(1);
+    expect(slice.toolCalls[0]).toMatchObject({ name: "apply_patch", status: "ok", summary: "apply_patch src/app.ts" });
+    expect(slice.changedFiles).toEqual(["src/app.ts", "src/helper.ts"]);
+    expect(slice.provenance.droppedFiles).toBe(0);
   });
 
   it("marks the slice truncated when tool calls drop without any turn", async () => {

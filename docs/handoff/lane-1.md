@@ -46,7 +46,7 @@ Lane base for ticket #38: `d34bd22`.
 | Context source | `selection` 80, `active-editor` 70, `open-editors` 60 | `prompt-files` 80 |
 | Include code | `off \| active-file \| workspace` | `off \| prompt-files \| workspace`; legacy `active-file` reads as `prompt-files` |
 | Language access | Bespoke `LanguageApi` over `vscode.commands` | Agent tools over LSP types with a text-search fallback |
-| Codex events | Assumed `exec_command_begin` / `exec_command_end` | Real `event_msg.item_completed` `CommandExecution` and `FileChange` |
+| Codex events | Assumed `exec_command_begin` / `exec_command_end` | Real `event_msg.item_completed` `CommandExecution` and `FileChange`; `response_item.custom_tool_call` and `custom_tool_call_output` with `apply_patch` |
 | Windows | Recorded gap | Pure `path.win32` rules plus a manual Windows checklist |
 
 ## Contract deltas in detail
@@ -136,13 +136,18 @@ When this document conflicts with a per-ticket section, this section wins.
 - `CommandExecution` fields: `id`, `command` array, `cwd`, `status`, `aggregated_output`, `exit_code`.
 - `FileChange` fields: `id`, `changes` map, `status`, `stdout`.
 - A `function_call` and a `CommandExecution` with the same `id` produce one tool call, not two.
+- `custom_tool_call` fields: `status`, `call_id`, `name`, `input`.
+- `custom_tool_call_output` fields: `call_id`, `output`.
+- A `custom_tool_call` and a `FileChange` with the same `call_id`/`id` produce one tool call, not two.
+- `apply_patch` input is a patch string; every `*** Update|Add|Delete File:` path is kept.
 - `AgentMessage` is skipped because it duplicates the `response_item` message.
 - `exec_command_begin` and `exec_command_end` are removed.
 - `function_call` arguments support `cmd` as well as `command`.
 - `canonicalFolderUri` normalizes POSIX, Windows drive, UNC, localhost, trailing slash, and malformed URIs.
 - `encodeClaudeProjectPath(cwd)` replaces every character outside `[A-Za-z0-9_-]` with `-`.
 - `relativeToWorkspace(raw, cwd, pathApi?)` accepts an injected path API; `path.win32` is tested.
-- The real fixtures are `extension/test/fixtures/codex/session-real-events.jsonl` and `session-basic.jsonl`.
+- The real fixtures are `extension/test/fixtures/codex/session-real-events.jsonl`, `session-basic.jsonl`, and `session-custom-tool.jsonl`.
+- The parser was audited against 73 local Codex sessions (0.48 to 0.135): 359 `custom_tool_call` events, 108 matching `FileChange` events, 359 parsed `apply_patch` calls, and no duplicate `FileChange` calls.
 - The fake `session-exec-events.jsonl` fixture is deleted.
 - The live Windows run is a manual step in `docs/windows.md`.
 

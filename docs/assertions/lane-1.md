@@ -6,8 +6,8 @@
 
 The review feedback in `docs/reviews/pr-49-feedback.md` supersedes the LLD where they disagree.
 The catalogue was approved on 2026-11-17.
-The e2e harness is in `e2e/`; all 9 walkthrough tests passed on 2026-11-17.
-The predicates remain the acceptance contract until the suite is observed green.
+The e2e suite passed 11 of 11 tests on 2026-11-17; E1-E9 and E11 are the numbered walkthrough predicates. E10 is the manual Windows check.
+The predicates remain the acceptance contract; the suite is green.
 The new contracts are:
 
 - Review score is quick-only.
@@ -17,7 +17,7 @@ The new contracts are:
 - The issue and question ceilings are 20.
 - Context files are explicit `@` references.
 - Language access is an agent tool layer over LSP types with a text-search fallback.
-- Codex events use the real `item_completed` format.
+- Codex events use the real `item_completed` and `custom_tool_call` formats.
 
 ## Contract predicates (integration)
 
@@ -57,6 +57,7 @@ The new contracts are:
 | C32 | `CodebaseTools.diagnostics` | empty-valid | no diagnostics | empty result with no fallback, because text search cannot produce diagnostics | `extension/test/codeTools.test.ts` "never falls back to text search" |
 | C33 | `CodebaseTools.searchText` | degradation | bundled `rg` missing (`ENOENT`) | `omittedReason: "unsupported"`; no crash | `extension/test/codeTools.test.ts` "maps a missing rg to unsupported" |
 | C34 | `assemble` | outlier | draft + QA fill the budget exactly | every workspace source is omitted `budget`; total tokens equals budget; fragments empty | `core/test/context.test.ts` budget cases |
+| C35 | `parseCodexSession` | success and degradation | real `session-custom-tool.jsonl` with one `custom_tool_call` `apply_patch` and a matching `FileChange`; a failed custom call whose output has no `is_error` | one tool call, no duplicate; apply_patch ok; changed files from the patch; failed custom call stays error; output message is the error | `extension/test/sessionSlice.test.ts` "parses a custom_tool_call..." and "keeps a failed custom_tool_call..." |
 
 ## Walkthrough predicates (end-to-end)
 
@@ -72,6 +73,7 @@ The new contracts are:
 | E8 | #37 fallback; review 2 | `e2e/facade.codeTools.workspaceSymbols` then `searchText`; live edge: built-in TypeScript provider returns empty for `MissingNeedle`; bundled `rg` finds the text | fixture has `src/needle.ts` with `MissingNeedle` only in a comment; query `MissingNeedle` | LSP workspace symbol -> empty -> text search via bundled `rg` | one match at `src/needle.ts:1`; result marks `textSearch: true`; the fragment provenance kind is `text-search`; the cap is 50 | read the tool result and the fragment; run the bundled binary | `e2e/suite/index.ts` E8 `[passed 2026-11-17]` |
 | E9 | #42 degraded mode | `e2e/facade.quickReview`; live edge: `claudePath` points to a missing file | draft `Fix it`; provider claude; missing CLI path | `checkHealth` -> `mapError` -> `FeedbackError` | code `provider-missing`; action `open-settings`; retryable false; no review event; no raw path in the message | call the facade; assert the error object; assert the reviews file is absent | `e2e/suite/index.ts` E9 `[passed 2026-11-17]` |
 | E10 | Windows path rules | blocked: needs a Windows host | `C:\\work\\sample`, `@src\\app.ts`, `%USERPROFILE%\\.claude\\projects\\C--work-sample` | `canonicalFolderUri` -> `encodeClaudeProjectPath` -> `resolvePromptFileRefs` -> `relativeToWorkspace` | canonical URI `file:///c:/work/sample`; encoded dir `C--work-sample`; resolver path `src/app.ts`; relative path `src/app.ts` | run the manual steps in `docs/windows.md` | `docs/windows.md` `[blocked: Windows host]` |
+| E11 | #38 Codex custom tools | `e2e/facade.readSessionSlice`; live edge: `session-custom-tool.jsonl` | real fixture with one `custom_tool_call` `apply_patch` for two files, its output, and a matching `FileChange` | `parseCodexSession` -> `readSlice` | one `apply_patch` call; status ok; `changedFiles` `["src/app.ts","src/helper.ts"]`; no duplicate FileChange call | read the slice; assert the call count, name, status, and changed files | `e2e/suite/index.ts` E11 `[passed 2026-11-17]` |
 
 ## Precision notes
 

@@ -229,6 +229,27 @@ test("E9: a missing CLI maps to provider-missing without a review event", async 
   }
 });
 
+test("E11: real Codex custom tool calls produce one apply_patch and two changed files", async () => {
+  const home = await makeHome();
+  const sessionDir = path.join(home, ".codex", "sessions", "2026", "05", "11");
+  await fs.mkdir(sessionDir, { recursive: true });
+  await fs.copyFile(
+    path.join(fixtureDir(), "codex", "session-custom-tool.jsonl"),
+    path.join(sessionDir, "rollout-e2e-custom.jsonl"),
+  );
+  const slice = await readSeededSlice({
+    homeDir: home,
+    folderUri: FIXTURE_FOLDER,
+    includeCode: "workspace",
+    promptFiles: [],
+  });
+  assert.equal(slice.provider, "codex");
+  assert.equal(slice.toolCalls.length, 1);
+  assert.equal(slice.toolCalls[0].name, "apply_patch");
+  assert.equal(slice.toolCalls[0].status, "ok");
+  assert.equal(slice.changedFiles.join(","), "src/app.ts,src/helper.ts");
+});
+
 export async function run(): Promise<void> {
   const failures: Array<{ name: string; error: unknown }> = [];
   for (const item of tests) {

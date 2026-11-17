@@ -192,6 +192,18 @@ function resultText(content: unknown): string {
   return "";
 }
 
+/** Final success flag of a function or custom tool output payload. */
+function outputOk(payload: Record<string, unknown>): boolean {
+  let ok = payload.is_error !== true;
+  const structured = asObject(payload.output);
+  if (structured) {
+    const meta = asObject(structured.metadata);
+    const exit = meta?.exit_code ?? structured.exit_code;
+    if (typeof exit === "number" && exit !== 0) ok = false;
+  }
+  return ok;
+}
+
 /** Extracts the workspace-relative path token from a fence info line, e.g. "ts src/greet.ts". */
 function pathFromFenceInfo(info: string): string | undefined {
   for (const token of info.trim().split(/\s+/)) {
@@ -213,11 +225,14 @@ function extractFences(text: string): { code: string[]; paths: Array<string | un
   return { code, paths, rest };
 }
 
-/** Extracts the first file path from an apply_patch-style patch body. */
-function patchFileFrom(patch: string): string | undefined {
-  const match = patch.match(/^\*\*\* (?:Update|Add) File: (.+)$/m);
-  const file = match?.[1]?.trim();
-  return file || undefined;
+/** Extracts every file path from an apply_patch-style patch body. */
+function patchFilesFrom(patch: string): string[] {
+  const files: string[] = [];
+  for (const match of patch.matchAll(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/gm)) {
+    const file = match[1]?.trim();
+    if (file && !files.includes(file)) files.push(file);
+  }
+  return files;
 }
 
 // ---------------------------------------------------------------------------
@@ -581,9 +596,20 @@ export function parseCodexSession(text: string): ParsedSession {
         const changes = asObject(item.changes) ?? {};
         const paths = Object.keys(changes);
         const ownerIndex = Math.max(0, state.turns.length - 1);
+        const id = typeof item.id === "string" ? item.id : undefined;
+        const known = id ? state.callIndexById.get(id) : undefined;
         for (const path of paths) {
           const shown = changedFromPatch(path, state);
           if (shown) state.turnFiles[ownerIndex]?.push(shown);
+        }
+        if (known !== undefined) {
+          // A custom_tool_call or function_call already registered this patch.
+          // Update it only while it is pending; never add a second call.
+          if (id && state.pending.has(id)) {
+            applyResult(state, known, item.status !== "failed", resultText(item.stdout), state.endedAt);
+            state.pending.delete(id);
+          }
+          continue;
         }
         const shownPaths = paths.map((path) => displayPath(path, state.cwd));
         const call: ToolCall = {
@@ -594,7 +620,6 @@ export function parseCodexSession(text: string): ParsedSession {
         };
         registerCall(state, call, false);
         const index = state.toolCalls.length - 1;
-        const id = typeof item.id === "string" ? item.id : undefined;
         if (id) state.callIndexById.set(id, index);
         applyResult(state, index, item.status !== "failed", resultText(item.stdout), state.endedAt);
         continue;
@@ -624,21 +649,28 @@ export function parseCodexSession(text: string): ParsedSession {
       commitTurn(state, role, text, state.endedAt, nextTurnIndex(state, role));
       continue;
     }
-    if (itemType === "function_call") {
-      // A real Codex item_completed event may have registered this call first.
-      if (typeof payload.call_id === "string" && state.callIndexById.has(payload.call_id)) continue;
+    if (itemType === "custom_tool_call") {
+      const callId = typeof payload.call_id === "string" ? payload.call_id : undefined;
+      // A FileChange item may have registered this call first.
+      if (callId && state.callIndexById.has(callId)) continue;
       const name = typeof payload.name === "string" ? payload.name : "tool";
-      const argsRaw = payload.arguments;
-      const input = asObject(argsRaw);
+      const raw = payload.input;
+      const input = asObject(raw);
       const ownerIndex = Math.max(0, state.turns.length - 1);
       let described: string | undefined;
+      const shownFiles: string[] = [];
       if (input) {
         described = describeInput(input);
-        // Only mutation tools contribute changed files; reads stay summary-only.
-        if (FILE_TOOLS.has(name)) changedFromInput(input, state);
-      } else if (typeof argsRaw === "string" && FILE_TOOLS.has(name)) {
-        described = patchFileFrom(argsRaw);
-        if (described) changedFromPatch(described, state);
+        if (FILE_TOOLS.has(name)) shownFiles.push(...changedFromInput(input, state));
+      } else if (typeof raw === "string" && FILE_TOOLS.has(name)) {
+        const files = patchFilesFrom(raw);
+        described = files[0];
+        for (const file of files) {
+          const shown = changedFromPatch(file, state);
+          if (shown) shownFiles.push(shown);
+        }
+      } else if (typeof raw === "string") {
+        described = oneLine(raw);
       }
       const call: ToolCall = {
         name,
@@ -647,7 +679,55 @@ export function parseCodexSession(text: string): ParsedSession {
         at: state.endedAt,
       };
       registerCall(state, call, isTestCall(name, input ?? {}));
-      if (described && FILE_TOOLS.has(name)) state.turnFiles[ownerIndex]?.push(displayPath(described, state.cwd));
+      const index = state.toolCalls.length - 1;
+      if (payload.status === "failed" || payload.status === "error") state.toolCalls[index].status = "error";
+      else if (payload.status === "completed") state.toolCalls[index].status = "ok";
+      if (callId) {
+        state.callIndexById.set(callId, index);
+        state.pending.set(callId, index);
+      }
+      if (shownFiles.length > 0) state.turnFiles[ownerIndex]?.push(...shownFiles);
+      continue;
+    }
+    if (itemType === "custom_tool_call_output") {
+      const callIndex = typeof payload.call_id === "string" ? state.pending.get(payload.call_id) : undefined;
+      // The call may already be settled, or the byte window may have cut it.
+      if (callIndex === undefined && typeof payload.call_id === "string" && state.callIndexById.has(payload.call_id)) continue;
+      const existing = callIndex !== undefined ? state.toolCalls[callIndex] : undefined;
+      const ok = existing?.status === "error" ? false : outputOk(payload);
+      applyResult(state, callIndex ?? -1, ok, resultText(payload.output), state.endedAt);
+      if (callIndex !== undefined && typeof payload.call_id === "string") state.pending.delete(payload.call_id);
+      continue;
+    }
+    if (itemType === "function_call") {
+      // A real Codex item_completed event may have registered this call first.
+      if (typeof payload.call_id === "string" && state.callIndexById.has(payload.call_id)) continue;
+      const name = typeof payload.name === "string" ? payload.name : "tool";
+      const argsRaw = payload.arguments;
+      const input = asObject(argsRaw);
+      const ownerIndex = Math.max(0, state.turns.length - 1);
+      let described: string | undefined;
+      const shownFiles: string[] = [];
+      if (input) {
+        described = describeInput(input);
+        // Only mutation tools contribute changed files; reads stay summary-only.
+        if (FILE_TOOLS.has(name)) shownFiles.push(...changedFromInput(input, state));
+      } else if (typeof argsRaw === "string" && FILE_TOOLS.has(name)) {
+        const files = patchFilesFrom(argsRaw);
+        described = files[0];
+        for (const file of files) {
+          const shown = changedFromPatch(file, state);
+          if (shown) shownFiles.push(shown);
+        }
+      }
+      const call: ToolCall = {
+        name,
+        status: "unknown",
+        summary: oneLine(`${name}${described ? ` ${displayPath(described, state.cwd)}` : ""}`),
+        at: state.endedAt,
+      };
+      registerCall(state, call, isTestCall(name, input ?? {}));
+      if (shownFiles.length > 0) state.turnFiles[ownerIndex]?.push(...shownFiles);
       if (typeof payload.call_id === "string") {
         const index = state.toolCalls.length - 1;
         state.pending.set(payload.call_id, index);
@@ -660,14 +740,7 @@ export function parseCodexSession(text: string): ParsedSession {
       // The event already settled this call; never apply a second result.
       if (callIndex === undefined && typeof payload.call_id === "string" && state.callIndexById.has(payload.call_id)) continue;
       const output = resultText(payload.output);
-      let ok = payload.is_error !== true;
-      const structured = asObject(payload.output);
-      if (structured) {
-        const meta = asObject(structured.metadata);
-        const exit = meta?.exit_code ?? structured.exit_code;
-        if (typeof exit === "number" && exit !== 0) ok = false;
-      }
-      applyResult(state, callIndex ?? -1, ok, output, state.endedAt);
+      applyResult(state, callIndex ?? -1, outputOk(payload), output, state.endedAt);
       if (callIndex !== undefined && typeof payload.call_id === "string") state.pending.delete(payload.call_id);
       continue;
     }
