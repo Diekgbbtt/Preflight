@@ -425,7 +425,7 @@ The runtime does not import the ESM package.
 | 5 Handoff seams | done | contract deltas and `Panel integration seams` in `docs/handoff/lane-1.md` |
 | 6 Assertions catalogue | approved | `docs/assertions/lane-1.md` |
 | 7 E2E harness | done | `e2e/` passed 11/11 on 2026-11-17; E11 covers Codex custom tool calls |
-| 8 Adversarial review and final gate | done; stacked fix PR open | adversarial review done; 527 tests; e2e 11/11 |
+| 8 Adversarial review and final gate | done; PR #49 draft | adversarial review done; 527 tests; e2e 11/11 |
 
 ### Current commits
 
@@ -456,5 +456,5 @@ The runtime does not import the ESM package.
 - Every `*** Update|Add|Delete File:` path is kept, and a matching `FileChange` is deduped by id.
 - New fixture: `extension/test/fixtures/codex/session-custom-tool.jsonl`.
 - Tests: 527 passed; e2e 11/11.
-- Branch: `lane-1/codex-custom-tool-call`, stacked on `lane-1/control-plane`.
-- PR #49 stays draft; the stacked fix PR carries this change.
+- Merged into `lane-1/control-plane`.
+- PR #49 stays draft and carries this change.

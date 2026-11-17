@@ -17,11 +17,11 @@ Every entry has a contract version and a change log.
 | #37 | merged | ticket/37-language-context | 96ce4605b489049d8c6919c8bcbd429ff2cc66f3 | `npm run typecheck && npm test && npm run build` -> 442 passed | PASS |
 | #38 | merged | ticket/38-session-slice | e366d25df10a700bae886d3af3d342afe959455d | `npm run typecheck && npm test && npm run build` -> 518 passed | PASS |
 | Review fixes | merged | lane-1/control-plane | review-fixes tip | `npm run typecheck && npm test && npm run build` -> 524 passed three times; `npm run e2e` -> 9/9 passed | PASS |
-| Codex custom tool fix | stacked | lane-1/codex-custom-tool-call | c863094 | `npm run typecheck && npm test && npm run build` -> 527 passed three times; `npm run e2e` -> 11/11 passed | PASS |
+| Codex custom tool fix | merged | lane-1/control-plane | 4c7f3d3 | `npm run typecheck && npm test && npm run build` -> 527 passed three times; `npm run e2e` -> 11/11 passed | PASS |
 
 The review fixes are merged into `lane-1/control-plane` locally.
 The e2e gate is green: 9/9 passed on 2026-11-17.
-The Codex custom tool fix is stacked on `lane-1/control-plane` in PR #50; its e2e gate is 11/11.
+The Codex custom tool fix is merged into `lane-1/control-plane`; its e2e gate is 11/11.
 
 Source branch: `lane-1/control-plane`.
 Setup commit: `098e887` (`chore: set up lane 1 worktrees and extension tests`).

@@ -17,9 +17,11 @@ The branch is not ready to merge until the owner approves the contracts and the 
 | #37 Language context provider | `96ce460` | 442 passed | PASS |
 | #38 Current session slice reader | `e366d25` | 518 passed | PASS |
 | Review fixes | `ec10b1f` | 524 passed three times; e2e 9/9 | PASS |
+| Codex custom tool fix | `4c7f3d3` | 527 passed three times; e2e 11/11 | PASS |
 
 Merges are fast-forward, so the ticket tips are ancestors of the branch.
 The review-fix tip is `ec10b1f`.
+The Codex custom tool fix is `4c7f3d3`; later documentation commits are on top of it.
 The lane base is `main` at `24dc845`.
 
 ## Review response
@@ -43,23 +45,15 @@ The owner requirements are also closed:
 - The LSP tools try first; empty results with a query fall over to text search.
 - `docs/handoff/lane-1.md` has a concrete panel seam section.
 - Real Codex `event_msg.item_completed` fixtures replace the assumed `exec_command_begin/end` format.
+- Real Codex `custom_tool_call` and `custom_tool_call_output` events are parsed for `apply_patch`; 359 real calls and 108 matching `FileChange` events are covered.
 - Windows path rules have `path.win32` tests and a manual checklist.
-
-## Stacked fix
-
-PR #50 fixes a Codex session parser gap.
-Current Codex sessions emit `apply_patch` as `custom_tool_call`, not `function_call`.
-The parser now records those calls, extracts every patch path, and dedupes the matching `FileChange`.
-The fix adds a real-shape fixture, C35, and e2e E11.
-PR #50 is based on this branch and remains draft for review.
-Do not merge this PR without #50 or an equivalent fix.
 
 ## Verification
 
 - `npm run typecheck`: passed three times.
-- `npm test`: 20 test files, 524 tests passed three times.
+- `npm test`: 20 test files, 527 tests passed three times.
 - `npm run build`: passed three times; the build copies `rg` or `rg.exe` to `extension/dist`.
-- `npm run e2e`: 9 of 9 tests passed on 2026-11-17.
+- `npm run e2e`: 11 of 11 tests passed on 2026-11-17.
 - E2E coverage:
   - explicit `@` file context
   - quick score and separate deep review and improved prompt
@@ -67,12 +61,14 @@ Do not merge this PR without #50 or an equivalent fix.
   - send record exact text and shared hash
   - Claude prompt-files slice
   - real Codex two-call slice
+  - real Codex custom tool call `apply_patch`
   - TypeScript `greet` symbols
   - `MissingNeedle` fallback to bundled `rg`
   - missing CLI maps to `provider-missing`
 - E2E first run passed 8 of 9.
   E8 failed because `rg` read stdin instead of the workspace.
-  The adapter now passes an explicit `.` search path, and the rerun passed 9 of 9.
+  The adapter now passes an explicit `.` search path.
+  The final suite passed 11 of 11, including E11 for Codex custom tool calls.
 
 ## Contracts
 
@@ -83,7 +79,7 @@ It records:
 - provider-native thinking effort;
 - the `prompt-files` source and privacy policy;
 - the LSP code tools, caps, and fallback;
-- real Codex events and Windows path rules;
+- real Codex events, custom tool calls, and Windows path rules;
 - the concrete panel seams for #43, #46, #47, and #15.
 
 The single-copy invariants hold:
@@ -102,6 +98,8 @@ The single-copy invariants hold:
   The path rules are unit-tested with `path.win32`; `docs/windows.md` has the manual steps.
 - Python and Rust LSP parity are manual.
   TypeScript is measured by e2e E7.
+- The Codex model provider remains a stub until #10.
+  This PR reads Codex session files; it does not send inference to Codex.
 - The legacy `Review`, `review()`, `parseReview`, and `LEGACY_DEEP_REPLY_SCHEMA` path remains until #46.
   New code does not use it.
 - The Claude Windows path encoding is covered by the pure sanitizer test, not a live run.
@@ -112,4 +110,4 @@ The single-copy invariants hold:
 
 Do not merge.
 The PR stays draft until the owner reviews the contracts and accepts the residual risks.
-The review-fix branch is ready to push and update this PR.
+The lane branch is pushed; this PR is draft.

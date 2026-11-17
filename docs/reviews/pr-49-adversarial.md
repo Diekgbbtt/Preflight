@@ -8,7 +8,7 @@
 
 The seven review comments are closed in code and tests.
 The e2e suite passed 11 of 11 tests on 2026-11-17, including E11 for Codex custom tool calls.
-The branch is pushed; PR #49 is a draft. A stacked fix PR covers the Codex `custom_tool_call` gap.
+The branch is pushed; PR #49 is a draft and carries the Codex `custom_tool_call` fix.
 
 ## Review comments
 
@@ -68,4 +68,4 @@ The branch is pushed; PR #49 is a draft. A stacked fix PR covers the Codex `cust
 - `npm test`: 20 files, 527 tests passed.
 - `npm run build`: passed; `extension/dist/rg` is 4.5 MB and reports ripgrep 15.0.0.
 - `npm run e2e`: 11/11 passed on 2026-11-17.
-- Final merge: PR #49 stays draft; the stacked fix PR is open for owner review.
+- Final merge: PR #49 stays draft for owner review.
