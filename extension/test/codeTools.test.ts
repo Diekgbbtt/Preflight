@@ -227,6 +227,17 @@ describe("searchText and listFiles tools", () => {
     }).listFiles({});
     expect(result.omittedReason).toBe("unsupported");
   });
+
+  it("does not fall back when the primary list hid every path", async () => {
+    const searchFiles = vi.fn(async () => ["src/secret.ts"]);
+    const result = await tools({
+      protocol: { workspaceFiles: async () => ["credentials.json"] },
+      textSearch: { listFiles: searchFiles },
+    }).listFiles({});
+    expect(result.items).toEqual([]);
+    expect(result.omittedReason).toBe("empty");
+    expect(searchFiles).not.toHaveBeenCalled();
+  });
 });
 
 describe("tool failure and cancellation", () => {

@@ -42,6 +42,12 @@ describe("canonicalFolderUri", () => {
     expect(canonicalFolderUri("untitled:Untitled-1")).toBe("untitled:Untitled-1");
   });
 
+  it("keeps path encoding for spaces, hashes, and question marks", () => {
+    expect(canonicalFolderUri("file:///Users/alice/My%20Proj")).toBe("file:///Users/alice/My%20Proj");
+    expect(canonicalFolderUri("file:///Users/alice/a%23b")).toBe("file:///Users/alice/a%23b");
+    expect(canonicalFolderUri("file:///Users/alice/a%3Fb")).toBe("file:///Users/alice/a%3Fb");
+  });
+
   it("returns a malformed URI unchanged instead of throwing", () => {
     expect(canonicalFolderUri("file:///Users/%ZZ")).toBe("file:///Users/%ZZ");
   });

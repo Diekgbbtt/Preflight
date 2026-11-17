@@ -440,8 +440,12 @@ export function createCodeTools(options: CodeToolsOptions): CodebaseTools {
         return emptyResult(errorReason(error, signal));
       }
       const filtered = files.filter((path) => isAllowed(path, policy));
+      const dropped = files.length - filtered.length;
       const capped = cap(filtered, limit);
-      if (capped.items.length > 0) return { items: capped.items, truncated: capped.truncated, dropped: files.length - filtered.length };
+      if (capped.items.length > 0) return { items: capped.items, truncated: capped.truncated, dropped };
+      // The primary list answered. If it hid every path, never fall back to
+      // text search: that would reveal paths the policy just rejected.
+      if (files.length > 0) return emptyResult("empty", dropped);
     }
     if (!textSearch.listFiles) return emptyResult("unsupported");
     let files: string[];

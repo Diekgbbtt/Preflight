@@ -68,7 +68,9 @@ export function canonicalFolderUri(uri: string): string {
     pathname = "/" + pathname[1].toLowerCase() + pathname.slice(2);
   }
   const host = url.host === "localhost" ? "" : url.host.toLowerCase();
-  return `file://${host}${encodeURI(pathname)}`;
+  // encodeURI keeps the path slashes but leaves # and ? as URI delimiters.
+  const encoded = encodeURI(pathname).replace(/#/g, "%23").replace(/\?/g, "%3F");
+  return `file://${host}${encoded}`;
 }
 
 /**
