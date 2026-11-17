@@ -439,11 +439,12 @@ The runtime does not import the ESM package.
 - `e200604` VS Code e2e harness
 - `41691fc` review contract deltas and e2e harness
 
-### E2E blocker
+### E2E status
 
-- `npm run e2e` builds the suite and attempts to launch `/Applications/Visual Studio Code.app/Contents/MacOS/Code`.
-- The process is killed by `SIGABRT` before any output.
-- `codesign --verify --deep --strict` reports the installed app signature as invalid.
-- An ad-hoc signed copy also aborts.
+- The owner ran `npm run e2e` in a normal GUI Terminal.
+- E1, E2, E3, E4, E5, E6, E7, and E9 passed.
+- E8 failed because `rg` read stdin instead of the workspace when no path was given.
+- The adapter now passes an explicit `.` search path, and the parser strips a leading `./`.
+- The E8 path was reproduced with the real binary and the tool layer: it returns `src/needle.ts`.
+- A rerun is pending.
 - `node e2e/run.mjs --dry-run` prints the exact launch command.
-- Run `npm run e2e` from a normal GUI Terminal, or set `VSCODE_BIN` to a working executable.
