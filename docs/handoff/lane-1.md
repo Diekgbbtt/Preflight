@@ -45,6 +45,103 @@ Lane base for ticket #38: `d34bd22`.
 | Codex events | Assumed `exec_command_begin` / `exec_command_end` | Real `event_msg.item_completed` `CommandExecution` and `FileChange` |
 | Windows | Recorded gap | Pure `path.win32` rules plus a manual Windows checklist |
 
+## Contract deltas in detail
+
+These sections supersede the matching fields in the per-ticket contracts below.
+When this document conflicts with a per-ticket section, this section wins.
+
+### #40 Review schema - v2
+
+- `ScoreReport` fields: `dimensions`, `score`, `level`, `provider`, `model`, `thinkingEffort: string`, `rubricVersion`, `promptHash`, `scoredAt`, `confidence?`.
+- `ScoreReport` has no `source` field. The quick path is the only score producer.
+- `ScoreMeta` fields: `provider`, `model`, `thinkingEffort: string`, `scoredAt`.
+- `QuickReview` fields: `score: ScoreReport | null`, `issues`, `questions`.
+- `DeepReview` fields: `issues`, `questions`, `assumptions`, `contextGaps`, `usage`, `latency`, `promptVersion`.
+- `DeepReview` has no `score` and no `improvedPrompt`.
+- `ImprovedPrompt` fields: `text`, `usage`, `latency`, `promptVersion`.
+- `IMPROVE_PROMPT_VERSION = "v1"`.
+- `IMPROVE_REPLY_SCHEMA` is the separate rewrite schema.
+- `parseImprovedPrompt(text, usage, latency)` returns `ImprovedPrompt | null`.
+- `canImprove(review)` is true only when `review.questions.length > 0`.
+- `buildImprovedPromptRequest(prompt, review, qa, model)` includes the prompt, issues, questions, answers, assumptions, gaps, and the placeholder instruction. It never includes the rubric.
+- `improvePrompt(prompt, review, qa, run, model, clock, signal?)` returns `ImprovedPrompt | null`. It does not call the model when `canImprove` is false.
+- `MAX_ISSUES = 20`, `MAX_QUESTIONS = 20`, `MAX_OPTIONS = 3`.
+- `LEGACY_DEEP_REPLY_SCHEMA` in `review.ts` is deprecated. #46 removes it with the legacy `Review` path.
+
+### #39 Model provider profiles - v1.2
+
+- `ThinkingEffort` is a provider-native `string`.
+- `Config.thinkingEffort` is a `string`.
+- The setting `promptPreflight.thinkingEffort` is a string with default `medium`.
+- Claude Code accepts `low`, `medium`, `high`, `xhigh`, and `max`; these are examples, not an enforced union.
+- `validateClaudeProfile` rejects only an empty effort.
+- `buildClaudeArgs` passes the value to `--effort` unchanged.
+- The activation probe still checks only whether the CLI exposes `--effort`.
+
+### #36 Context assembler - v2
+
+- `ContextKind` is `prompt-file | git-diff | test-command | diagnostic | symbol | reference | definition | workspace-symbol | text-search | session`.
+- `ContextSourceId` is `draft | qa | session-slice | prompt-files | git-diff | diagnostics | symbols | references | definitions | workspace-symbols | test-command`.
+- `SOURCE_PRIORITIES`: `prompt-files` 80, `git-diff` 50, `diagnostics` 45, `symbols` 40, `references` 39, `definitions` 38, `workspace-symbols` 37, `test-command` 30.
+- `selection`, `active-editor`, and `open-editors` are removed.
+- `findPromptFileRefs(text)` returns unique `PromptFileRef` records in prompt order. It accepts `@src/a.ts`, `@./src/a.ts`, `@src\\a.ts`, and quoted paths with spaces. It ignores emails, decorators, npm scopes without an extension, bare paths, and directories.
+- `resolvePromptFileRefs(refs, roots, exists, pathApi?)` resolves across roots. It reports `missing`, `outside`, `ambiguous`, and `duplicate`; an ambiguous reference is never guessed.
+- `buildPromptFilesResult(input)` reads only allowed files. It counts `files`, `dropped`, `missing`, `ambiguous`, `excluded`, `duplicate`, and `unreadable`.
+- `createPromptFilesSource({ folders, policy, draft, readText? })` is the only prompt-file collector.
+- The source checks policy before reading. An excluded file is never opened.
+- `git-diff` and `test-command` remain.
+
+### #41 Privacy and consent - v2
+
+- `IncludeCode = "off" | "prompt-files" | "workspace"`.
+- `IncludeKind = "prompt-file" | "workspace" | "diagnostic" | "session"`.
+- `IncludePolicy = { includeCode: IncludeCode; promptFiles?: string[] }`.
+- `shouldInclude(path, kind, policy)` returns false under `off`.
+- Under `prompt-files`, only a path in `policy.promptFiles` is included.
+- Under `workspace`, every non-excluded, non-empty, workspace-relative path is included.
+- The exclusion list and the workspace boundary always win.
+- `parseIncludeCode(value)` maps `active-file` to `prompt-files`; it maps an unknown value to `off`.
+- The setting enum is `off | prompt-files | workspace`; the default is `prompt-files`.
+- `consentedIncludeCode` is unchanged: no accepted consent means `off`.
+- `redact`, `EXCLUDE_GLOB`, `consentMessage`, and `SourcePrivacyFields` are unchanged.
+
+### #37 Language context - v2
+
+- `extension/src/codeTools.ts` is the agent tool layer.
+- Exports: `CODE_TOOL_CAPS`, `createCodeTools`, `withTimeout`, `LanguageProtocol`, `TextSearchPort`, `CodebaseTools`, `ToolResult`, `FallbackResult`, `ToolSymbol`, `ToolLocation`, `ToolDiagnostic`, `TextSearchMatch`.
+- Tools: `documentSymbols`, `workspaceSymbols`, `definitions`, `references`, `diagnostics`, `searchText`, `listFiles`.
+- Caps: 100 document symbols, 50 workspace symbols, 20 definitions, 50 references, 200 diagnostics, 50 text matches, 200 files.
+- LSP-backed tools try the language provider first.
+- An empty LSP result with a query falls back to text search.
+- A policy-hidden result never falls back.
+- Diagnostics never fall back.
+- A missing bundled `rg` omits `unsupported`.
+- `LanguageProtocol` uses LSP types and request params from `vscode-languageserver-protocol`; cancellation uses `vscode-jsonrpc`.
+- `createVscodeLanguageApi({ cwd, rgPath, runRipgrep? })` implements `LanguageProtocol & TextSearchPort`.
+- The adapter maps VS Code `SymbolKind` and `DiagnosticSeverity` names to LSP numeric values.
+- `ripgrep.ts` exports `runRipgrep`, `parseRipgrepJson`, `parseRipgrepFiles`, and `bundledRipgrepPath`.
+- The build copies the platform binary to `extension/dist/rg` or `extension/dist/rg.exe`.
+- `@vscode/ripgrep` is a dev dependency. There is no system `rg` requirement.
+- `LanguageSourceDeps` is `{ tools, policy, folderUri?, activePath?, activePosition?, openDocuments?, query? }`.
+- The five sources are `diagnostics`, `symbols`, `workspace-symbols`, `definitions`, and `references`.
+- `LanguageApi`, `probeCapabilities`, `searchFallback`, and the old `rg` helper are removed.
+
+### #38 Current session slice - v2
+
+- Codex `event_msg` parsing uses `item_completed` with `CommandExecution` and `FileChange`.
+- `CommandExecution` fields: `id`, `command` array, `cwd`, `status`, `aggregated_output`, `exit_code`.
+- `FileChange` fields: `id`, `changes` map, `status`, `stdout`.
+- A `function_call` and a `CommandExecution` with the same `id` produce one tool call, not two.
+- `AgentMessage` is skipped because it duplicates the `response_item` message.
+- `exec_command_begin` and `exec_command_end` are removed.
+- `function_call` arguments support `cmd` as well as `command`.
+- `canonicalFolderUri` normalizes POSIX, Windows drive, UNC, localhost, trailing slash, and malformed URIs.
+- `encodeClaudeProjectPath(cwd)` replaces every character outside `[A-Za-z0-9_-]` with `-`.
+- `relativeToWorkspace(raw, cwd, pathApi?)` accepts an injected path API; `path.win32` is tested.
+- The real fixtures are `extension/test/fixtures/codex/session-real-events.jsonl` and `session-basic.jsonl`.
+- The fake `session-exec-events.jsonl` fixture is deleted.
+- The live Windows run is a manual step in `docs/windows.md`.
+
 ## Panel integration seams
 
 This section is the concrete wiring contract for #43, #46, #47, and #15.
@@ -1299,3 +1396,50 @@ const matches = await tools.searchText({ query: "greet", maxResults: 50 });
 - The free-model fallback also reached its usage limit.
 - All implementer and reviewer dispatches after #40 used `opencode-go/glm-5.3-flash`.
 - No task scope or acceptance criterion changed because of the model fallback.
+
+## E2E harness
+
+The e2e tier mounts the built extension in a real VS Code extension host.
+
+- Launcher: `e2e/run.mjs`.
+- Extension-host suite: `e2e/suite/index.ts`.
+- Test facade: `e2e/facade.ts`.
+- Sample workspace: `e2e/fixture`.
+- Command: `npm run e2e`.
+- Dry run that builds the suite and prints the launch command: `node e2e/run.mjs --dry-run`.
+- Override the binary with `VSCODE_BIN`.
+- Keep the temp workspace with `PREFLIGHT_E2E_KEEP=1`.
+
+The suite asserts:
+
+- E1: `@src/greet.ts` enters the bundle as `prompt-files` and no active-editor source exists.
+- E2: quick score 90; deep review has no score and no improved prompt; the separate action returns `[expected result]`; the review event has neither field.
+- E3: `includeCode: "off"` excludes the file and never calls the reader.
+- E4: `sends.jsonl` stores the exact text and the shared prompt hash at seq 1.
+- E5: the Claude fixture slice keeps code only for `src/greet.ts`.
+- E6: the real Codex fixture yields two calls, a failed test, one error, and `src/app.ts`.
+- E7: the TypeScript provider returns the `greet` symbol.
+- E8: an absent workspace symbol falls over to the bundled `rg`.
+- E9: a missing CLI maps to `provider-missing`.
+
+The live edge is the fake Claude CLI and the built-in TypeScript provider.
+The fixture workspace is copied to a temp directory; the seeded session homes are temp directories.
+
+### E2E status
+
+- The suite builds: `e2e/dist/suite.cjs` is about 398 kB.
+- The fixture workspace and session homes are created by the launcher.
+- The local launch is blocked in the current agent sandbox: `/Applications/Visual Studio Code.app/Contents/MacOS/Code` exits with code 134 before any output.
+- `codesign --verify --deep --strict` reports the installed app signature as invalid.
+- An ad-hoc signed copy still exits 134.
+- Run `npm run e2e` from a normal GUI Terminal, or set `VSCODE_BIN` to a working VS Code executable.
+- The suite has not been observed green yet. Do not claim the e2e gate passed until it runs.
+
+## Change log for the review fixes
+
+- #40 v2: provider-native effort, caps 20, no deep score, no deep improved prompt, separate `ImprovedPrompt`.
+- #39 v1.2: effort string pass-through.
+- #36 v2: explicit `@` files replace active, selection, and open editors.
+- #41 v2: `prompt-files` policy and legacy `active-file` mapping.
+- #37 v2: agent tools over LSP types with a bundled-rg fallback.
+- #38 v2: real Codex `item_completed` events and Windows path rules.
