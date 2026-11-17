@@ -53,7 +53,6 @@ const args = [
   `--extensionTestsPath=${suiteOut}`,
   `--user-data-dir=${userData}`,
   `--extensions-dir=${extensions}`,
-  "--disable-extensions",
   "--disable-gpu",
   "--disable-workspace-trust",
   "--skip-welcome",
