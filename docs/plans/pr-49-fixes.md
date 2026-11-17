@@ -424,8 +424,8 @@ The runtime does not import the ESM package.
 | 4 LSP agent middleware | done | `codeTools.ts`, `vscodeCodeTools.ts`, `ripgrep.ts`; 26 tool tests, 11 adapter tests, 10 ripgrep tests |
 | 5 Handoff seams | done | contract deltas and `Panel integration seams` in `docs/handoff/lane-1.md` |
 | 6 Assertions catalogue | approved | `docs/assertions/lane-1.md` |
-| 7 E2E harness | harness ready; launch blocked | `e2e/` builds `e2e/dist/suite.cjs`; local VS Code is killed by `SIGABRT` |
-| 8 Adversarial review and final gate | pending | blocked on the e2e run |
+| 7 E2E harness | first run 8/9; rerun pending | `e2e/` builds; E1-E7 and E9 passed; E8 failed on rg stdin and is fixed |
+| 8 Adversarial review and final gate | pending | adversarial review done; blocked on the e2e rerun |
 
 ### Current commits
 

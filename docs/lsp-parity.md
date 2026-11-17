@@ -31,13 +31,13 @@ The suite includes:
 - E8: an absent workspace symbol (`MissingNeedle`) falls over to the bundled `rg` and finds `src/needle.ts`.
 
 The suite output is the measurement record.
-The current sandbox has not observed the suite green because VS Code aborts before the extension host starts.
+The first e2e run passed E1-E7 and E9. E8 failed because rg read stdin; the adapter now passes an explicit `.` path. A rerun is pending.
 
 ## Parity table
 
 | Language | Provider available | Symbol kind | Location precision | Truncation | Measured | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| TypeScript | expected built-in | expected `Function` | full LSP range | caps 100/50/20/50/200 | **not measured** | The E7 and E8 e2e tests measure it when VS Code launches. |
+| TypeScript | yes (e2e E7) | `Function` for `greet` (e2e E7) | not measured | not measured | **partly measured** | E7 passed in the first e2e run. E8 measured the rg fallback. Location precision and truncation remain manual. |
 | Python | `ms-python.python` + `ms-python.vscode-pylance` installed | not measured | not measured | not measured | **not measured** | Run the manual steps in a real window. |
 | Rust | `rust-lang.rust-analyzer` installed | not measured | not measured | not measured | **not measured** | Run the manual steps in a real window. |
 

@@ -1461,7 +1461,7 @@ The fixture workspace is copied to a temp directory; the seeded session homes ar
 - `codesign --verify --deep --strict` reports the installed app signature as invalid.
 - An ad-hoc signed copy still exits 134.
 - Run `npm run e2e` from a normal GUI Terminal, or set `VSCODE_BIN` to a working VS Code executable.
-- The suite has not been observed green yet. Do not claim the e2e gate passed until it runs.
+- The first e2e run passed 8 of 9 tests. E8 failed because rg read stdin instead of the workspace; the adapter now passes an explicit `.` search path. A rerun is pending.
 
 ## Change log for the review fixes
 

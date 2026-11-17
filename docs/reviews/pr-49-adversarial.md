@@ -45,7 +45,7 @@ The branch is not ready to merge until the e2e suite runs green in a normal envi
 
 ### Residual risks
 
-- The e2e suite has not run green. The local VS Code process is killed by `SIGABRT` in the agent sandbox; `codesign --verify` also reports the installed app signature as invalid.
+- The first e2e run passed 8 of 9 tests. E8 failed because rg read stdin instead of the workspace; the adapter now passes an explicit `.` search path. A rerun is pending.
 - The live Windows run is not measured. Only `path.win32` unit tests run.
 - Python and Rust LSP parity are manual.
 - The legacy `Review`, `review()`, `parseReview`, and `LEGACY_DEEP_REPLY_SCHEMA` path remains until #46. New code does not use it.
@@ -57,5 +57,5 @@ The branch is not ready to merge until the e2e suite runs green in a normal envi
 - `npm run typecheck`: passed three times.
 - `npm test`: 20 files, 524 tests passed three times.
 - `npm run build`: passed three times; `extension/dist/rg` is 4.5 MB and reports ripgrep 15.0.0.
-- `npm run e2e`: suite builds; launch killed by `SIGABRT`.
-- Final merge: blocked on a green e2e run.
+- `npm run e2e`: first run 8/9; E8 fixed; rerun pending.
+- Final merge: blocked on a green e2e rerun.

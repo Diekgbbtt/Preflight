@@ -6,7 +6,7 @@
 
 The review feedback in `docs/reviews/pr-49-feedback.md` supersedes the LLD where they disagree.
 The catalogue was approved on 2026-11-17.
-The e2e harness is in `e2e/`; the suite builds, but the local VS Code launch is blocked in the agent sandbox.
+The e2e harness is in `e2e/`; the first run passed 8 of 9 tests. E8 failed because rg read stdin; the adapter now passes an explicit `.` path. A rerun is pending.
 The predicates remain the acceptance contract until the suite is observed green.
 The new contracts are:
 
