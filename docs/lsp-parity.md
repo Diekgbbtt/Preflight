@@ -2,7 +2,7 @@
 
 The language context sources use the agent tools in `extension/src/codeTools.ts`.
 The tools call the installed language providers through the adapter in
-`extension/src/vscodeLanguageApi.ts` and fall back to the bundled `rg`.
+`extension/src/vscodeCodeTools.ts` and fall back to the bundled `rg`.
 A measured gap becomes a new ticket; nothing here is fabricated.
 
 ## Environment facts (measured on this machine, 2026-11-17)

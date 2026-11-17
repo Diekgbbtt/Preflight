@@ -117,7 +117,7 @@ When this document conflicts with a per-ticket section, this section wins.
 - Diagnostics never fall back.
 - A missing bundled `rg` omits `unsupported`.
 - `LanguageProtocol` uses LSP types and request params from `vscode-languageserver-protocol`; cancellation uses `vscode-jsonrpc`.
-- `createVscodeLanguageApi({ cwd, rgPath, runRipgrep? })` implements `LanguageProtocol & TextSearchPort`.
+- `createVscodeCodeTools({ cwd, rgPath, runRipgrep? })` implements `LanguageProtocol & TextSearchPort`.
 - The adapter maps VS Code `SymbolKind` and `DiagnosticSeverity` names to LSP numeric values.
 - `ripgrep.ts` exports `runRipgrep`, `parseRipgrepJson`, `parseRipgrepFiles`, and `bundledRipgrepPath`.
 - The build copies the platform binary to `extension/dist/rg` or `extension/dist/rg.exe`.
@@ -1173,9 +1173,9 @@ const matches = await tools.searchText({ query: "greet", maxResults: 50 });
   - `function gitStatus(cwd: string, exec?: ExecFileLike): Promise<GitStatusResult>`.
   - `function gitChangedFiles(cwd: string, exec?: ExecFileLike): Promise<GitChangedFilesResult>`.
   - `const MAX_GIT_ENTRIES = 200`.
-- Exports from `extension/src/vscodeLanguageApi.ts`:
-  - `interface VscodeLanguageApiOptions { cwd?: string; rg?: typeof rg }`.
-  - `function createVscodeLanguageApi(options?): LanguageApi & { probe(uri, signal?): Promise<LanguageCapabilities | null>; openDocuments(): Array<{ uri: string; path: string }> }`.
+- Exports from `extension/src/vscodeCodeTools.ts`:
+  - `interface VscodeCodeToolsOptions { cwd?: string; rg?: typeof rg }`.
+  - `function createVscodeCodeTools(options?): LanguageApi & { probe(uri, signal?): Promise<LanguageCapabilities | null>; openDocuments(): Array<{ uri: string; path: string }> }`.
   - This is the only file in #37 that imports `vscode`.
 - Source ids and priorities:
   - `diagnostics` 45, `symbols` 40, `references` 39, `definitions` 38, `workspace-symbols` 37. The ids/priorities come from #36's `SOURCE_PRIORITIES`.
@@ -1213,7 +1213,7 @@ const matches = await tools.searchText({ query: "greet", maxResults: 50 });
   - `rg(args, cwd)` uses `execFile("rg", args, { cwd, timeout: 5000, maxBuffer: 1 MB })`. Exit code 1 with empty stderr is a successful empty result. A missing `rg` returns `code: "ENOENT"`. Other failures return `code` when it is a string and the stderr/error message. No shell.
   - `gitStatus(cwd)` uses `git status --porcelain=v1 -z`, parses NUL-separated rows, preserves spaces/newlines, skips the original-path segment after a rename/copy, caps at 200, and sets `truncated`.
   - `gitChangedFiles(cwd)` combines the status paths with the last five commits' NUL-separated `--name-only` names, unique and sorted, caps at 200, and sets `truncated` when either the status or the combined list was capped. A log failure keeps the status paths.
-- `vscodeLanguageApi.ts`:
+- `vscodeCodeTools.ts`:
   - Converts `DocumentSymbol` (children flattened), `SymbolInformation`, `Location`, `LocationLink` (target selection range preferred), `Diagnostic` (severity name, source, range, message), and `Uri`/`Position`/`Range`.
   - `textSearch` runs `rg --json` with the cwd, parses match lines, builds file URIs, drops absolute/`..` paths, and caps. Missing rg and other failures throw with the code.
   - `openDocuments()` returns file-scheme open documents as `{ uri, path }`.
@@ -1222,7 +1222,7 @@ const matches = await tools.searchText({ query: "greet", maxResults: 50 });
   - `docs/lsp-parity.md` records the environment facts, the three languages (TypeScript, Python, Rust), a table with provider availability/symbol kind/location precision/truncation, and the exact manual steps. All rows are marked **not measured** because no interactive VS Code window was available. `rg` is not installed on this machine.
 - Tests:
   - `extension/test/languageContext.test.ts`: `npx vitest run extension/test/languageContext.test.ts` -> 100 passed.
-  - `extension/test/vscodeLanguageApi.test.ts`: `npx vitest run extension/test/vscodeLanguageApi.test.ts` -> 20 passed.
+  - `extension/test/vscodeCodeTools.test.ts`: `npx vitest run extension/test/vscodeCodeTools.test.ts` -> 20 passed.
   - Full suite: `npm test` -> 442 passed.
 - Test seams:
   - `LanguageApi` port with a fake: `extension/test/languageContext.test.ts`.
@@ -1231,7 +1231,7 @@ const matches = await tools.searchText({ query: "greet", maxResults: 50 });
   - `searchFallback`: `extension/test/languageContext.test.ts`.
   - Sources: `extension/test/languageContext.test.ts`.
   - `exec.ts` helpers with a fake executor: `extension/test/languageContext.test.ts`.
-  - Adapter with a stubbed `vscode`: `extension/test/vscodeLanguageApi.test.ts`. This is the only test that mocks `vscode`.
+  - Adapter with a stubbed `vscode`: `extension/test/vscodeCodeTools.test.ts`. This is the only test that mocks `vscode`.
 - Edge modes covered:
   - No active editor/position, untitled/virtual, no query, empty provider results, zero diagnostics, 10k diagnostics/symbols capped, locations outside the workspace dropped, provider throw/timeout, abort, `rg` missing, git missing/not a repo, paths with spaces/newlines, renames, ignored paths, `.gitignore`, multi-root caller-provided cwd, deleted/pathless results dropped.
 - Assumptions:

@@ -21,7 +21,7 @@ import type { LanguageProtocol, TextSearchMatch, TextSearchPort } from "./codeTo
 import { EXCLUDE_GLOB, isOutsideWorkspace } from "./privacy";
 import { parseRipgrepFiles, parseRipgrepJson, runRipgrep } from "./ripgrep";
 
-export interface VscodeLanguageApiOptions {
+export interface VscodeCodeToolsOptions {
   /** Workspace root for uriOf and rg. Defaults to the first workspace folder. */
   cwd?: string;
   /** The bundled rg binary. */
@@ -30,7 +30,7 @@ export interface VscodeLanguageApiOptions {
   runRipgrep?: typeof runRipgrep;
 }
 
-export function createVscodeLanguageApi(options: VscodeLanguageApiOptions = {}): LanguageProtocol & TextSearchPort {
+export function createVscodeCodeTools(options: VscodeCodeToolsOptions = {}): LanguageProtocol & TextSearchPort {
   const toUri = (uri: string): vscode.Uri => vscode.Uri.parse(uri);
   const toPosition = (position: Position): vscode.Position => new vscode.Position(position.line, position.character);
   const toRange = (range: vscode.Range): Range => ({

@@ -29,7 +29,7 @@ import { redact, type IncludeCode } from "../extension/src/privacy";
 import { JsonlRepository } from "../extension/src/repository";
 import { bundledRipgrepPath } from "../extension/src/ripgrep";
 import { DEFAULT_SESSION_CAPS, discoverCandidates, readSlice, type SessionSlice } from "../extension/src/sessionSlice";
-import { createVscodeLanguageApi } from "../extension/src/vscodeLanguageApi";
+import { createVscodeCodeTools } from "../extension/src/vscodeCodeTools";
 
 export function workspaceRoot(): string {
   return process.env.PREFLIGHT_E2E_WORKSPACE ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
@@ -125,7 +125,7 @@ export function promptHash(draft: string): string {
 }
 
 export interface WorkspaceTools {
-  api: ReturnType<typeof createVscodeLanguageApi>;
+  api: ReturnType<typeof createVscodeCodeTools>;
   tools: CodebaseTools;
 }
 
@@ -133,7 +133,7 @@ export interface WorkspaceTools {
 export function workspaceTools(): WorkspaceTools {
   const extensionPath = process.env.PREFLIGHT_E2E_EXTENSION;
   const rgPath = process.env.PREFLIGHT_E2E_RG ?? (extensionPath ? bundledRipgrepPath(extensionPath) : undefined);
-  const api = createVscodeLanguageApi({ cwd: workspaceRoot(), rgPath });
+  const api = createVscodeCodeTools({ cwd: workspaceRoot(), rgPath });
   const tools = createCodeTools({
     protocol: api,
     textSearch: api,
