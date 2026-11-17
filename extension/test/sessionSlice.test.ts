@@ -354,22 +354,22 @@ describe("readSlice", () => {
     expect(slice.turns[0].text).not.toContain("secretCode");
   });
 
-  it("keeps code only for the active file under includeCode active-file", async () => {
+  it("keeps code only for referenced files under includeCode prompt-files", async () => {
     const text = "```ts src/app.ts\nconst app = 1;\n```\n```ts src/other.ts\nconst other = 2;\n```";
-    const file = await write("code-active.jsonl", claudeTurns([{ role: "assistant", text }]));
+    const file = await write("code-prompt-files.jsonl", claudeTurns([{ role: "assistant", text }]));
     const slice = await readSlice(file, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, {
-      includeCode: "active-file",
-      activeFileUri: "file:///Users/alice/proj/src/app.ts",
+      includeCode: "prompt-files",
+      promptFiles: ["src/app.ts"],
       redact,
     });
     expect(slice.turns[0].code).toEqual(["const app = 1;"]);
     expect(slice.turns[0].codePath).toBe("src/app.ts");
   });
 
-  it("drops all code under active-file when no active file is known", async () => {
+  it("drops all code under prompt-files when no file is referenced", async () => {
     const text = "Patching now.\n\n```ts src/app.ts\nconst app = 1;\n```";
-    const file = await write("code-noactive.jsonl", claudeTurns([{ role: "assistant", text }]));
-    const slice = await readSlice(file, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, { includeCode: "active-file", redact });
+    const file = await write("code-no-prompt-files.jsonl", claudeTurns([{ role: "assistant", text }]));
+    const slice = await readSlice(file, "claude", DEFAULT_SESSION_CAPS, { now: () => 0 }, { includeCode: "prompt-files", promptFiles: [], redact });
     expect(slice.turns[0].code).toBeUndefined();
     expect(slice.turns[0].text).toContain("Patching now.");
   });

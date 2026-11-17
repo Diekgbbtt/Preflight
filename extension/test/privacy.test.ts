@@ -3,6 +3,7 @@ import {
   CONSENT_VERSION,
   consentKey,
   parseConsent,
+  parseIncludeCode,
   redact,
   shouldInclude,
   consentMessage,
@@ -155,49 +156,36 @@ describe("redact", () => {
 });
 
 describe("shouldInclude", () => {
-  const active: IncludePolicy = { includeCode: "active-file", activePath: "src/app.ts" };
+  const files: IncludePolicy = { includeCode: "prompt-files", promptFiles: ["src/app.ts", "src/lib.ts"] };
   const ws: IncludePolicy = { includeCode: "workspace" };
-  const off: IncludePolicy = { includeCode: "off", activePath: "src/app.ts" };
+  const off: IncludePolicy = { includeCode: "off", promptFiles: ["src/app.ts"] };
 
-  it("off returns false for every kind, including selection", () => {
-    expect(shouldInclude("src/app.ts", "workspace", off)).toBe(false);
-    expect(shouldInclude("src/app.ts", "active-file", off)).toBe(false);
-    expect(shouldInclude("src/app.ts", "open-editor", off)).toBe(false);
-    expect(shouldInclude("src/app.ts", "diagnostic", off)).toBe(false);
-    expect(shouldInclude("src/app.ts", "session", off)).toBe(false);
-    expect(shouldInclude("src/app.ts", "selection", off)).toBe(false);
-    expect(shouldInclude("", "selection", off)).toBe(false);
+  it("off returns false for every kind, including prompt-file", () => {
+    for (const kind of ["prompt-file", "workspace", "diagnostic", "session"] as const) {
+      expect(shouldInclude("src/app.ts", kind, off)).toBe(false);
+    }
+    expect(shouldInclude("", "prompt-file", off)).toBe(false);
   });
 
-  it("active-file includes only the active path", () => {
-    expect(shouldInclude("src/app.ts", "workspace", active)).toBe(true);
-    expect(shouldInclude("src/app.ts", "open-editor", active)).toBe(true);
-    expect(shouldInclude("src/app.ts", "diagnostic", active)).toBe(true);
-    expect(shouldInclude("src/app.ts", "session", active)).toBe(true);
-    expect(shouldInclude("src/other.ts", "workspace", active)).toBe(false);
-    expect(shouldInclude("src/other.ts", "diagnostic", active)).toBe(false);
-    expect(shouldInclude("", "workspace", active)).toBe(false);
-    expect(shouldInclude("src/app.ts", "workspace", { includeCode: "active-file" })).toBe(false);
-  });
-
-  it("active-file includes an explicit selection even outside the active path", () => {
-    expect(shouldInclude("src/other.ts", "selection", active)).toBe(true);
-    expect(shouldInclude("", "selection", active)).toBe(true);
+  it("prompt-files includes only referenced paths", () => {
+    for (const kind of ["prompt-file", "workspace", "diagnostic", "session"] as const) {
+      expect(shouldInclude("src/app.ts", kind, files)).toBe(true);
+      expect(shouldInclude("src/lib.ts", kind, files)).toBe(true);
+      expect(shouldInclude("src/other.ts", kind, files)).toBe(false);
+    }
+    expect(shouldInclude("src/app.ts", "workspace", { includeCode: "prompt-files" })).toBe(false);
   });
 
   it("workspace includes every non-excluded path", () => {
     expect(shouldInclude("src/app.ts", "workspace", ws)).toBe(true);
+    expect(shouldInclude("src/other.ts", "prompt-file", ws)).toBe(true);
     expect(shouldInclude("src/app.ts", "session", ws)).toBe(true);
     expect(shouldInclude("docs/readme.md", "diagnostic", ws)).toBe(true);
     expect(shouldInclude("", "workspace", ws)).toBe(false);
   });
 
-  it("active-file excludes a session excerpt from another file", () => {
-    expect(shouldInclude("src/other.ts", "session", active)).toBe(false);
-  });
-
-  it("excludes secret file names under both active-file and workspace", () => {
-    for (const policy of [active, ws]) {
+  it("excludes secret file names under both prompt-files and workspace", () => {
+    for (const policy of [files, ws]) {
       for (const path of [
         ".env",
         ".env.local",
@@ -215,46 +203,62 @@ describe("shouldInclude", () => {
     }
   });
 
-  it("excludes build directories, even as an explicit selection", () => {
-    expect(shouldInclude("dist/app.js", "selection", ws)).toBe(false);
+  it("excludes build directories even when referenced", () => {
+    expect(shouldInclude("dist/app.js", "prompt-file", { includeCode: "prompt-files", promptFiles: ["dist/app.js"] })).toBe(false);
     expect(shouldInclude("build/notes.md", "workspace", ws)).toBe(false);
-    expect(shouldInclude("venv/lib/x.py", "selection", active)).toBe(false);
+    expect(shouldInclude("venv/lib/x.py", "prompt-file", { includeCode: "workspace" })).toBe(false);
   });
 
-  it("exclusion wins over an explicit selection", () => {
-    expect(shouldInclude("credentials.json", "selection", active)).toBe(false);
-    expect(shouldInclude(".env", "selection", ws)).toBe(false);
+  it("exclusion wins over an explicit reference", () => {
+    expect(shouldInclude("credentials.json", "prompt-file", { includeCode: "prompt-files", promptFiles: ["credentials.json"] })).toBe(false);
+    expect(shouldInclude(".env", "workspace", { includeCode: "workspace" })).toBe(false);
   });
 
-  it("includes an untitled or virtual selection, but not untitled workspace kinds", () => {
-    expect(shouldInclude("", "selection", ws)).toBe(true);
-    expect(shouldInclude("", "active-file", ws)).toBe(false);
-    expect(shouldInclude("", "open-editor", ws)).toBe(false);
+  it("does not include an untitled or virtual file", () => {
+    expect(shouldInclude("", "prompt-file", ws)).toBe(false);
+    expect(shouldInclude("", "workspace", ws)).toBe(false);
     expect(shouldInclude("", "diagnostic", ws)).toBe(false);
   });
 
   it("rejects absolute paths and path traversal", () => {
     expect(shouldInclude("/etc/passwd", "workspace", ws)).toBe(false);
-    expect(shouldInclude("/etc/passwd", "selection", ws)).toBe(false);
+    expect(shouldInclude("/etc/passwd", "prompt-file", ws)).toBe(false);
     expect(shouldInclude("../secrets.env", "workspace", ws)).toBe(false);
-    expect(shouldInclude("src/../../etc/passwd", "selection", ws)).toBe(false);
+    expect(shouldInclude("src/../../etc/passwd", "prompt-file", ws)).toBe(false);
   });
 
-  it("rejects windows drive-letter paths under both workspace and selection", () => {
+  it("rejects windows drive-letter paths", () => {
     for (const path of ["C:/Users/x/app.ts", "C:\\Users\\x\\app.ts"]) {
       expect(shouldInclude(path, "workspace", ws)).toBe(false);
-      expect(shouldInclude(path, "selection", ws)).toBe(false);
+      expect(shouldInclude(path, "prompt-file", ws)).toBe(false);
     }
   });
 
   it("normalizes windows separators and leading ./", () => {
-    expect(shouldInclude("src\\app.ts", "workspace", active)).toBe(true);
-    expect(shouldInclude("./src/app.ts", "workspace", active)).toBe(true);
+    expect(shouldInclude("src\\app.ts", "prompt-file", files)).toBe(true);
+    expect(shouldInclude("./src/app.ts", "prompt-file", files)).toBe(true);
     expect(shouldInclude(".\\credentials.json", "workspace", ws)).toBe(false);
   });
 
   it("rejects an unknown kind", () => {
     expect(shouldInclude("src/app.ts", "history" as IncludeKind, ws)).toBe(false);
+  });
+});
+
+describe("parseIncludeCode", () => {
+  it("maps the legacy active-file value to prompt-files", () => {
+    expect(parseIncludeCode("active-file")).toBe("prompt-files");
+  });
+
+  it("keeps the current values", () => {
+    expect(parseIncludeCode("off")).toBe("off");
+    expect(parseIncludeCode("prompt-files")).toBe("prompt-files");
+    expect(parseIncludeCode("workspace")).toBe("workspace");
+  });
+
+  it("defaults an unknown value to off", () => {
+    expect(parseIncludeCode("unknown")).toBe("off");
+    expect(parseIncludeCode(undefined)).toBe("off");
   });
 });
 
@@ -305,19 +309,19 @@ describe("consentedIncludeCode", () => {
 
   it("returns the setting for each value when consent is accepted", () => {
     expect(consentedIncludeCode("off", accepted)).toBe("off");
-    expect(consentedIncludeCode("active-file", accepted)).toBe("active-file");
+    expect(consentedIncludeCode("prompt-files", accepted)).toBe("prompt-files");
     expect(consentedIncludeCode("workspace", accepted)).toBe("workspace");
   });
 
   it("returns off for declined consent", () => {
     expect(consentedIncludeCode("off", declined)).toBe("off");
-    expect(consentedIncludeCode("active-file", declined)).toBe("off");
+    expect(consentedIncludeCode("prompt-files", declined)).toBe("off");
     expect(consentedIncludeCode("workspace", declined)).toBe("off");
   });
 
   it("returns off when no consent record exists", () => {
     expect(consentedIncludeCode("off", null)).toBe("off");
-    expect(consentedIncludeCode("active-file", null)).toBe("off");
+    expect(consentedIncludeCode("prompt-files", null)).toBe("off");
     expect(consentedIncludeCode("workspace", null)).toBe("off");
   });
 });

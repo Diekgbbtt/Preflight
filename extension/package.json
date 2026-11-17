@@ -61,12 +61,12 @@
         "promptPreflight.studyLog.participantId": { "type": "string", "default": "", "description": "Participant ID written to the study log." },
         "promptPreflight.context.includeCode": {
           "type": "string",
-          "enum": ["off", "active-file", "workspace"],
-          "default": "active-file",
+          "enum": ["off", "prompt-files", "workspace"],
+          "default": "prompt-files",
           "description": "Which code may be sent to the model provider after secret redaction. Your draft and Q&A answers are always sent.",
           "enumDescriptions": [
             "No workspace code, diagnostics or session code is sent.",
-            "Only the active file or an explicit selection is sent.",
+            "Only files referenced with @ in the draft are sent.",
             "Every non-excluded workspace file may be sent."
           ]
         }

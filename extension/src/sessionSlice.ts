@@ -758,7 +758,8 @@ export async function discoverCandidates(folderUri: string, homeDir: string): Pr
 /** Policy inputs for one slice read: code inclusion plus injected redaction. */
 export interface SliceOptions {
   includeCode: IncludeCode;
-  activeFileUri?: string;
+  /** Workspace-relative POSIX paths explicitly referenced with @ in the draft. */
+  promptFiles?: string[];
   redact(text: string): { text: string; count: number };
 }
 
@@ -773,18 +774,6 @@ function relativeToWorkspace(raw: string, cwdPath: string | undefined): string |
   const posix = rel.split(path.sep).join("/").replace(/\\/g, "/");
   if (!posix || posix === "." || posix.startsWith("/") || /^[A-Za-z]:\//.test(posix) || posix === ".." || posix.startsWith("../")) return null;
   return posix;
-}
-
-/** The workspace-relative path of the active file URI, or undefined when unknown. */
-function activeRelativePath(activeFileUri: string | undefined, cwdPath: string | undefined): string | undefined {
-  if (!activeFileUri || !activeFileUri.startsWith("file:") || !cwdPath) return undefined;
-  try {
-    const rel = path.relative(cwdPath, fileURLToPath(activeFileUri));
-    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return undefined;
-    return rel.split(path.sep).join("/");
-  } catch {
-    return undefined;
-  }
 }
 
 /** Builds an empty slice with the given provenance facts. */
@@ -895,7 +884,6 @@ export async function readSlice(
   }
 
   const cwdPath = sessionCwdPath(parsed.folderUri);
-  const activeRel = activeRelativePath(options.activeFileUri, cwdPath);
 
   // Redact tool-call summaries first: they feed the budget, retention and
   // the formatted output, so no raw summary may survive anywhere downstream.
@@ -920,10 +908,7 @@ export async function readSlice(
       const rel = relativeToWorkspace(turn.codePath, cwdPath);
       const keep =
         rel !== null &&
-        options.includeCode !== "off" &&
-        (options.includeCode === "active-file"
-          ? activeRel !== undefined && shouldInclude(rel, "active-file", { includeCode: "active-file", activePath: activeRel })
-          : shouldInclude(rel, "workspace", { includeCode: "workspace" }));
+        shouldInclude(rel, "workspace", { includeCode: options.includeCode, promptFiles: options.promptFiles });
       if (keep && rel !== null) {
         clean.code = turn.code.map((item) => {
           const applied = options.redact(item);
@@ -1135,7 +1120,8 @@ export interface SessionSliceSourceDeps {
   /** #39's model capabilities; the cap input is capabilities.maxContextTokens. */
   capabilities?: ModelCapabilities;
   includeCode: IncludeCode;
-  activeFileUri?: string;
+  /** Workspace-relative POSIX paths explicitly referenced with @ in the draft. */
+  promptFiles?: string[];
   redact(text: string): { text: string; count: number };
 }
 
@@ -1180,7 +1166,7 @@ export function createSessionSliceSource(deps: SessionSliceSourceDeps): ContextS
 
       const slice = await readSlice(location.candidate.filePath, location.candidate.provider, caps, deps.clock, {
         includeCode: deps.includeCode,
-        activeFileUri: deps.activeFileUri,
+        promptFiles: deps.promptFiles,
         redact: deps.redact,
       });
       const details: Record<string, string | number | boolean> = {

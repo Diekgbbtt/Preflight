@@ -8,9 +8,7 @@ export type OmitReason = "budget" | "empty" | "excluded" | "unsupported" | "erro
 
 /** The kind of text a context fragment holds. */
 export type ContextKind =
-  | "selection"
-  | "active-file"
-  | "open-editor"
+  | "prompt-file"
   | "git-diff"
   | "test-command"
   | "diagnostic"
@@ -26,9 +24,7 @@ export type ContextSourceId =
   | "draft"
   | "qa"
   | "session-slice"
-  | "selection"
-  | "active-editor"
-  | "open-editors"
+  | "prompt-files"
   | "git-diff"
   | "diagnostics"
   | "symbols"
@@ -42,9 +38,7 @@ export const SOURCE_PRIORITIES: Record<ContextSourceId, number> = {
   draft: 100,
   qa: 90,
   "session-slice": 85,
-  selection: 80,
-  "active-editor": 70,
-  "open-editors": 60,
+  "prompt-files": 80,
   "git-diff": 50,
   diagnostics: 45,
   symbols: 40,

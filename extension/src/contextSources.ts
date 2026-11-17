@@ -1,12 +1,11 @@
 // Basic VS Code context sources (ticket #36). Collectors stay thin: gather
 // text, apply #41's privacy predicate, and describe the result. Token caps,
 // budget and manifest bookkeeping live in the core assembler.
-import * as path from "node:path";
 import * as vscode from "vscode";
 import {
   SOURCE_PRIORITIES,
   estimateTokens,
-  findPathRefs,
+  findPromptFileRefs,
   type ContextFragment,
   type ContextKind,
   type ContextSource,
@@ -16,6 +15,11 @@ import {
 } from "@prompt-preflight/core";
 import { shouldInclude, type IncludePolicy } from "./privacy";
 import { git, type ExecResult } from "./exec";
+import {
+  buildPromptFilesResult,
+  resolvePromptFileRefs,
+  type PromptFileContent,
+} from "./promptFiles";
 
 /** Injectable VS Code surface so the collectors stay thin and testable. */
 export interface ContextSourceDeps {
@@ -59,104 +63,69 @@ function fragment(
   };
 }
 
-/**
- * The workspace-relative POSIX path of a document, or "" for untitled and
- * non-file URIs. A path outside the given folder starts with "..", which the
- * privacy predicate rejects.
- */
-export function activePathFor(uri: vscode.Uri, folder?: vscode.WorkspaceFolder): string {
-  if (uri.scheme !== "file") return "";
-  if (!folder) {
-    return vscode.workspace.asRelativePath(uri, false).replace(/\\/g, "/").replace(/^\.\//, "");
-  }
-  return path.relative(folder.uri.fsPath, uri.fsPath).replace(/\\/g, "/");
+/** Inputs of the prompt-files source. */
+export interface PromptFilesSourceDeps {
+  /** Every workspace root, in order. */
+  folders: vscode.WorkspaceFolder[];
+  /** Effective privacy policy (includeCode already consented). */
+  policy: IncludePolicy;
+  /** The draft whose @ references are resolved. */
+  draft: string;
+  /** Open-document reader; defaults to vscode.workspace.openTextDocument. */
+  readText?: (uri: vscode.Uri) => Promise<string>;
 }
 
 /**
- * Resolves the folder that owns the context: the first folder where a draft
- * path reference exists, else the active editor's folder. Never a whole-repo
- * index; the callers decide what to collect.
+ * The prompt-files source: resolves explicit @ references, reads each file,
+ * and delegates policy, provenance, and detail counts to the pure builder.
+ * It never scans the workspace and never reads an unreferenced file.
  */
-export async function resolveContextFolder(draft: string, activeUri?: vscode.Uri): Promise<vscode.WorkspaceFolder | undefined> {
-  for (const ref of findPathRefs(draft)) {
-    for (const folder of vscode.workspace.workspaceFolders ?? []) {
-      try {
-        await vscode.workspace.fs.stat(vscode.Uri.joinPath(folder.uri, ref.text));
-        return folder;
-      } catch {
-        // Not in this folder; try the next one.
+export function createPromptFilesSource(deps: PromptFilesSourceDeps): ContextSource {
+  return {
+    id: "prompt-files",
+    priority: SOURCE_PRIORITIES["prompt-files"],
+    collect: async (signal?: AbortSignal): Promise<ContextSourceResult> => {
+      signal?.throwIfAborted();
+      const refs = findPromptFileRefs(deps.draft).map((ref) => ref.text);
+      if (refs.length === 0) return { fragments: [], omittedReason: "empty" };
+
+      const roots = deps.folders.map((folder) => ({ uri: folder.uri.toString(), fsPath: folder.uri.fsPath }));
+      const resolution = await resolvePromptFileRefs(refs, roots, async (fsPath) => {
+        try {
+          await vscode.workspace.fs.stat(vscode.Uri.file(fsPath));
+          return true;
+        } catch {
+          return false;
+        }
+      });
+
+      const readText =
+        deps.readText ?? ((uri: vscode.Uri) => vscode.workspace.openTextDocument(uri).then((document) => document.getText()));
+      const contents: PromptFileContent[] = [];
+      let unreadable = 0;
+      for (const file of resolution.files) {
+        signal?.throwIfAborted();
+        try {
+          contents.push({
+            path: file.path,
+            folderUri: file.folderUri,
+            content: await readText(vscode.Uri.file(file.fsPath)),
+          });
+        } catch {
+          unreadable++;
+        }
       }
-    }
-  }
-  return activeUri ? vscode.workspace.getWorkspaceFolder(activeUri) : undefined;
-}
 
-/** The user's current selection. It replaces the active file when non-empty. */
-export function createSelectionSource(deps: ContextSourceDeps): ContextSource {
-  return {
-    id: "selection",
-    priority: SOURCE_PRIORITIES.selection,
-    collect: async (signal?: AbortSignal): Promise<ContextSourceResult> => {
-      signal?.throwIfAborted();
-      const editor = vscode.window.activeTextEditor;
-      if (!editor || editor.selection.isEmpty) return { fragments: [], omittedReason: "empty" };
-      const path = activePathFor(editor.document.uri, deps.folder);
-      if (!shouldInclude(path, "selection", deps.policy)) return { fragments: [], omittedReason: "excluded" };
-      const content = editor.document.getText(editor.selection);
-      if (content.trim() === "") return { fragments: [], omittedReason: "empty" };
-      return {
-        fragments: [
-          fragment(deps, "selection", "selection", content, {
-            path,
-            range: {
-              start: editor.document.offsetAt(editor.selection.start),
-              end: editor.document.offsetAt(editor.selection.end),
-            },
-          }),
-        ],
-      };
-    },
-  };
-}
-
-/** The whole active document, unless a selection replaces it. */
-export function createActiveEditorSource(deps: ContextSourceDeps): ContextSource {
-  return {
-    id: "active-editor",
-    priority: SOURCE_PRIORITIES["active-editor"],
-    collect: async (signal?: AbortSignal): Promise<ContextSourceResult> => {
-      signal?.throwIfAborted();
-      const editor = vscode.window.activeTextEditor;
-      if (!editor) return { fragments: [], omittedReason: "empty" };
-      if (!editor.selection.isEmpty) return { fragments: [], omittedReason: "empty" };
-      const path = activePathFor(editor.document.uri, deps.folder);
-      if (!shouldInclude(path, "active-file", deps.policy)) return { fragments: [], omittedReason: "excluded" };
-      const content = editor.document.getText();
-      if (content === "") return { fragments: [], omittedReason: "empty" };
-      return { fragments: [fragment(deps, "active-editor", "active-file", content, { path })] };
-    },
-  };
-}
-
-/** Other eligible open documents; never the active file or the selection. */
-export function createOpenEditorsSource(deps: ContextSourceDeps): ContextSource {
-  return {
-    id: "open-editors",
-    priority: SOURCE_PRIORITIES["open-editors"],
-    collect: async (signal?: AbortSignal): Promise<ContextSourceResult> => {
-      signal?.throwIfAborted();
-      const active = vscode.window.activeTextEditor?.document;
-      const fragments: ContextFragment[] = [];
-      for (const document of vscode.workspace.textDocuments) {
-        if (document === active) continue;
-        const path = activePathFor(document.uri, deps.folder);
-        if (path === "" || !shouldInclude(path, "open-editor", deps.policy)) continue;
-        const content = document.getText();
-        if (content.trim() === "") continue;
-        fragments.push(fragment(deps, "open-editors", "open-editor", content, { path }));
-      }
-      if (fragments.length === 0) return { fragments: [], omittedReason: "empty" };
-      return { fragments, details: { files: fragments.length } };
+      const policy: IncludePolicy = { ...deps.policy, promptFiles: resolution.files.map((file) => file.path) };
+      return buildPromptFilesResult({
+        files: contents,
+        policy,
+        missing: resolution.missing.length,
+        outside: resolution.outside.length,
+        ambiguous: resolution.ambiguous.length,
+        duplicate: resolution.duplicate,
+        unreadable,
+      });
     },
   };
 }

@@ -539,7 +539,7 @@ function createFallbackSource(
 function activeGuard(deps: LanguageSourceDeps, withPosition: boolean): Promise<"empty" | "excluded" | null> {
   if (deps.activeUri === undefined || deps.activePath === undefined) return Promise.resolve("empty");
   if (withPosition && deps.activePosition === undefined) return Promise.resolve("empty");
-  if (!shouldInclude(deps.activePath, "active-file", deps.policy)) return Promise.resolve("excluded");
+  if (!shouldInclude(deps.activePath, "workspace", deps.policy)) return Promise.resolve("excluded");
   return Promise.resolve(null);
 }
 

@@ -69,21 +69,21 @@ export function redact(text: string): RedactionResult {
 }
 
 /** How much code context may be included in a model call. */
-export type IncludeCode = "off" | "active-file" | "workspace";
+export type IncludeCode = "off" | "prompt-files" | "workspace";
 
 /** The kind of text a source would include. Only code-bearing kinds reach shouldInclude. */
-export type IncludeKind = "selection" | "active-file" | "open-editor" | "workspace" | "diagnostic" | "session";
+export type IncludeKind = "prompt-file" | "workspace" | "diagnostic" | "session";
 
-/** The current privacy policy: the setting plus the active document path. */
+/** The current privacy policy: the setting plus the explicitly referenced files. */
 export interface IncludePolicy {
   includeCode: IncludeCode;
-  /** Workspace-relative POSIX path of the active document, when there is one. */
-  activePath?: string;
+  /** Workspace-relative POSIX paths explicitly referenced with @ in the draft. */
+  promptFiles?: string[];
 }
 
 // Excluded names, matched case-insensitively. Secret-bearing file names by
 // basename, plus dependency, git and build directories by segment, matching
-// the EXCLUDE_GLOB disclosure for selections too.
+// the EXCLUDE_GLOB disclosure for referenced files too.
 const EXCLUDED_DIR_SEGMENTS = new Set([
   "node_modules",
   ".git",
@@ -117,38 +117,36 @@ export function isOutsideWorkspace(path: string): boolean {
   return path.startsWith("/") || /^[A-Za-z]:\//.test(path) || path.split("/").includes("..");
 }
 
+/** Normalizes a workspace-relative path for policy comparison. */
+function normalizePolicyPath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+/** Maps a stored setting to the current vocabulary. The legacy `active-file` value means prompt-files. */
+export function parseIncludeCode(value: unknown): IncludeCode {
+  if (value === "off" || value === "prompt-files" || value === "workspace") return value;
+  if (value === "active-file") return "prompt-files";
+  return "off";
+}
+
 /**
  * Decides whether a code source may enter the model call. Pure and testable.
  * `path` is a workspace-relative POSIX path, or "" for an untitled or virtual document.
- * Under `off`, every kind is excluded. Under `active-file`, only the active path.
- * Under `workspace`, every non-excluded path. An explicit selection is user text:
- * it is included unless the exclusion list or workspace boundary rejects it.
+ * Under `off`, every kind is excluded. Under `prompt-files`, only paths the
+ * draft referenced with @ are included. Under `workspace`, every non-excluded
+ * path is included. The exclusion list and workspace boundary always win.
  */
 export function shouldInclude(path: string, kind: IncludeKind, policy: IncludePolicy): boolean {
+  if (kind !== "prompt-file" && kind !== "workspace" && kind !== "diagnostic" && kind !== "session") return false;
   if (policy.includeCode === "off") return false;
 
-  const normalized = path.replace(/\\/g, "/").replace(/^\.\//, "");
-
-  if (kind === "selection") {
-    return normalized !== "" ? !isOutsideWorkspace(normalized) && !isExcludedPath(normalized) : true;
-  }
-
-  if (
-    kind !== "active-file" &&
-    kind !== "open-editor" &&
-    kind !== "workspace" &&
-    kind !== "diagnostic" &&
-    kind !== "session"
-  ) {
-    return false;
-  }
-
+  const normalized = normalizePolicyPath(path);
   if (normalized === "" || isOutsideWorkspace(normalized) || isExcludedPath(normalized)) return false;
 
-  if (policy.includeCode === "active-file") {
-    return normalized === policy.activePath?.replace(/\\/g, "/").replace(/^\.\//, "");
-  }
-  return true;
+  if (policy.includeCode === "workspace") return true;
+
+  const referenced = new Set((policy.promptFiles ?? []).map(normalizePolicyPath));
+  return referenced.has(normalized);
 }
 
 /** Anthropic's page on how Claude Code handles your data. */

@@ -8,3 +8,4 @@ export { buildClaudeArgs, claudeCliRunner, createClaudeProvider, parseCliOutput 
 export { SECRETS } from "./patterns";
 export * from "./repository";
 export * from "./context";
+export * from "./promptFiles";
