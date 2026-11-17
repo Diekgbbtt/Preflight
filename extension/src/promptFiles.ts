@@ -113,6 +113,8 @@ export interface PromptFilesResultInput {
   missing: number;
   outside: number;
   ambiguous: number;
+  /** Resolved files rejected by the policy before any read. */
+  excluded: number;
   duplicate: number;
   unreadable: number;
 }
@@ -124,7 +126,7 @@ export interface PromptFilesResultInput {
  */
 export function buildPromptFilesResult(input: PromptFilesResultInput): ContextSourceResult {
   const fragments: ContextFragment[] = [];
-  let dropped = input.outside + input.ambiguous;
+  let dropped = input.outside + input.ambiguous + input.excluded;
 
   for (const file of input.files) {
     if (!shouldInclude(file.path, "prompt-file", input.policy)) {
@@ -152,6 +154,7 @@ export function buildPromptFilesResult(input: PromptFilesResultInput): ContextSo
     dropped,
     missing: input.missing,
     ambiguous: input.ambiguous,
+    excluded: input.excluded,
     duplicate: input.duplicate,
     unreadable: input.unreadable,
   };

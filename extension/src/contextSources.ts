@@ -99,11 +99,15 @@ export function createPromptFilesSource(deps: PromptFilesSourceDeps): ContextSou
         }
       });
 
+      const resolvedPolicy: IncludePolicy = { ...deps.policy, promptFiles: resolution.files.map((file) => file.path) };
+      const allowed = resolution.files.filter((file) => shouldInclude(file.path, "prompt-file", resolvedPolicy));
+      const excluded = resolution.files.length - allowed.length;
+
       const readText =
         deps.readText ?? ((uri: vscode.Uri) => vscode.workspace.openTextDocument(uri).then((document) => document.getText()));
       const contents: PromptFileContent[] = [];
       let unreadable = 0;
-      for (const file of resolution.files) {
+      for (const file of allowed) {
         signal?.throwIfAborted();
         try {
           contents.push({
@@ -116,13 +120,13 @@ export function createPromptFilesSource(deps: PromptFilesSourceDeps): ContextSou
         }
       }
 
-      const policy: IncludePolicy = { ...deps.policy, promptFiles: resolution.files.map((file) => file.path) };
       return buildPromptFilesResult({
         files: contents,
-        policy,
+        policy: resolvedPolicy,
         missing: resolution.missing.length,
         outside: resolution.outside.length,
         ambiguous: resolution.ambiguous.length,
+        excluded,
         duplicate: resolution.duplicate,
         unreadable,
       });

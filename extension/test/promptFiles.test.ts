@@ -82,6 +82,7 @@ describe("buildPromptFilesResult", () => {
     missing: 0,
     outside: 0,
     ambiguous: 0,
+    excluded: 0,
     duplicate: 0,
     unreadable: 0,
   };
@@ -96,7 +97,7 @@ describe("buildPromptFilesResult", () => {
       tokens: 6,
       provenance: { kind: "prompt-file", path: "src/app.ts", folderUri: "file:///repo", truncated: false, chars: 21 },
     });
-    expect(result.details).toEqual({ files: 1, dropped: 0, missing: 0, ambiguous: 0, duplicate: 0, unreadable: 0 });
+    expect(result.details).toEqual({ files: 1, dropped: 0, missing: 0, ambiguous: 0, excluded: 0, duplicate: 0, unreadable: 0 });
   });
 
   it("excludes an unreferenced file, an excluded path, and everything under off", () => {
@@ -130,7 +131,7 @@ describe("buildPromptFilesResult", () => {
       unreadable: 1,
     });
     expect(result.fragments).toHaveLength(1);
-    expect(result.details).toEqual({ files: 1, dropped: 0, missing: 2, ambiguous: 0, duplicate: 0, unreadable: 1 });
+    expect(result.details).toEqual({ files: 1, dropped: 0, missing: 2, ambiguous: 0, excluded: 0, duplicate: 0, unreadable: 1 });
   });
 
   it("omits empty when only missing references exist", () => {
