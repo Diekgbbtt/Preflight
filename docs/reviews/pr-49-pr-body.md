@@ -45,6 +45,15 @@ The owner requirements are also closed:
 - Real Codex `event_msg.item_completed` fixtures replace the assumed `exec_command_begin/end` format.
 - Windows path rules have `path.win32` tests and a manual checklist.
 
+## Stacked fix
+
+PR #50 fixes a Codex session parser gap.
+Current Codex sessions emit `apply_patch` as `custom_tool_call`, not `function_call`.
+The parser now records those calls, extracts every patch path, and dedupes the matching `FileChange`.
+The fix adds a real-shape fixture, C35, and e2e E11.
+PR #50 is based on this branch and remains draft for review.
+Do not merge this PR without #50 or an equivalent fix.
+
 ## Verification
 
 - `npm run typecheck`: passed three times.
