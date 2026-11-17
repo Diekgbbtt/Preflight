@@ -28,6 +28,195 @@ Lane base for ticket #36: `0c62960`.
 Lane base for ticket #37: `99b7392`.
 Lane base for ticket #38: `d34bd22`.
 
+## PR #49 review deltas
+
+| Area | Old contract | New contract |
+|---|---|---|
+| Thinking effort | `"low" \| "medium" \| "high"` | Provider-native `string`, passed to `--effort` unchanged |
+| Issue ceiling | 3 | 20 |
+| Question ceiling | 3 | 20 |
+| Deep score | `DeepReview.score` | Removed; score is quick-only and asynchronous |
+| Deep improved prompt | `DeepReview.improvedPrompt` | Removed; separate `ImprovedPrompt` action |
+| Improved prompt trigger | Always present in the deep reply | Enabled only after a deep review with at least one question |
+| Active editor, selection, open editors | First-class context sources | Removed; explicit `@` file references only |
+| Context source | `selection` 80, `active-editor` 70, `open-editors` 60 | `prompt-files` 80 |
+| Include code | `off \| active-file \| workspace` | `off \| prompt-files \| workspace`; legacy `active-file` reads as `prompt-files` |
+| Language access | Bespoke `LanguageApi` over `vscode.commands` | Agent tools over LSP types with a text-search fallback |
+| Codex events | Assumed `exec_command_begin` / `exec_command_end` | Real `event_msg.item_completed` `CommandExecution` and `FileChange` |
+| Windows | Recorded gap | Pure `path.win32` rules plus a manual Windows checklist |
+
+## Panel integration seams
+
+This section is the concrete wiring contract for #43, #46, #47, and #15.
+It names the calls the panel makes, the exact inputs and outputs, and the persistence.
+The panel must not read the raw transcript, duplicate the prompt hash, or build a second source id.
+
+### Shared composition
+
+```ts
+const config = readModelConfig();
+const profile = resolveProfile(config, mode);
+const provider = createProvider(profile, config);
+const run = claudeCliRunner(config.claudePath, workspaceRoot, profile.thinkingEffort);
+const consent = parseConsent(context.globalState.get(consentKey(CONSENT_VERSION)));
+const includeCode = consentedIncludeCode(configIncludeCode, consent);
+```
+
+- `profile.thinkingEffort` is a provider-native string.
+- `provider.capabilities` supplies the context budget and the session token cap.
+- `run` keeps the workspace cwd; `provider.complete` is the long-term provider path.
+
+### Draft input to context bundle
+
+```ts
+const refs = findPromptFileRefs(draft).map((ref) => ref.text);
+const policy: IncludePolicy = { includeCode, promptFiles: resolvedPaths };
+const sources: ContextSource[] = [
+  createPromptFilesSource({ folders, policy, draft, readText }),
+  createGitDiffSource({ folder, policy }),
+  createTestCommandSource({ folder, policy }),
+  ...createLanguageSources({ api, policy, folderUri, cwd, query, probe }),
+  createSessionSliceSource({
+    folderUri,
+    sends,
+    promptHash,
+    clock,
+    capabilities: provider.capabilities,
+    includeCode: policy.includeCode,
+    promptFiles: policy.promptFiles,
+    redact,
+  }),
+];
+const bundle = await assemble({ draft, qa }, sources, {
+  budget: provider.capabilities.maxContextTokens,
+  estimateTokens,
+  redact,
+  signal,
+});
+```
+
+- `folders` is `vscode.workspace.workspaceFolders ?? []`.
+- `resolvedPaths` comes from `resolvePromptFileRefs`; the same list feeds the policy for diagnostics and session code.
+- The panel passes `draft` to the prompt-files source; the source parses the same `@` references.
+- `bundle.manifest` is the only source of included, truncated, omitted, and redaction facts.
+- The panel never reads `vscode.window.activeTextEditor` to build context.
+
+### Quick review
+
+```ts
+const request = buildReviewRequest(draft, "quick", profile.model, { analysis, projectNotes });
+const res = await run(request, signal);
+const quick = parseQuickReview(res.text, draft, {
+  provider: profile.provider,
+  model: profile.model,
+  thinkingEffort: profile.thinkingEffort,
+  scoredAt: new Date().toISOString(),
+});
+```
+
+- `quick.score` is the only score source.
+- `quick.score` has no `source` field.
+- `quick.issues` and `quick.questions` are capped at 20.
+
+### Deep review
+
+```ts
+const request = buildDeepReviewRequest(bundle, profile.model); // #46 owns the prose
+const res = await run(request, signal);
+const deep = parseDeepReview(res.text, draft, {
+  usage: { inputTokens: res.inputTokens, outputTokens: res.outputTokens, costUsd: res.costUsd },
+  latency,
+});
+```
+
+- `#46` builds the deep request from `RUBRIC_TEXT` and `DEEP_REPLY_SCHEMA`.
+- The deep request never asks for dimensions, confidence, or an improved prompt.
+- `deep` has `issues`, `questions`, `assumptions`, `contextGaps`, `usage`, `latency`, and `promptVersion`.
+- `deep` has no `score` and no `improvedPrompt`.
+
+### Separate improved prompt
+
+```ts
+if (canImprove(deep)) {
+  const improved = await improvePrompt(draft, deep, qa, run, profile.model, { now: Date.now });
+  if (improved) panel.showImprovedPrompt(improved.text);
+}
+```
+
+- The action is disabled while `canImprove(deep)` is false.
+- The request includes the original prompt, issues, questions, answers, assumptions, and context gaps.
+- Unanswered details stay as `[placeholders]`.
+- `improved` has `text`, `usage`, `latency`, and `promptVersion`.
+- The improved prompt is never stored inside the deep review event.
+
+### Session slice
+
+```ts
+const source = createSessionSliceSource({
+  folderUri,
+  sends,
+  promptHash,
+  clock,
+  capabilities: provider.capabilities,
+  includeCode: policy.includeCode,
+  promptFiles: policy.promptFiles,
+  redact,
+});
+```
+
+- `locateSession` returns `found`, `ambiguous`, or `none`.
+- The panel shows the picker for `ambiguous`; the source never guesses.
+- `readSlice` keeps code only for `prompt-files` references under `prompt-files`.
+- The raw transcript never leaves the reader.
+
+### Persistence
+
+```ts
+await drafts.append({ id: draftId, ts: nowIso(), text: draft, folderUri });
+await questions.append({ id: questionId, ts: nowIso(), draftId, sessionId, ...question });
+await reviews.append({ id: reviewId, ts: nowIso(), draftId, sessionId, ...deep, sessionSlice });
+await sends.append({
+  id: sendId,
+  ts: nowIso(),
+  draftId,
+  folderUri,
+  text: draft,
+  promptHash: hashPrompt(draft),
+  sessionId,
+  target,
+});
+```
+
+- `sends.jsonl` stores the only exact sent prompt copy.
+- `reviews.jsonl` stores the deep review plus the derived session slice.
+- There is no `slices.jsonl`.
+- `questions.jsonl` payload fields are owned by #15.
+- `drafts.jsonl` payload has at least `text` and `folderUri`.
+- `byDraft` matches the envelope `id` for drafts and the payload `draftId` for the other files.
+- `bySession` matches the payload `sessionId`.
+
+### Code tools
+
+```ts
+const tools = createCodeTools({ protocol: vscodeCodeProtocol, textSearch: ripgrepTextSearch, policy });
+const symbols = await tools.documentSymbols({ path: "src/greet.ts" });
+const refs = await tools.references({ path: "src/greet.ts", position: { line: 4, character: 10 } });
+const matches = await tools.searchText({ query: "greet", maxResults: 50 });
+```
+
+- Every tool is read-only.
+- LSP-backed tools try the language provider first.
+- A tool with a query falls back to text search when the provider returns no data.
+- Diagnostics never fall back to text search.
+- The bundled `rg` binary is resolved from the extension path.
+
+### Legacy path
+
+- `Review`, `review()`, `parseReview`, and `LEGACY_DEEP_REPLY_SCHEMA` are the prototype path.
+- They stay green until #46 replaces the panel.
+- New consumers must not import them.
+- #46 removes them when the panel uses `QuickReview`, `DeepReview`, and `ImprovedPrompt`.
+
 <a id="contract-40"></a>
 
 ## Contract: #40 Review schema and rubric versioning - v1
