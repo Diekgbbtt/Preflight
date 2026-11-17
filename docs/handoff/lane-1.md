@@ -16,7 +16,7 @@ Every entry has a contract version and a change log.
 | #36 | merged | ticket/36-context-assembler | 495b52853631580933232fea1a3941c94adb5510 | `npm run typecheck && npm test && npm run build` -> 322 passed | PASS |
 | #37 | merged | ticket/37-language-context | 96ce4605b489049d8c6919c8bcbd429ff2cc66f3 | `npm run typecheck && npm test && npm run build` -> 442 passed | PASS |
 | #38 | merged | ticket/38-session-slice | e366d25df10a700bae886d3af3d342afe959455d | `npm run typecheck && npm test && npm run build` -> 518 passed | PASS |
-| Review fixes | in progress | lane-1/review-fixes | branch head | `npm run typecheck && npm test && npm run build` -> 522 passed; `npm run e2e` blocked by VS Code `SIGABRT` | pending |
+| Review fixes | in progress | lane-1/review-fixes | branch head | `npm run typecheck && npm test && npm run build` -> 524 passed; `npm run e2e` blocked by VS Code `SIGABRT` | pending |
 
 The review fixes are not merged into `lane-1/control-plane` yet.
 The e2e gate is not observed green.

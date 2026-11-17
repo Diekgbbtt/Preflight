@@ -418,10 +418,10 @@ The runtime does not import the ESM package.
 | Phase | State | Evidence |
 |---|---|---|
 | 0 Review record and plan | done | `docs/reviews/pr-49-feedback.md`, this file |
-| 1 Core review schema | done | 20 test files, 520 tests; typecheck and build green |
+| 1 Core review schema | done | 20 test files, 524 tests; typecheck and build green |
 | 2 Explicit `@` file context | done | prompt-files source, privacy policy, session code policy |
 | 3 Codex real events and Windows | done | real `item_completed` fixtures; `path.win32` tests |
-| 4 LSP agent middleware | done | `codeTools.ts`, `vscodeCodeTools.ts`, `ripgrep.ts`; 24 tool tests, 11 adapter tests, 16 ripgrep tests |
+| 4 LSP agent middleware | done | `codeTools.ts`, `vscodeCodeTools.ts`, `ripgrep.ts`; 26 tool tests, 11 adapter tests, 10 ripgrep tests |
 | 5 Handoff seams | done | contract deltas and `Panel integration seams` in `docs/handoff/lane-1.md` |
 | 6 Assertions catalogue | approved | `docs/assertions/lane-1.md` |
 | 7 E2E harness | harness ready; launch blocked | `e2e/` builds `e2e/dist/suite.cjs`; local VS Code is killed by `SIGABRT` |
