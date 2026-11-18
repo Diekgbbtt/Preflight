@@ -72,6 +72,38 @@ Drafts, Q&A, reviews, session slices inside review records, and send records are
 
 The study log (`promptPreflight.studyLog.enabled`) is opt-in, written separately, and is not deleted by `clearHistory`. Nothing else is collected: there is no telemetry by default.
 
+## Observability
+
+The review records are in `reviews.jsonl` under the extension's global storage:
+
+```text
+<context.globalStorageUri>/reviews.jsonl
+```
+
+For VS Code stable on macOS, that resolves to:
+
+```text
+~/Library/Application Support/Code/User/globalStorage/prompt-preflight.prompt-preflight/reviews.jsonl
+```
+
+The same directory holds:
+
+- `sends.jsonl` - exact sent text and prompt hashes
+- `drafts.jsonl`
+- `questions.jsonl`
+
+Quick and deep review records share `reviews.jsonl`.
+The derived `SessionSlice` is stored inside the review record. There is no `slices.jsonl`.
+
+### Machine-agnostic setting
+
+The machine-agnostic seam is `context.globalStorageUri`.
+It is a VS Code URI, not an absolute path.
+
+The JSONL filenames are hardcoded constants in the repository adapter.
+The storage root is not a Prompt Preflight setting.
+VS Code controls it, and it can be relocated with `--user-data-dir` or a VS Code profile.
+
 ## Layout
 
 ```
