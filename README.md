@@ -4,6 +4,8 @@ Preflight (working name) gives feedback on coding-agent prompts before they're s
 
 Vague prompts make agents guess, loop and spend tokens. Preflight checks the prompt while the user writes it, asks for missing goals, context and success criteria, and only then hands it to Claude Code. Users write a prompt the agent can solve in one run, and learn what a complete prompt looks like.
 
+Write the prompt in the **Prompt Preflight** panel (activity bar, or `Cmd/Ctrl+Alt+P`). The panel runs the rule checks as you type, starts the quick review when you pause, and offers deep review, the improved prompt, and send.
+
 ## Cheap checks first
 
 | Tier | When | What | Cost |
@@ -16,6 +18,8 @@ Vague prompts make agents guess, loop and spend tokens. Preflight checks the pro
 
 Tiers 2 to 4 run through `claude -p` with the user's own Claude login: no API key, no tools, no project settings. The provider layer is ready for a Codex adapter.
 
+Settings live under `promptPreflight.*`: provider, model, quick and deep models, thinking effort, pause delay, send target, code inclusion, and the study log.
+
 ## Score
 
 Two scores have different jobs.
@@ -27,6 +31,46 @@ Two scores have different jobs.
 Quick and deep reviews keep at most 20 issues and 20 questions. A question has at most 3 options.
 
 Rule ideas borrowed (MIT) from [akg268/prompt-preflight](https://github.com/akg268/prompt-preflight) (gate on ambiguity, question lists, `[preflight:skip]`, calibration corpus) and [preflight-dev/preflight](https://github.com/preflight-dev/preflight) (four-part score, vague verbs and pronouns, candidate files in questions).
+
+## Privacy and data flow
+
+### What is sent to the model provider
+
+| Content | When it is sent |
+| --- | --- |
+| Your draft and Q&A answers | Always, when you run a model check. `includeCode` gates code only. |
+| Code excerpts, diagnostics, session code | Only when the effective `promptPreflight.context.includeCode` allows it, after secret redaction. The effective value stays `off` until you accept the consent notice. |
+
+`promptPreflight.context.includeCode`:
+
+| Value | Behavior |
+| --- | --- |
+| `off` | No workspace code, diagnostics, or session code is sent. Your draft and Q&A are still sent. |
+| `prompt-files` (default) | Only files explicitly referenced with `@` in the draft are sent. |
+| `workspace` | Every non-excluded workspace file may be sent. |
+
+Files named `.env`, `.env.*`, `credentials.json`, `id_rsa`, `id_ed25519`, `*.pem`, `*.key`, and anything under `node_modules`, `.git`, or the build directories (`dist`, `out`, `build`, `.venv`, `venv`, `__pycache__`, `.next`, `target`) are never sent, even when referenced with `@`. Absolute paths and paths outside the workspace are excluded too. Untitled buffers and virtual documents are excluded.
+
+Secrets are redacted with the same patterns the rule checks use (Anthropic, AWS, GitHub, Slack tokens, private-key headers, and key/password assignments). Each match is replaced with `[redacted]`. This catches single-line tokens; a secret split across lines is not matched, and the private-key pattern covers the `BEGIN ... PRIVATE KEY` header only, not the key body. Both gaps are tracked for ticket #23.
+
+### Consent
+
+On first activation the extension shows a modal notice that links each provider's data-handling page:
+
+- Claude Code: https://code.claude.com/docs/en/data-usage
+- Codex: https://openai.com/policies/privacy-policy/
+
+The Codex provider adapter is not implemented yet (ticket #10); the link is here for when you can select it as provider.
+
+Your decision is stored once in VS Code global state under `promptPreflight.consent.v1` (consent version 1). Declining turns `includeCode` off and does not block the rest of the extension. Dismissing the notice without choosing shows it again on the next start. A later consent version asks again.
+
+Code inclusion stays off until the notice is accepted. The effective value is `off` while no accepted record exists, even if the setting still reads `prompt-files`.
+
+### What stays on this machine
+
+Drafts, Q&A, reviews, session slices inside review records, and send records are stored unencrypted under `context.globalStorageUri`. They never leave the machine except inside a model request. `promptPreflight.clearHistory` deletes them.
+
+The study log (`promptPreflight.studyLog.enabled`) is opt-in, written separately, and is not deleted by `clearHistory`. Nothing else is collected: there is no telemetry by default.
 
 ## Layout
 

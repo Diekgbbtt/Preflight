@@ -76,7 +76,7 @@
   "scripts": {
     "build": "esbuild src/extension.ts --bundle --platform=node --target=node18 --format=cjs --external:vscode --outfile=dist/extension.js && node scripts/copy-rg.mjs",
     "watch": "npm run build -- --watch",
-    "package": "npm run build && vsce package --no-dependencies"
+    "package": "npm run build && vsce package --no-dependencies --readme-path ../README.md"
   },
   "devDependencies": {
     "@prompt-preflight/core": "*",
