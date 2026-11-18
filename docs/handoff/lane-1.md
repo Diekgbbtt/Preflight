@@ -522,7 +522,7 @@ const matches = await tools.searchText({ query: "greet", maxResults: 50 });
   - Codex (OpenAI privacy policy): `https://openai.com/policies/privacy-policy/`.
   - Codex is not implemented yet. #10 owns the adapter.
 - Privacy:
-  - The notice and `extension/README.md` disclose that drafts, Q&A, reviews, session slices inside review records, and send records are stored unencrypted under `context.globalStorageUri`.
+  - The notice and `README.md` disclose that drafts, Q&A, reviews, session slices inside review records, and send records are stored unencrypted under `context.globalStorageUri`.
   - Those records leave the machine only inside a model request.
   - `promptPreflight.clearHistory` deletes them. The command lands in #35.
   - The study log is opt-in, separate, and is not deleted by `clearHistory`.
