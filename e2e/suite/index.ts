@@ -42,8 +42,11 @@ test("mounts the built extension and declares its commands", async () => {
   const commands = (extension.packageJSON.contributes?.commands ?? []).map((command: { command: string }) => command.command);
   assert.deepEqual(commands.sort(), [
     "promptPreflight.checkSelection",
+    "promptPreflight.clearDebugLog",
     "promptPreflight.clearHistory",
     "promptPreflight.focus",
+    "promptPreflight.openDebugLog",
+    "promptPreflight.openDebugLogFile",
     "promptPreflight.openStudyLog",
   ]);
 });
@@ -248,6 +251,94 @@ test("E11: real Codex custom tool calls produce one apply_patch and two changed 
   assert.equal(slice.toolCalls[0].name, "apply_patch");
   assert.equal(slice.toolCalls[0].status, "ok");
   assert.equal(slice.changedFiles.join(","), "src/app.ts,src/helper.ts");
+});
+
+test("E12: debug tracing writes OTel spans and full LLM packets for a real panel review", async () => {
+  const extension = vscode.extensions.getExtension("prompt-preflight.prompt-preflight");
+  assert.ok(extension, "the extension is not mounted");
+  if (!extension.isActive) await extension.activate();
+  const api = extension.exports as { debug?: { acceptNotice(): Promise<void> } } | undefined;
+  assert.ok(api?.debug, "debug acceptNotice API missing");
+  await api.debug.acceptNotice();
+
+  const config = vscode.workspace.getConfiguration("promptPreflight");
+  const before = {
+    debug: config.get<boolean>("debug", false),
+    debugLogDir: config.get<string>("debugLogDir", ""),
+    claudePath: config.get<string>("claudePath", "claude"),
+    pauseMs: config.get<number>("pauseMs", 1500),
+    quickModel: config.get<string>("quickModel", "haiku"),
+    provider: config.get<string>("provider", "claude"),
+    thinkingEffort: config.get<string>("thinkingEffort", "medium"),
+    quickReviewOnPause: config.get<boolean>("quickReviewOnPause", true),
+  };
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-e2e-debug-"));
+  const cli = await createFakeCli();
+  try {
+    await config.update("provider", "claude", vscode.ConfigurationTarget.Global);
+    await config.update("quickModel", "haiku", vscode.ConfigurationTarget.Global);
+    await config.update("thinkingEffort", "medium", vscode.ConfigurationTarget.Global);
+    await config.update("quickReviewOnPause", true, vscode.ConfigurationTarget.Global);
+    await config.update("pauseMs", 500, vscode.ConfigurationTarget.Global);
+    await config.update("claudePath", cli, vscode.ConfigurationTarget.Global);
+    await config.update("debugLogDir", dir, vscode.ConfigurationTarget.Global);
+    await config.update("debug", true, vscode.ConfigurationTarget.Global);
+    await sleep(300);
+    await vscode.commands.executeCommand("promptPreflight.focus");
+    await sleep(800);
+
+    const doc = await vscode.workspace.openTextDocument(path.join(workspaceRoot(), "src/greet.ts"));
+    const editor = await vscode.window.showTextDocument(doc);
+    editor.selection = new vscode.Selection(new vscode.Position(0, 0), doc.positionAt(doc.getText().length));
+    await vscode.commands.executeCommand("promptPreflight.checkSelection");
+    await sleep(1800);
+
+    const traceFile = path.join(dir, "llm-trace.jsonl");
+    const text = await fs.readFile(traceFile, "utf8");
+    const records = text
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const logs = records.filter((record) => record.recordType === "log");
+    const request = logs.find(
+      (record) => (record.attributes as Record<string, unknown>)["event.name"] === "llm.request",
+    );
+    const response = logs.find(
+      (record) => (record.attributes as Record<string, unknown>)["event.name"] === "llm.response",
+    );
+    assert.ok(request, "llm.request log missing");
+    assert.ok(response, "llm.response log missing");
+    const requestAttributes = request.attributes as Record<string, unknown>;
+    const responseAttributes = response.attributes as Record<string, unknown>;
+    assert.equal(requestAttributes["gen_ai.request.model"], "haiku");
+    assert.equal(requestAttributes["prompt_preflight.thinking_effort"], "medium");
+    assert.equal(requestAttributes["prompt_preflight.generation_method"], "cli");
+    assert.equal(requestAttributes["prompt_preflight.timeout_ms"], 120000);
+    assert.equal(typeof requestAttributes["llm.request.user"], "string");
+    assert.ok(request.traceId, "llm.request traceId missing");
+    assert.ok(request.spanId, "llm.request spanId missing");
+    assert.equal(responseAttributes["gen_ai.usage.input_tokens"], 10);
+    assert.equal(responseAttributes["gen_ai.usage.output_tokens"], 5);
+    assert.equal(typeof responseAttributes["llm.response.text"], "string");
+    const llmSpan = records.find((record) => record.recordType === "span" && record.name === "llm.call");
+    assert.ok(llmSpan, "llm.call span missing");
+    assert.equal(llmSpan.kind, "CLIENT");
+    assert.equal((llmSpan.status as { code?: string }).code, "OK");
+    assert.equal(llmSpan.traceId, request.traceId);
+    assert.equal(llmSpan.spanId, request.spanId);
+  } finally {
+    await config.update("debug", false, vscode.ConfigurationTarget.Global);
+    await config.update("debugLogDir", before.debugLogDir, vscode.ConfigurationTarget.Global);
+    await config.update("claudePath", before.claudePath, vscode.ConfigurationTarget.Global);
+    await config.update("pauseMs", before.pauseMs, vscode.ConfigurationTarget.Global);
+    await config.update("quickModel", before.quickModel, vscode.ConfigurationTarget.Global);
+    await config.update("provider", before.provider, vscode.ConfigurationTarget.Global);
+    await config.update("thinkingEffort", before.thinkingEffort, vscode.ConfigurationTarget.Global);
+    await config.update("quickReviewOnPause", before.quickReviewOnPause, vscode.ConfigurationTarget.Global);
+    await sleep(200);
+    await fs.rm(dir, { recursive: true, force: true });
+    await fs.rm(path.dirname(cli), { recursive: true, force: true });
+  }
 });
 
 export async function run(): Promise<void> {

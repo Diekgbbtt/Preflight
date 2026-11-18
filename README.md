@@ -18,7 +18,7 @@ Write the prompt in the **Prompt Preflight** panel (activity bar, or `Cmd/Ctrl+A
 
 Tiers 2 to 4 run through `claude -p` with the user's own Claude login: no API key, no tools, no project settings. The provider layer is ready for a Codex adapter.
 
-Settings live under `promptPreflight.*`: provider, model, quick and deep models, thinking effort, pause delay, send target, code inclusion, and the study log.
+Settings live under `promptPreflight.*`: provider, model, quick and deep models, thinking effort, pause delay, send target, code inclusion, the study log, and debug tracing.
 
 ## Score
 
@@ -70,7 +70,7 @@ Code inclusion stays off until the notice is accepted. The effective value is `o
 
 Drafts, Q&A, reviews, session slices inside review records, and send records are stored unencrypted under `context.globalStorageUri`. They never leave the machine except inside a model request. `promptPreflight.clearHistory` deletes them.
 
-The study log (`promptPreflight.studyLog.enabled`) is opt-in, written separately, and is not deleted by `clearHistory`. Nothing else is collected: there is no telemetry by default.
+The study log (`promptPreflight.studyLog.enabled`) is opt-in, written separately, and is not deleted by `clearHistory`. The optional debug trace is stored in its own directory and is removed by `promptPreflight.clearDebugLog`, not by `clearHistory`. Nothing else is collected: there is no telemetry by default.
 
 ## Observability
 
@@ -98,9 +98,27 @@ The derived `SessionSlice` is stored inside the review record. There is no `slic
 The repository creates each file on its first append, including the global storage directory.
 
 The current panel does not append draft, question, review, or send records yet.
-It writes only the opt-in study log (`study-log.jsonl`) on send.
+It writes the opt-in study log (`study-log.jsonl`) on send, and the optional debug trace when `promptPreflight.debug` is on.
 The four JSONL interfaces above are the control-plane contract for the panel integration in #43, #46, and #47.
 Without the Claude CLI, the health check returns `provider-missing`; no review runs and no review record is created.
+
+### Debug trace
+
+`promptPreflight.debug` enables a separate local evaluation trace. It is off by default.
+`promptPreflight.debugLogDir` selects the directory. Empty uses `<context.globalStorageUri>/debug`; a relative path resolves under it; an absolute path is used as is.
+The file is `llm-trace.jsonl`. Rotation uses 10 MB and 5 files. The directory is mode `0700`; files are mode `0600` on POSIX.
+The trace is independent of the study log and of the four files above.
+
+The trace uses OpenTelemetry spans and logs. Each JSONL record carries `schemaVersion`, `recordType` (`span` or `log`), trace and span ids, timestamps, attributes, events, and resource metadata. Spans cover `session`, `review.quick`, `review.deep`, `health.check`, and `llm.call`. Logs cover requests, process invocation, stdin, stdout, stderr, responses, errors, review parsing, UI actions, and storage. Standard `gen_ai.*` attributes carry the model and token usage; `prompt_preflight.*` attributes carry mode, thinking effort, generation method, timeout, RTT, prompt hash, exit code, signal, and cost.
+
+The `Prompt Preflight Debug` output channel shows colored levels and phase labels. It previews large payloads. The JSONL file holds the full payloads. The channel follows the VS Code log level; set it to Debug to show process, stdin, input, and span lines.
+The first enable shows a warning because full prompts, code, and model responses are stored locally. The file is never uploaded.
+
+Commands:
+
+- `Prompt Preflight: Open Debug Log` shows the colored channel.
+- `Prompt Preflight: Open Debug Log File` opens `llm-trace.jsonl`.
+- `Prompt Preflight: Clear Debug Log` deletes the trace files. `Prompt Preflight: Clear History` keeps the debug trace and the study log.
 
 ### Machine-agnostic setting
 
@@ -132,6 +150,7 @@ extension/  VS Code client: panel, workspace and language tools, sessions, send,
   src/sessionLocator.ts: session selection
   src/codeTools.ts: agent tools over LSP types
   src/vscodeCodeTools.ts: VS Code LSP adapter and bundled rg
+  src/debug/: OTel trace, JSONL exporters, rotation, output channel
   src/privacy.ts: consent and redaction
   src/repository.ts: storage composition
 hook/       Claude Code UserPromptSubmit hook (rules only)

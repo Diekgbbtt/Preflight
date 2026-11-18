@@ -4,16 +4,22 @@ import * as vscode from "vscode";
 import type { Config, SendRecord } from "@prompt-preflight/core";
 import { checkHealth, createProvider, mapError, resolveProfile } from "@prompt-preflight/core";
 import { CONSENT_VERSION, consentKey, consentMessage, parseConsent, type IncludeCode } from "./privacy";
+import { DebugController } from "./debug/controller";
 import { PromptPanel, showFeedbackError } from "./panel";
 import { readModelConfig } from "./modelSettings";
 import { JsonlRepository } from "./repository";
 import { StudyLog } from "./studyLog";
 import { WorkspaceIndex } from "./workspace";
 
-export function activate(context: vscode.ExtensionContext): void {
+let debugController: DebugController | undefined;
+
+export async function activate(context: vscode.ExtensionContext): Promise<{ debug: { acceptNotice(): Promise<void> } }> {
   const workspace = new WorkspaceIndex();
   const log = new StudyLog(context.globalStorageUri);
-  const panel = new PromptPanel(context.extensionUri, workspace, log);
+  const debug = new DebugController(context);
+  await debug.start();
+  debugController = debug;
+  const panel = new PromptPanel(context.extensionUri, workspace, log, debug);
 
   const storage = context.globalStorageUri.fsPath;
   const drafts = new JsonlRepository<Record<string, unknown>>(path.join(storage, "drafts.jsonl"));
@@ -28,6 +34,7 @@ export function activate(context: vscode.ExtensionContext): void {
   void checkActivationHealth(config);
 
   context.subscriptions.push(
+    { dispose: () => void debug.shutdown() },
     workspace,
     vscode.window.registerWebviewViewProvider(PromptPanel.viewId, panel, {
       webviewOptions: { retainContextWhenHidden: true },
@@ -51,9 +58,12 @@ export function activate(context: vscode.ExtensionContext): void {
         );
       }
     }),
+    vscode.commands.registerCommand("promptPreflight.openDebugLog", () => debug.showLog()),
+    vscode.commands.registerCommand("promptPreflight.openDebugLogFile", () => debug.openLogFile()),
+    vscode.commands.registerCommand("promptPreflight.clearDebugLog", () => debug.clear()),
     vscode.commands.registerCommand("promptPreflight.clearHistory", async () => {
       const answer = await vscode.window.showWarningMessage(
-        "Delete all stored drafts, questions, reviews and send records? Settings and the study log are kept.",
+        "Delete all stored drafts, questions, reviews and send records? Settings, the study log, and the debug log are kept.",
         { modal: true },
         "Delete",
       );
@@ -67,9 +77,13 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
   );
+  return { debug: { acceptNotice: () => debug.acceptNotice() } };
 }
 
-export function deactivate(): void {}
+export async function deactivate(): Promise<void> {
+  await debugController?.shutdown();
+  debugController = undefined;
+}
 
 /**
  * Activation health check for the quick profile: profile validation plus a

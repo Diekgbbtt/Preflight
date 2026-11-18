@@ -6,7 +6,7 @@
 
 The review feedback in `docs/reviews/pr-49-feedback.md` supersedes the LLD where they disagree.
 The catalogue was approved on 2026-11-17.
-The e2e suite passed 11 of 11 tests on 2026-11-17; E1-E9 and E11 are the numbered walkthrough predicates. E10 is the manual Windows check.
+The e2e suite passed 12 of 12 tests on 2026-11-18; E1-E9, E11, and E12 are the numbered walkthrough predicates. E10 is the manual Windows check.
 The predicates remain the acceptance contract; the suite is green.
 The new contracts are:
 
@@ -58,6 +58,10 @@ The new contracts are:
 | C33 | `CodebaseTools.searchText` | degradation | bundled `rg` missing (`ENOENT`) | `omittedReason: "unsupported"`; no crash | `extension/test/codeTools.test.ts` "maps a missing rg to unsupported" |
 | C34 | `assemble` | outlier | draft + QA fill the budget exactly | every workspace source is omitted `budget`; total tokens equals budget; fragments empty | `core/test/context.test.ts` budget cases |
 | C35 | `parseCodexSession` | success and degradation | real `session-custom-tool.jsonl` with one `custom_tool_call` `apply_patch` and a matching `FileChange`; a failed custom call whose output has no `is_error` | one tool call, no duplicate; apply_patch ok; changed files from the patch; failed custom call stays error; output message is the error | `extension/test/sessionSlice.test.ts` "parses a custom_tool_call..." and "keeps a failed custom_tool_call..." |
+| C36 | `resolveDebugLogDir` | success and Windows paths | empty setting; relative `logs`; absolute `/tmp/debug`; `path.win32` with `C:\\Users\\alice\\globalStorage`, `D:\\debug` | empty -> `<globalStorage>/debug`; relative resolves under global storage; absolute is kept; Windows drive and relative paths resolve with `path.win32` | `extension/test/debugPath.test.ts` path and Windows cases |
+| C37 | `JsonlTraceWriter` | success and degradation | 1 KB size cap, 3 files, 5 records; then clear | JSONL records written; rotated `llm-trace.N.jsonl`; current file mode `0600`; clear removes current, rotations and history | `extension/test/debugWriter.test.ts` rotation and clear cases |
+| C38 | `OtelDebugTrace` | success and error | quick review with health, request, process, stdin, stdout, stderr, response and parsed review; deep review with timeout error | spans `session`, `review.quick`, `health.check`, `llm.call`; `llm.call` is `CLIENT` with the review as parent; `gen_ai.*`, `prompt_preflight.*`, OTel ids and correlated logs; error facts retained | `extension/test/debugTrace.test.ts` success and error cases |
+| C39 | `LlmTrace` instrumentation | success, error, missing CLI, abort | fake Claude CLI; recording trace | `request`, `process`, `stdin`, `stdout`, `response` on success; `stderr` and `error` on failure; `exitCode`, `timedOut`, `aborted`, and RTT metadata | `core/test/claudeCli.test.ts` trace cases and `core/test/claudeTimeout.test.ts` timeout trace case |
 
 ## Walkthrough predicates (end-to-end)
 
@@ -74,6 +78,7 @@ The new contracts are:
 | E9 | #42 degraded mode | `e2e/facade.quickReview`; live edge: `claudePath` points to a missing file | draft `Fix it`; provider claude; missing CLI path | `checkHealth` -> `mapError` -> `FeedbackError` | code `provider-missing`; action `open-settings`; retryable false; no review event; no raw path in the message | call the facade; assert the error object; assert the reviews file is absent | `e2e/suite/index.ts` E9 `[passed 2026-11-17]` |
 | E10 | Windows path rules | blocked: needs a Windows host | `C:\\work\\sample`, `@src\\app.ts`, `%USERPROFILE%\\.claude\\projects\\C--work-sample` | `canonicalFolderUri` -> `encodeClaudeProjectPath` -> `resolvePromptFileRefs` -> `relativeToWorkspace` | canonical URI `file:///c:/work/sample`; encoded dir `C--work-sample`; resolver path `src/app.ts`; relative path `src/app.ts` | run the manual steps in `docs/windows.md` | `docs/windows.md` `[blocked: Windows host]` |
 | E11 | #38 Codex custom tools | `e2e/facade.readSessionSlice`; live edge: `session-custom-tool.jsonl` | real fixture with one `custom_tool_call` `apply_patch` for two files, its output, and a matching `FileChange` | `parseCodexSession` -> `readSlice` | one `apply_patch` call; status ok; `changedFiles` `["src/app.ts","src/helper.ts"]`; no duplicate FileChange call | read the slice; assert the call count, name, status, and changed files | `e2e/suite/index.ts` E11 `[passed 2026-11-17]` |
+| E12 | Debug observability; OTel logs and traces | `e2e/suite/index.ts`; live edge: built extension, panel `checkSelection`, fake Claude CLI, temp debug directory | fixture `src/greet.ts` selected in the editor; debug enabled; log directory set; quick review | `DebugController` -> `OtelDebugTrace` -> `llm.request`/`llm.response` -> JSONL exporter | `llm-trace.jsonl` has `llm.request` and `llm.response`; model `haiku`; effort `medium`; method `cli`; timeout `120000`; usage `10/5`; full user text; `llm.call` span `CLIENT`, `OK`, same trace and span ids | read the returned JSONL; assert records and ids | `e2e/suite/index.ts` E12 `[passed 2026-11-18]` |
 
 ## Precision notes
 
@@ -81,5 +86,5 @@ The new contracts are:
 - Expected prompt hashes are the four known SHA-256 vectors in `core/test/review.test.ts`.
 - Expected provider errors come from `core/src/errors.ts` fixed sentences, never from raw stderr.
 - Expected context counts are read from the manifest, not recomputed the way the assembler computes them.
-- The only substituted edges are the model CLI in E1, E2, E4, and E9, the terminal target in E4, and the language provider in E7 and E8.
-- E10 is blocked on a Windows host and is not substituted with a fake Windows.
+- The only substituted edges are the model CLI in E1, E2, E4, E9, and E12, the terminal target in E4, and the language provider in E7 and E8.
+- E10 is blocked on a Windows host and is not substituted with a fake Windows. The debug path resolver has a `path.win32` unit case; the live Windows debug trace remains manual.

@@ -2,12 +2,14 @@ import { randomUUID } from "node:crypto";
 import * as vscode from "vscode";
 import {
   ACTION_LABELS,
+  CLAUDE_TIMEOUT_MS,
   analyze,
   checkHealth,
   claudeCliRunner,
   createProvider,
   feedbackLogMessage,
   feedbackMessage,
+  hashPrompt,
   isRetryable,
   mapError,
   resolveProfile,
@@ -20,6 +22,7 @@ import {
 } from "@prompt-preflight/core";
 import { readModelConfig } from "./modelSettings";
 import { sendPrompt } from "./send";
+import type { DebugTrace } from "./debug/types";
 import type { StudyLog } from "./studyLog";
 import type { WorkspaceIndex } from "./workspace";
 
@@ -61,6 +64,7 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     private readonly extensionUri: vscode.Uri,
     private readonly workspace: WorkspaceIndex,
     private readonly log: StudyLog,
+    private readonly debug: DebugTrace,
   ) {}
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -102,10 +106,12 @@ export class PromptPanel implements vscode.WebviewViewProvider {
         if (this.improved) {
           this.draft.usedImproved = true;
           this.setText(this.improved);
+          this.debug.event("ui.action", { "prompt_preflight.action": "useImproved" }, "info");
         }
         break;
       case "copy":
         await vscode.env.clipboard.writeText(this.text);
+        this.debug.event("ui.action", { "prompt_preflight.action": "copy" }, "info");
         void vscode.window.showInformationMessage("Prompt copied.");
         break;
       case "send":
@@ -128,6 +134,19 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     const abortedQuick = this.running.quick;
     abortedQuick?.abort();
     const words = text.trim().split(/\s+/).filter(Boolean).length;
+    this.debug.event(
+      "ui.input",
+      {
+        "prompt_preflight.prompt_chars": text.length,
+        "prompt_preflight.words": words,
+        "prompt_preflight.score": this.analysis.score,
+        "prompt_preflight.level": this.analysis.level,
+        "prompt_preflight.findings": this.analysis.findings.length,
+        "prompt_preflight.questions": this.analysis.questions.length,
+        "prompt_preflight.prompt_hash": hashPrompt(text),
+      },
+      "debug",
+    );
     const willStartQuick =
       this.cfg().get<boolean>("quickReviewOnPause", true) &&
       words >= 5 &&
@@ -156,32 +175,60 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     if (mode === "quick") this.lastQuickText = text;
     this.post({ type: "reviewing", mode });
 
+    const config = readModelConfig();
+    const profile = resolveProfile(config, mode);
+    const trace = this.debug.startReview({ mode, attempt, prompt: text, profile });
+
     // The outer finally always clears this attempt's controller, including on
     // the pre-call paths (provider factory throw, failed health check). A
     // recursive timeout retry installs a new controller first, so this
     // finally never deletes the retry's controller.
     try {
-      const config = readModelConfig();
-      const profile = resolveProfile(config, mode);
       let provider: ModelProvider;
       try {
         provider = createProvider(profile, config);
       } catch (e) {
-        this.reportError(mode, text, mapError(e));
+        const error = mapError(e);
+        trace.error(e, { code: error.code, action: error.action, retryable: error.retryable });
+        this.reportError(mode, text, error);
         return;
       }
 
       // Pre-review health check: profile validation plus CLI presence. Fails
       // before the model call, so a failing check leaves no spinner for long.
+      const healthStarted = performance.now();
       const health = await checkHealth(provider, profile, config.claudePath);
+      const healthRtt = performance.now() - healthStarted;
+      trace.health(
+        config.claudePath,
+        health.ok
+          ? { ok: true }
+          : { ok: false, error: { code: health.error.code, message: health.error.message } },
+        healthRtt,
+      );
       if (!health.ok) {
-        if (ctrl.signal.aborted) return; // superseded by newer input
+        if (ctrl.signal.aborted) {
+          trace.end("error");
+          return; // superseded by newer input
+        }
+        trace.error(health.error, {
+          code: health.error.code,
+          action: health.error.action,
+          retryable: health.error.retryable,
+        });
+        trace.end("error");
         this.reportError(mode, text, health.error);
         return;
       }
 
-      const run = claudeCliRunner(config.claudePath, this.workspace.root, profile.thinkingEffort);
+      const llmTrace = trace.llm({ mode, generationMethod: "cli", timeoutMs: CLAUDE_TIMEOUT_MS });
       try {
+        const run = claudeCliRunner(
+          config.claudePath,
+          this.workspace.root,
+          profile.thinkingEffort,
+          llmTrace,
+        );
         const r: Review = await review(
           text,
           mode,
@@ -195,16 +242,32 @@ export class PromptPanel implements vscode.WebviewViewProvider {
         this.draft.outputTokens += r.usage.outputTokens;
         this.draft.costUsd += r.usage.costUsd;
         if (mode === "deep") this.improved = r.improvedPrompt;
+        trace.parsed(r);
+        trace.end("ok");
         this.post({ type: "review", mode, text, review: r });
       } catch (e) {
-        if (ctrl.signal.aborted) return; // superseded by newer input
         const error = mapError(e);
+        trace.error(e, { code: error.code, action: error.action, retryable: error.retryable });
+        if (ctrl.signal.aborted) {
+          trace.end("error");
+          return; // superseded by newer input
+        }
         // One automatic retry, only for a transient timeout; the manual Retry
         // action comes from showFeedbackError on the final failure.
-        if (isRetryable(error) && attempt === 0) return void this.runReview(mode, 1);
+        if (isRetryable(error) && attempt === 0) {
+          trace.end("error");
+          return void this.runReview(mode, 1);
+        }
+        trace.end("error");
         this.reportError(mode, text, error);
       }
+    } catch (e) {
+      const error = mapError(e);
+      trace.error(e, { code: error.code, action: error.action, retryable: error.retryable });
+      trace.end("error");
+      this.reportError(mode, text, error);
     } finally {
+      trace.end("ok");
       if (this.running[mode] === ctrl) delete this.running[mode];
     }
   }
@@ -244,6 +307,24 @@ export class PromptPanel implements vscode.WebviewViewProvider {
       sentAnyway = true;
     }
     const target = await sendPrompt(text, this.workspace.root);
+    this.debug.event(
+      "ui.send",
+      {
+        "prompt_preflight.send_target": target,
+        "prompt_preflight.prompt_hash": hashPrompt(text),
+        "prompt_preflight.prompt_chars": text.length,
+        "prompt_preflight.score": a.score,
+        "prompt_preflight.level": a.level,
+        "prompt_preflight.study_log_enabled": this.log.enabled,
+        "prompt_preflight.sent_anyway": sentAnyway,
+        "ui.send.text": text,
+      },
+      "info",
+    );
+    this.debug.storage("studyLog", {
+      "prompt_preflight.study_log_enabled": this.log.enabled,
+      "prompt_preflight.study_log_event": "send",
+    });
     const d = this.draft;
     await this.log.write("send", {
       workspace: vscode.workspace.name,
