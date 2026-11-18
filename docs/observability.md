@@ -240,7 +240,7 @@ The channel follows the VS Code log level; set it to Debug to show process, stdi
 ## Privacy
 
 - Debug is opt-in and off by default.
-- The request log stores the final request after context policy and redaction. It does not store pre-redaction text.
+- The request log stores the exact request handed to the provider. It does not add or remove redaction; if the context pipeline redacted code before the call, the log records the redacted request. It never stores a separate pre-redaction copy.
 - The response log stores the raw model response.
 - The file is local, mode `0600`, and is never uploaded.
 - The first enable warning names the file location and the raw-payload behavior.

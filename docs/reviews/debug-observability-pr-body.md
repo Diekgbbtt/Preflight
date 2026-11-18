@@ -15,7 +15,7 @@ It is separate from the study log and from the review, send, draft and question 
 - Colored `Prompt Preflight Debug` output channel with phase labels.
 - Commands: `openDebugLog`, `openDebugLogFile`, `clearDebugLog`.
 - First-enable warning stored under `promptPreflight.debugNotice.v1`.
-- Full request is the final post-redaction request; the response is raw.
+- The request is the exact provider request, after any context redaction; the response is raw.
 - Core `LlmTrace` seam instrumented in `claudeCli`; panel review, health, UI and send paths wired.
 - A debug failure is dropped and never fails a review.
 

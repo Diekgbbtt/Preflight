@@ -16,7 +16,7 @@ The trace is fail-soft. A trace, exporter or channel failure does not fail a rev
 | --- | --- | --- |
 | Use established standards | closed | `@opentelemetry/api` 1.9.0, `api-logs` 0.57.0, `sdk-trace-base` 1.30.0, `sdk-logs` 0.57.0, `resources` 1.30.0, `core` 1.30.0. `gen_ai.*` and `prompt_preflight.*` attributes. |
 | Logs and traces, not one flat signal | closed | `session`, `review.*`, `health.check` and `llm.call` spans; `llm.request`, `llm.response`, `llm.error`, `review.*`, `ui.*` and `storage.*` log records. |
-| Full LLM request and response packets | closed | `llm.request.system`, `llm.request.user`, `llm.stdout`, `llm.stderr` and `llm.response.text` are stored after policy and redaction. |
+| Full LLM request and response packets | closed | `llm.request.system`, `llm.request.user`, `llm.stdout`, `llm.stderr` and `llm.response.text` are stored exactly as the provider receives them; any context redaction happens before the call. |
 | Thinking effort, generation method, timeout, RTT and more | closed | `prompt_preflight.thinking_effort`, `generation_method`, `timeout_ms`, `rtt_ms`, `prompt_hash`, `exit_code`, `signal`, `killed`, `timed_out`, `aborted`, `cost_usd`, `usage.*`. |
 | Debug setting off by default | closed | `promptPreflight.debug` default `false`; no providers, writer or channel when off. |
 | Machine-agnostic log location | closed | `promptPreflight.debugLogDir`; empty resolves to `<context.globalStorageUri>/debug`; relative paths resolve under it; absolute paths are kept. |
