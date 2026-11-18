@@ -5,6 +5,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { PromptPanel } from "../../extension/src/panel";
+import { StudyLog } from "../../extension/src/studyLog";
+import type { WorkspaceIndex } from "../../extension/src/workspace";
 import { checkHealth, createClaudeProvider, hashPrompt, mapError } from "@prompt-preflight/core";
 import {
   assembleContext,
@@ -248,6 +251,59 @@ test("E11: real Codex custom tool calls produce one apply_patch and two changed 
   assert.equal(slice.toolCalls[0].name, "apply_patch");
   assert.equal(slice.toolCalls[0].status, "ok");
   assert.equal(slice.changedFiles.join(","), "src/app.ts,src/helper.ts");
+});
+
+test("E12: real terminal exit attaches agent counters to an opt-in study send", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-e2e-usage-"));
+  const config = vscode.workspace.getConfiguration("promptPreflight");
+  const changes: Record<string, unknown> = { "studyLog.enabled": true, sendTo: "terminal", gateSending: false, quickReviewOnPause: false };
+  const previous = Object.fromEntries(Object.keys(changes).map(key => [key, config.inspect(key)?.globalValue]));
+  const oldCli = config.inspect("claudePath")?.globalValue;
+  try {
+    for (const [key, value] of Object.entries(changes)) await config.update(key, value, vscode.ConfigurationTarget.Global);
+    const home = path.join(dir, "home");
+    const cwd = workspaceRoot();
+    const project = cwd.replace(/[^A-Za-z0-9_-]/g, "-");
+    const transcriptDir = path.join(home, ".claude", "projects", project);
+    const cli = path.join(dir, "fake-agent");
+    await fs.mkdir(transcriptDir, { recursive: true });
+    const program = `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const sessionId = args[args.indexOf('--session-id') + 1];
+fs.writeFileSync(path.join(${JSON.stringify(transcriptDir)}, sessionId + '.jsonl'), JSON.stringify({type:'assistant',sessionId,cwd:${JSON.stringify(cwd)},message:{id:'msg-1',role:'assistant',content:[],usage:{input_tokens:21,output_tokens:8,cache_read_input_tokens:100,cache_creation_input_tokens:40}}}) + '\\n');
+`;
+    await fs.writeFile(cli, program); await fs.chmod(cli, 0o755);
+    await config.update("claudePath", cli, vscode.ConfigurationTarget.Global);
+    let receive!: (m: unknown) => Promise<void>;
+    const storage = vscode.Uri.file(dir);
+    const log = new StudyLog(storage);
+    const panel = new PromptPanel(storage, { root: cwd, context: () => ({}), notes: () => "" } as unknown as WorkspaceIndex, log, storage, home);
+    panel.resolveWebviewView({ webview: { options: {}, cspSource: "", asWebviewUri: () => "", postMessage: () => Promise.resolve(true), onDidReceiveMessage: (fn: typeof receive) => { receive = fn; } }, onDidChangeVisibility: () => {} } as unknown as vscode.WebviewView);
+    const text = "Explain greet in src/greet.ts in one sentence";
+    panel.setText(text);
+    await receive({ type: "send" });
+    let rows: Array<Record<string, any>> = [];
+    for (let i = 0; i < 100; i++) {
+      rows = (await fs.readFile(log.uri.fsPath, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+      if (rows.some(row => row.event === "agent-usage")) break;
+      await sleep(100);
+    }
+    const send = rows.find(row => row.event === "send");
+    const usage = rows.find(row => row.event === "agent-usage");
+    assert.ok(send); assert.ok(usage, "terminal exit did not produce agent usage");
+    assert.equal(usage.sendId, send.sendId); assert.equal(usage.sessionId, send.sessionId);
+    assert.equal(send.preflightInputTokens, 0); assert.equal(usage.agentInputTokens, 21, JSON.stringify(usage));
+    assert.equal(usage.agentOutputTokens, 8); assert.equal(usage.agentCacheReadTokens, 100); assert.equal(usage.agentCacheCreationTokens, 40);
+    const sent = JSON.parse((await fs.readFile(path.join(dir, "sends.jsonl"), "utf8")).trim());
+    assert.equal(sent.text, text); assert.equal(sent.sessionId, send.sessionId);
+    panel.setText("");
+  } finally {
+    for (const [key, value] of Object.entries(previous)) await config.update(key, value, vscode.ConfigurationTarget.Global);
+    await config.update("claudePath", oldCli, vscode.ConfigurationTarget.Global);
+    if (process.env.PREFLIGHT_E2E_KEEP !== "1") await fs.rm(dir, { recursive: true, force: true });
+  }
 });
 
 export async function run(): Promise<void> {

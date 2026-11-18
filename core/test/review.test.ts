@@ -262,8 +262,8 @@ describe("buildReviewRequest", () => {
     for (const mode of ["quick", "deep"] as const) {
       const req = buildReviewRequest(prompt, mode, "sonnet");
       expect(req.system.match(new RegExp(RUBRIC_TEXT.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))).toHaveLength(1);
-      const schema = mode === "quick" ? QUICK_REPLY_SCHEMA : LEGACY_DEEP_REPLY_SCHEMA;
-      expect(req.system.match(new RegExp(schema.slice(0, 20).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))).toHaveLength(1);
+      const schema = mode === "quick" ? QUICK_REPLY_SCHEMA : DEEP_REPLY_SCHEMA;
+      expect(req.system.match(new RegExp(schema.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"))).toHaveLength(1);
       expect(req.system).toContain(schema);
     }
   });

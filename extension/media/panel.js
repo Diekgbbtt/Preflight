@@ -10,9 +10,12 @@
   /** @type {any} */ let analysis = null;
   /** @type {any} */ let quick = null; // { text, review?, error?, loading? }
   /** @type {any} */ let deep = null;
+  /** @type {any} */ let improved = null;
+
+  /** @type {any} */ let scoreState = { state: "idle", score: null, text: "" };
+  /** @type {any} */ let feedback = null;
 
   const LEVELS = {
-    trivial: "Simple command",
     clear: "Clear, ready to send",
     "needs-work": "Needs a bit more",
     vague: "Too vague, the agent will guess",
@@ -69,29 +72,35 @@
     const a = analysis && analysis.text === ta.value ? analysis.analysis : null;
     const empty = !ta.value.trim();
     const fill = $("fill");
-    fill.style.width = empty || !a ? "0%" : a.score + "%";
-    fill.className = "fill " + (a ? a.level : "");
-    $("level").textContent = empty || !a ? "Start typing" : `${LEVELS[a.level]} · ${a.score}/100`;
-
-    $("dims").innerHTML = empty || !a || a.level === "trivial"
-      ? ""
-      : DIMS.map(([k, label]) => {
-          const v = a.dimensions[k];
-          const cls = v >= 25 ? "ok" : v >= 15 ? "mid" : "bad";
-          return `<span class="dim ${cls}" title="${v}/25">${label}</span>`;
-        }).join("");
+    const score = scoreState.text === ta.value && scoreState.state === "scored" ? scoreState.score : null;
+    fill.style.width = score ? score.score + "%" : "0%";
+    fill.className = "fill " + (score ? score.level : "");
+    fill.parentElement.hidden = !score;
+    const localCount = a ? a.findings.filter(f => f.severity !== "info").length : 0;
+    $("level").textContent = score ? `Model specification estimate · ${score.score}/100` : empty ? "Local checks · Start typing" : a ? `Local checks · ${localCount ? localCount + " suggestions" : "No warnings found"}` : "Local checks · Checking…";
+    $("level").classList.toggle("stale", false);
+    $("dims").innerHTML = !score ? (a && !empty ? DIMS.map(([k, label]) => {
+      const needsDetail = a.findings.some(f => f.category === k);
+      return `<span class="dim ${needsDetail ? "mid" : "ok"}" title="Local heuristic: ${needsDetail ? "check the notes" : "no warning detected"}">${label}${needsDetail ? " · Check" : ""}</span>`;
+    }).join("") : "") : DIMS.map(([k, label]) => {
+      const v = score.dimensions[k];
+      return `<span class="dim ${v >= 25 ? "ok" : v >= 15 ? "mid" : "bad"}" title="${v}/25">${label}</span>`;
+    }).join("");
+    const advice = feedback ? feedback.feedback : null;
 
     const qs = $("questions");
     const qList = /** @type {HTMLElement} */ (qs.querySelector("ul"));
-    qs.hidden = !a || empty || a.questions.length === 0;
-    qList.innerHTML = a ? a.questions.map((q) => `<li>${md(q)}</li>`).join("") : "";
+    qs.hidden = !advice || empty || advice.questions.length === 0;
+    qs.classList.toggle("stale", !!feedback && feedback.text !== ta.value);
+    qList.innerHTML = advice ? advice.questions.map((q) => `<li>${md(q)}</li>`).join("") : "";
 
     const fs = $("findings");
     const fList = /** @type {HTMLElement} */ (fs.querySelector("ul"));
     // one line per message; the first occurrence is the click target
     const seen = new Set();
-    const findings = (a && !empty ? a.findings : []).filter((f) => !seen.has(f.message) && seen.add(f.message));
+    const findings = (advice && !empty ? advice.findings : []).filter((f) => !seen.has(f.message) && seen.add(f.message));
     fs.hidden = findings.length === 0;
+    fs.classList.toggle("stale", !!feedback && feedback.text !== ta.value);
     fList.innerHTML = "";
     for (const f of findings) {
       const li = document.createElement("li");
@@ -107,7 +116,7 @@
 
     const send = /** @type {HTMLButtonElement} */ ($("send"));
     send.disabled = empty;
-    send.classList.toggle("warn", !!a && a.shouldClarify);
+    send.classList.toggle("warn", false);
     /** @type {HTMLButtonElement} */ ($("deep")).disabled = empty;
   }
 
@@ -136,21 +145,26 @@
     html += "<ul>" + rv.issues.map((i, n) =>
       `<li class="issue${i.range ? " clickable" : ""}" data-n="${n}"><b>${esc(i.problem)}</b><br><span class="muted">${esc(i.suggestion)}</span></li>`,
     ).join("") + "</ul>";
-    if (rv.questions.length && id === "deepOut") {
+    if (rv.questions.length) {
       html += "<h4>Questions</h4><ul>" + rv.questions.map((q) => `<li>${md(q)}</li>`).join("") + "</ul>";
     }
-    if (rv.improvedPrompt) {
-      html += `<h4>Improved prompt</h4><pre class="improved">${esc(rv.improvedPrompt)}</pre>
+    if (id === "deepOut" && improved && improved.text === ta.value) {
+      html += `<h4>Improved prompt</h4><pre class="improved">${esc(improved.improved)}</pre>
         <p class="muted">Text in [brackets] is for you to fill in.</p>
         <button id="useImproved" class="secondary">Use this prompt</button>`;
     }
-    const u = rv.usage;
+    else if (id === "deepOut" && rv.questions.length && r.text === ta.value) {
+      html += `<button id="improve" class="secondary">Suggest improved prompt</button>`;
+    }
+    const u = rv.usage || { inputTokens: 0, outputTokens: 0, costUsd: 0 };
     html += `<p class="usage">${u.inputTokens + u.outputTokens} tokens · $${u.costUsd.toFixed(4)}</p>`;
     body.innerHTML = html;
     body.querySelectorAll("li.issue.clickable").forEach((li) => {
       const i = rv.issues[Number(/** @type {HTMLElement} */ (li).dataset.n)];
       /** @type {HTMLElement} */ (li).onclick = () => select(i.range);
     });
+    const improve = body.querySelector("#improve");
+    if (improve) improve.onclick = () => vscode.postMessage({ type: "improve" });
     const use = body.querySelector("#useImproved");
     if (use) /** @type {HTMLElement} */ (use).onclick = () => vscode.postMessage({ type: "useImproved" });
   }
@@ -165,6 +179,7 @@
   }
 
   ta.addEventListener("input", () => {
+    improved = null;
     vscode.postMessage({ type: "input", text: ta.value });
     render();
   });
@@ -175,7 +190,7 @@
     }
   });
   $("send").onclick = () => vscode.postMessage({ type: "send" });
-  $("deep").onclick = () => vscode.postMessage({ type: "deepReview" });
+  $("deep").onclick = () => vscode.postMessage({ type: "enhance" });
   $("copy").onclick = () => vscode.postMessage({ type: "copy" });
 
   window.addEventListener("message", (ev) => {
@@ -183,20 +198,35 @@
     switch (m.type) {
       case "analysis":
         analysis = { text: m.text, analysis: m.analysis };
+        if (m.feedback) feedback = { text: m.text, feedback: m.feedback };
+        if (!m.text.trim()) feedback = null;
         break;
       case "setText":
         ta.value = m.text;
         break;
+      case "score":
+        if (m.text === ta.value) scoreState = m;
+        break;
       case "reviewing":
-        if (m.mode === "quick") quick = { text: ta.value, loading: true };
-        else deep = { text: ta.value, loading: true };
+        if (m.text !== ta.value) break;
+        if (m.mode === "quick") quick = { text: m.text, loading: true };
+        else deep = { text: m.text, loading: true };
         break;
       case "review":
+        if (m.text !== ta.value) break;
         if (m.mode === "quick") quick = m;
         else deep = m;
         break;
+      case "reviewCancelled":
+        if (m.mode === "quick") quick = null;
+        else deep = null;
+        break;
+      case "improved":
+        if (m.text === ta.value) improved = m;
+        break;
       case "sent":
-        quick = deep = null;
+        quick = deep = feedback = improved = null;
+        scoreState = { state: "idle", score: null, text: "" };
         break;
     }
     render();

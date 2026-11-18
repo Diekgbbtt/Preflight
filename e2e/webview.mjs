@@ -1,0 +1,74 @@
+// Exercise the shipped plain JS and panel markup in real headless Chrome.
+import { readFile, writeFile, mkdtemp, rm } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { tmpdir, platform } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+const root = fileURLToPath(new URL("../", import.meta.url));
+const source = await readFile(join(root, "extension/src/panel.ts"), "utf8");
+const body = source.match(/<body>([\s\S]*?)<\/body>/)[1].replace(/<script[\s\S]*?<\/script>/, "");
+const script = await readFile(join(root, "extension/media/panel.js"), "utf8");
+const dir = await mkdtemp(join(tmpdir(), "preflight-webview-"));
+const browser = process.env.CHROME_BIN ?? (platform() === "darwin" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : "chromium");
+const test = `
+const results = [];
+const assert = (value, name) => { results.push({ name, passed: !!value }); };
+const el = id => document.getElementById(id);
+const message = data => window.dispatchEvent(new MessageEvent('message', { data }));
+const input = text => { el('prompt').value = text; el('prompt').dispatchEvent(new Event('input')); };
+const rules = {findings:[],questions:[]};
+const scored = text => message({type:'score',text,state:'scored',score:{score:90,level:'clear',dimensions:{target:25,action:25,scope:20,done:20}}});
+try {
+ assert(el('level').textContent.includes('Local checks'), 'initially unscored');
+ assert(el('send').disabled, 'empty send disabled');
+ input('Fix src/a.ts');
+ message({type:'analysis',text:'Fix src/a.ts',analysis:rules,feedback:{findings:[],questions:['What should happen?'],issues:[]}});
+ scored('Fix src/a.ts');
+ assert(el('level').textContent.includes('90/100') && el('fill').style.width === '90%', 'current model score rendered');
+ assert(!el('questions').hidden, 'coaching displayed');
+ el('deep').click();
+ assert(window.sent.some(x => x.type === 'enhance'), 'Enhance explicitly requests model assistance');
+ input('Fix src/b.ts');
+ assert(el('level').textContent.includes('Local checks') && el('fill').style.width === '0%', 'editing immediately invalidates score');
+ message({type:'analysis',text:'Fix src/b.ts',analysis:rules,feedback:null});
+ assert(el('dims').textContent.includes('Target') && el('fill').parentElement.hidden, 'typing shows a local checklist without a score bar');
+ assert(el('questions').classList.contains('stale'), 'previous coaching stays stable and dimmed');
+ scored('Fix src/a.ts');
+ assert(el('level').textContent.includes('Local checks'), 'late score ignored');
+ message({type:'score',text:'Fix src/b.ts',state:'scoring',score:null});
+ assert(el('level').textContent.includes('Local checks'), 'scoring state');
+ message({type:'score',text:'Fix src/b.ts',state:'error',score:null});
+ assert(el('level').textContent.includes('Local checks'), 'error has no fabricated score');
+ message({type:'review',mode:'quick',text:'Fix src/a.ts',review:{issues:[],questions:[],usage:{inputTokens:0,outputTokens:0,costUsd:0}}});
+ assert(el('quick').hidden, 'late review ignored');
+ message({type:'review',mode:'deep',text:'Fix src/b.ts',review:{issues:[],questions:['Which target?'],usage:{inputTokens:1,outputTokens:1,costUsd:0}}});
+ assert(!!document.getElementById('improve'), 'deep questions enable separate rewrite');
+ message({type:'improved',text:'Fix src/b.ts',improved:'Fix [target]'});
+ assert(!!document.getElementById('useImproved'), 'separate rewrite can be applied');
+ input('<img src=x onerror=alert(1)>');
+ message({type:'analysis',text:el('prompt').value,analysis:{findings:[{range:{start:0,end:4},severity:'warning',message:'x'}],questions:[]},feedback:null});
+ assert(!el('highlights').querySelector('img'), 'highlight content escaped');
+ message({type:'reviewing',mode:'deep',text:el('prompt').value});
+ message({type:'reviewCancelled',mode:'deep'});
+ assert(el('deepOut').hidden, 'cancelled deep review leaves no spinner');
+ message({type:'sent'});
+ message({type:'setText',text:''});
+ assert(el('level').textContent.includes('Local checks') && el('questions').hidden, 'send clears model and advice');
+ el('copy').click();
+ assert(window.sent.some(x => x.type === 'copy'), 'copy action reaches host bridge');
+} catch(e) { results.push({ name: e.message, passed:false }); }
+document.getElementById('result').textContent = JSON.stringify(results);
+`;
+try {
+  const html = `<!doctype html><html><body>${body}<pre id="result"></pre><script>window.sent=[];window.acquireVsCodeApi=()=>({postMessage:m=>window.sent.push(m),setState:()=>{},getState:()=>null});</script><script>${script}</script><script>${test}</script></body></html>`;
+  const file = join(dir, "test.html");
+  await writeFile(file, html);
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const output = execFileSync(browser, ["--headless", "--disable-gpu", "--no-sandbox", `--user-data-dir=${join(dir,"profile")}`, "--dump-dom", pathToFileURL(file).href], { encoding:"utf8", env, stdio:["ignore","pipe","pipe"], timeout:30000 });
+  const match = output.match(/<pre id="result">([\s\S]*?)<\/pre>/);
+  if (!match) throw new Error("Browser returned no test report");
+  const results = JSON.parse(match[1].replace(/&quot;/g,'"').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>'));
+  for (const result of results) console.log(`${result.passed ? "ok" : "FAIL"} - ${result.name}`);
+  if (results.some(r => !r.passed)) process.exitCode = 1;
+  console.log(`${results.filter(r => r.passed).length}/${results.length} webview browser checks passed`);
+} finally { await rm(dir,{recursive:true,force:true}); }

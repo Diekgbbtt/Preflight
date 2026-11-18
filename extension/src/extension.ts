@@ -1,11 +1,8 @@
 import * as path from "node:path";
-import { execFile } from "node:child_process";
 import * as vscode from "vscode";
-import type { Config, SendRecord } from "@prompt-preflight/core";
-import { checkHealth, createProvider, mapError, resolveProfile } from "@prompt-preflight/core";
+import type { SendRecord } from "@prompt-preflight/core";
 import { CONSENT_VERSION, consentKey, consentMessage, parseConsent, type IncludeCode } from "./privacy";
-import { PromptPanel, showFeedbackError } from "./panel";
-import { readModelConfig } from "./modelSettings";
+import { PromptPanel } from "./panel";
 import { JsonlRepository } from "./repository";
 import { StudyLog } from "./studyLog";
 import { WorkspaceIndex } from "./workspace";
@@ -13,7 +10,7 @@ import { WorkspaceIndex } from "./workspace";
 export function activate(context: vscode.ExtensionContext): void {
   const workspace = new WorkspaceIndex();
   const log = new StudyLog(context.globalStorageUri);
-  const panel = new PromptPanel(context.extensionUri, workspace, log);
+  const panel = new PromptPanel(context.extensionUri, workspace, log, context.globalStorageUri);
 
   const storage = context.globalStorageUri.fsPath;
   const drafts = new JsonlRepository<Record<string, unknown>>(path.join(storage, "drafts.jsonl"));
@@ -23,9 +20,6 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Fire and forget: activation never waits on the answer.
   void ensureConsent(context);
-  const config = readModelConfig();
-  probeEffortSupport(config);
-  void checkActivationHealth(config);
 
   context.subscriptions.push(
     workspace,
@@ -70,39 +64,6 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {}
-
-/**
- * Activation health check for the quick profile: profile validation plus a
- * cheap CLI presence probe. Non-blocking and non-modal: it runs after
- * activation completes and reports through showFeedbackError, never a modal.
- * A first-call auth problem is not detectable here; the review path maps it.
- */
-async function checkActivationHealth(config: Config): Promise<void> {
-  try {
-    const profile = resolveProfile(config, "quick");
-    const provider = createProvider(profile, config);
-    const result = await checkHealth(provider, profile, config.claudePath);
-    if (!result.ok) showFeedbackError(result.error, () => void checkActivationHealth(readModelConfig()));
-  } catch (e) {
-    showFeedbackError(mapError(e), () => void checkActivationHealth(readModelConfig()));
-  }
-}
-
-/**
- * Read-only probe that confirms the installed CLI still exposes --effort.
- * Runs once at activation for Claude profiles only and never sends a model
- * call. A failed probe is silent here; missing-CLI health belongs to the
- * activation health check.
- */
-function probeEffortSupport(config: Config): void {
-  if (config.provider !== "claude") return;
-  execFile(config.claudePath, ["--help"], { timeout: 2000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
-    if (err || stdout.includes("--effort") || stderr.includes("--effort")) return;
-    void vscode.window.showWarningMessage(
-      "The Claude Code CLI does not support --effort, so promptPreflight.thinkingEffort will be ignored.",
-    );
-  });
-}
 
 /**
  * First-use consent. Shown only while no valid current-version record exists.

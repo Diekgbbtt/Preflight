@@ -9,7 +9,7 @@ export function shellQuote(s: string): string {
  * Hands the prompt to Claude Code. Each send starts a fresh interactive session,
  * which matches the one-shot setup of the user study.
  */
-export async function sendPrompt(text: string, cwd: string | undefined): Promise<string> {
+export async function sendPrompt(text: string, cwd: string | undefined, sessionId?: string, onClosed?: () => void): Promise<string> {
   const cfg = vscode.workspace.getConfiguration("promptPreflight");
   const to = cfg.get<string>("sendTo", "terminal");
   if (to === "clipboard") {
@@ -18,8 +18,15 @@ export async function sendPrompt(text: string, cwd: string | undefined): Promise
     return "clipboard";
   }
   const claude = cfg.get<string>("claudePath", "claude");
-  const terminal = vscode.window.createTerminal({ name: "Claude Code (Preflight)", cwd });
+  const terminal = vscode.window.createTerminal({
+    name: "Claude Code (Preflight)", cwd, shellPath: claude,
+    shellArgs: [...(sessionId ? ["--session-id", sessionId] : []), "--", text],
+  });
+  if (onClosed) {
+    const subscription = vscode.window.onDidCloseTerminal(closed => {
+      if (closed === terminal) { subscription.dispose(); onClosed(); }
+    });
+  }
   terminal.show();
-  terminal.sendText(`${claude} ${shellQuote(text)}`);
   return "terminal";
 }

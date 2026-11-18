@@ -1,0 +1,58 @@
+{
+  "measuredDate": "2026-11-18",
+  "baselineRef": "776dd9ad1571687af9cd55564b588e277c4c2b3c",
+  "model": "haiku",
+  "thinkingEffort": "medium",
+  "samples": [
+    {
+      "variant": "before",
+      "latencyMs": 9252,
+      "ok": true,
+      "scoreAvailable": true,
+      "inputTokens": 1302,
+      "outputTokens": 1350
+    },
+    {
+      "variant": "after",
+      "latencyMs": 5185,
+      "ok": true,
+      "scoreAvailable": true,
+      "inputTokens": 2046,
+      "outputTokens": 685
+    },
+    {
+      "variant": "before",
+      "latencyMs": 8054,
+      "ok": true,
+      "scoreAvailable": true,
+      "inputTokens": 1302,
+      "outputTokens": 1251
+    },
+    {
+      "variant": "after",
+      "latencyMs": 6055,
+      "ok": true,
+      "scoreAvailable": true,
+      "inputTokens": 2046,
+      "outputTokens": 759
+    },
+    {
+      "variant": "before",
+      "latencyMs": 6337,
+      "ok": true,
+      "scoreAvailable": true,
+      "inputTokens": 1302,
+      "outputTokens": 893
+    },
+    {
+      "variant": "after",
+      "latencyMs": 5422,
+      "ok": true,
+      "scoreAvailable": true,
+      "inputTokens": 2046,
+      "outputTokens": 718
+    }
+  ],
+  "beforeMedianMs": 8054,
+  "afterMedianMs": 5422
+}

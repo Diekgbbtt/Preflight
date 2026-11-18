@@ -1,32 +1,35 @@
+import { randomUUID } from "node:crypto";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import * as vscode from "vscode";
+import { JsonlRepository } from "./repository";
+import { migrateStudyLog, StudyRecorder, type StudyData, type StudyEventType, type StudyLinks } from "./studyEvents";
 
-/** Appends one JSON line per event to a local file. Only active when the user opts in. */
+/** Opt-in append-only study events. No read/modify/write of the growing log. */
 export class StudyLog {
-  constructor(private readonly storage: vscode.Uri) {}
-
-  get uri(): vscode.Uri {
-    return vscode.Uri.joinPath(this.storage, "study-log.jsonl");
+  private readonly repository: JsonlRepository<StudyData>;
+  private readonly recorder: StudyRecorder;
+  private migration?: Promise<void>;
+  constructor(private readonly storage: vscode.Uri) {
+    this.repository = new JsonlRepository(path.join(storage.fsPath, "study-events-v2.jsonl"));
+    this.recorder = new StudyRecorder(this.repository, { now: Date.now }, randomUUID);
   }
-
-  get enabled(): boolean {
-    return vscode.workspace.getConfiguration("promptPreflight").get<boolean>("studyLog.enabled", false);
-  }
-
-  async write(event: string, data: Record<string, unknown>): Promise<void> {
+  get uri(): vscode.Uri { return vscode.Uri.joinPath(this.storage, "study-events-v2.jsonl"); }
+  get enabled(): boolean { return vscode.workspace.getConfiguration("promptPreflight").get<boolean>("studyLog.enabled", false); }
+  async write(event: StudyEventType, links: StudyLinks, data: Record<string, unknown>): Promise<void> {
     if (!this.enabled) return;
+    if (!this.migration) this.migration = this.migrate().catch(e => { this.migration = undefined; throw e; });
+    await this.migration;
     const participant = vscode.workspace.getConfiguration("promptPreflight").get<string>("studyLog.participantId", "");
-    const line = JSON.stringify({ ts: new Date().toISOString(), event, participant, ...data }) + "\n";
-    await vscode.workspace.fs.createDirectory(this.storage);
-    let existing: Uint8Array = new Uint8Array();
-    try {
-      existing = await vscode.workspace.fs.readFile(this.uri);
-    } catch {
-      // first event
+    await this.recorder.write(event, links, data, participant);
+  }
+  private async migrate(): Promise<void> {
+    let text: string;
+    try { text = await fs.readFile(path.join(this.storage.fsPath, "study-log.jsonl"), "utf8"); }
+    catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") return; throw e; }
+    const existing = new Set((await this.repository.list()).events.map(e => e.id));
+    for (const event of migrateStudyLog(text).events) {
+      if (!existing.has(event.id)) await this.repository.append(event);
     }
-    const add = new TextEncoder().encode(line);
-    const next = new Uint8Array(existing.length + add.length);
-    next.set(existing);
-    next.set(add, existing.length);
-    await vscode.workspace.fs.writeFile(this.uri, next);
   }
 }

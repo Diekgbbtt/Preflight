@@ -20,14 +20,14 @@ Rule checks work without Claude Code. Model reviews and terminal sending require
 ## Write, review and send
 
 1. Name the target, concrete action, scope and expected result. For example: “In core/src/review.ts, add a test for malformed JSON. The test should assert that parsing throws; leave valid-response behavior unchanged.”
-2. Rules run on each input and show a score, notes and up to three questions.
-3. A quick review runs after a pause when the draft has at least five words, is not classified as trivial, and differs from the last quick-review draft.
-4. **Detailed feedback** requests a deeper review. **Use this prompt** replaces the draft with its suggestion. Fill in any square-bracket placeholders.
-5. **Send** or Cmd/Ctrl+Enter starts a fresh Claude Code terminal session, or copies the draft when configured. **Copy** copies directly without the Send confirmation or study-log event.
+2. Local rules highlight missing targets, vague actions, broad scope, unclear references, missing success criteria, placeholders, risks and possible secrets. Notes and questions settle after a short pause (300 ms by default); no model is called.
+3. The top status and Target/Action/Scope/Done checklist summarize these local checks. There is no automatic numeric model score.
+4. **Enhance** explicitly requests a model review and then a separate improved prompt when the review identifies questions. Unknown details remain `[placeholders]`. **Use this prompt** applies the suggestion; the draft otherwise stays unchanged.
+5. **Send** or Cmd/Ctrl+Enter starts a fresh Claude Code terminal process, or copies the exact draft. Send never starts model feedback. **Copy** copies directly without a study event.
 
-The displayed score comes from local rules. Model reviews add findings and a verdict; they do not change the numeric score. A high score is a heuristic, not evidence that the task will succeed.
+Send has no confirmation by default. With `gateSending` enabled, local warnings ask for confirmation. An absent model score never triggers a model request. Text changed while a confirmation is open is not sent as the previously approved draft. Empty prompts are ignored. The extension has no skip or trivial execution mode.
 
-Send asks for confirmation when local analysis requires clarification. The hook instead blocks such prompts. `[preflight:skip]` bypasses ambiguity checks, but detected secrets still require clarification. Empty prompts are ignored. Risk findings only gate below 80; a score below 65, an unfilled placeholder, or a non-concrete target without success criteria can also trigger clarification. Trivial commands receive a special 100-point classification, subject to secret detection.
+The separately installed hook retains its opt-in symbolic gate, skip marker and trivial classification. It cannot read VS Code settings.
 
 ## Settings
 
@@ -35,15 +35,17 @@ All settings below have the `promptPreflight.` prefix.
 
 | Setting | Default | Effect |
 |---|---|---|
-| `claudePath` | `claude` | CLI executable; review execution uses it directly, terminal sending inserts it into shell text |
+| `claudePath` | `claude` | CLI executable; review execution uses it directly, terminal sending launches it directly with argument arrays |
 | `provider` | `claude` | Review provider; Codex inference is not implemented |
 | `model` | `sonnet` | Fallback when a mode-specific model is empty |
 | `thinkingEffort` | `medium` | Passed through to the Claude CLI |
 | `context.includeCode` | `prompt-files` | Policy for new context consumers after consent; the current panel does not yet attach this code context |
 | `quickModel` | `haiku` | Quick-review model |
 | `deepModel` | `sonnet` | Detailed-review model |
-| `quickReviewOnPause` | `true` | Automatic quick reviews |
-| `pauseMs` | `1500` | Pause before a quick review; minimum 500 ms |
+| `quickReviewOnPause` | `false` | Deprecated and ignored; existing opt-ins cannot trigger model calls |
+| `feedbackPauseMs` | `300` | Pause before local advice updates; minimum 100 ms |
+| `gateSending` | `false` | Confirm when local warnings remain; never runs a model |
+| `scoreThreshold` | `65` | Compatibility threshold for an explicitly supplied model score; ordinary local checks have no numeric score |
 | `sendTo` | `terminal` | `terminal` or `clipboard` |
 | `studyLog.enabled` | `false` | Record send events locally |
 | `studyLog.participantId` | empty string | Participant label in each event |
@@ -57,7 +59,7 @@ To use local checks without automatic model calls:
 }
 ```
 
-Detailed feedback still calls the model when requested. Clipboard mode is useful for other agents and shells: terminal sending currently uses POSIX quoting and has no direct integration with Claude Code or Codex chat inputs.
+Enhance calls the model only when requested. Clipboard mode is useful for other agents and shells: terminal sending launches the executable directly and has no direct integration with Claude Code or Codex chat inputs.
 
 ## Data and logging
 
@@ -65,9 +67,11 @@ Rules run locally. A model review sends the draft, rule messages, top-level work
 
 Secret detection reports findings but does not redact the draft or prevent an automatic or requested review from receiving it. Do not treat it as a privacy boundary. See [the improvement plan](IMPROVEMENTS.md#privacy-before-context-expansion).
 
-When logging is enabled, Send writes an event even in clipboard mode. It records the full trimmed prompt, workspace name, participant, timestamp, target, scores, dimensions, rule IDs, drafting duration, review counts, whether the rewrite was used, and Preflight tokens/cost. It does not record execution outcomes or agent token usage. Copy alone produces no event.
+When logging is enabled, the exact sent draft goes to `sends.jsonl`. Linked study events go to `study-events-v2.jsonl` under VS Code extension global storage. Score/review events contain metadata and usage, with no repeated draft. First/final scores are completed model scores or null. A send without a review has no invented score/review observation. Copy alone produces no event.
 
-The file is `study-log.jsonl` under VS Code's extension global storage (`ExtensionContext.globalStorageUri`), outside the project. Run **Prompt Preflight: Open Study Log** to locate it after the first logged send. Disabling logging stops future events and does not delete existing data. To delete it, use the opened document's file path, then remove the file. Review prompt contents before sharing study data.
+Terminal sends assign an explicit Claude session ID. When that process closes, the exact session transcript supplies separate agent input, output, cache-read and cache-creation counters. Streaming snapshots with the same message ID count once. Context-size estimates are never used as execution consumption. Cost is null unless the transcript explicitly reports it. Clipboard sends cannot automatically identify an agent session. Missing transcripts produce an unavailable observation. Closing VS Code before the terminal finishes can prevent collection; restart recovery is not implemented.
+
+The old `study-log.jsonl` remains untouched. Its send events migrate once by deterministic line ID into the v2 log; symbolic scores are retained only as `legacyRuleScore`, never as first/final model scores. Run **Prompt Preflight: Open Study Log** to open the new file. Disabling logging stops future study events and leaves existing data in place. Send history is separate and can be cleared with **Clear History**. See [the schema](handoff/lane-3.md).
 
 ## Troubleshooting
 
@@ -75,9 +79,9 @@ The file is `study-log.jsonl` under VS Code's extension global storage (`Extensi
 |---|---|
 | CLI not found | Ensure the executable is visible to VS Code or set `claudePath`; use clipboard sending if needed |
 | Review fails | Check CLI login, model access and the reported error; local rule checks remain available |
-| No quick review | Check the setting, five-word minimum, trivial classification and whether that draft was already checked |
+| No automatic model review | Expected: use Enhance when you want model assistance |
 | Missing-file warning seems wrong | Check the open workspace; the filename index is capped at 20,000 files and excludes common generated directories |
-| Terminal command fails | Use a POSIX shell with the default executable name or select clipboard mode; executable paths containing spaces need improved handling |
+| Terminal command fails | Check `claudePath` points to a CLI executable; use clipboard mode for other integrations |
 | No study log | Enable logging, then Send; opening the panel or using Copy creates no event |
 
-Stale model output is dimmed, but its rewrite action is currently still available. Re-run detailed feedback after editing before using its rewrite.
+Stale model output is dimmed. Late responses from a previous draft are ignored.

@@ -2,8 +2,21 @@ import { randomUUID } from "node:crypto";
 import * as vscode from "vscode";
 import {
   ACTION_LABELS,
-  analyze,
-  checkHealth,
+  analyzeRules,
+  buildReviewRequest,
+  FeedbackService,
+  QUICK_PROMPT_VERSION,
+  parseDeepReview,
+  improvePrompt,
+  type DeepReview,
+  hashPrompt,
+  isFreshScore,
+  GatePolicy,
+  presentFeedback,
+  type ScoreReport,
+  type QuickReview,
+  type SendRecord,
+  type RuleReport,
   claudeCliRunner,
   createProvider,
   feedbackLogMessage,
@@ -11,13 +24,15 @@ import {
   isRetryable,
   mapError,
   resolveProfile,
-  review,
-  type Analysis,
   type FeedbackError,
-  type ModelProvider,
-  type Review,
   type ReviewMode,
 } from "@prompt-preflight/core";
+import * as path from "node:path";
+import { JsonlRepository } from "./repository";
+import { discoverCandidates } from "./sessionSlice";
+import { canonicalFolderUri } from "./sessionLocator";
+import { readAgentUsage } from "./agentUsage";
+import type { StudyLinks } from "./studyEvents";
 import { readModelConfig } from "./modelSettings";
 import { sendPrompt } from "./send";
 import type { StudyLog } from "./studyLog";
@@ -27,12 +42,16 @@ type FromWebview =
   | { type: "ready" }
   | { type: "input"; text: string }
   | { type: "deepReview" }
+  | { type: "enhance" }
   | { type: "useImproved" }
+  | { type: "improve" }
   | { type: "send" }
   | { type: "copy" };
 
 /** Per-draft numbers for the study log; reset after each send. */
 interface Draft {
+  id: string;
+  sendId: string;
   startedAt?: number;
   firstScore?: number;
   quickReviews: number;
@@ -43,31 +62,40 @@ interface Draft {
   usedImproved: boolean;
 }
 
-const newDraft = (): Draft => ({ quickReviews: 0, deepReviews: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, usedImproved: false });
+const newDraft = (): Draft => ({ id: randomUUID(), sendId: randomUUID(), quickReviews: 0, deepReviews: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, usedImproved: false });
 
 export class PromptPanel implements vscode.WebviewViewProvider {
   static readonly viewId = "promptPreflight.panel";
 
   private view?: vscode.WebviewView;
   private text = "";
-  private analysis?: Analysis;
+  private analysis?: RuleReport;
+  private score: ScoreReport | null = null;
+  private quick?: QuickReview;
+  private quickText = "";
+  private sending = false;
+  private quickPending?: { text: string; promise: Promise<ScoreReport | null> };
+  private readonly feedback = new FeedbackService({ now: Date.now });
+  private readonly sends: JsonlRepository<SendRecord>;
   private improved?: string;
+  private deep?: { text: string; review: DeepReview };
   private draft = newDraft();
   private pauseTimer?: NodeJS.Timeout;
-  private lastQuickText = "";
   private running: Partial<Record<ReviewMode, AbortController>> = {};
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly workspace: WorkspaceIndex,
     private readonly log: StudyLog,
-  ) {}
+    storage: vscode.Uri,
+    private readonly homeDir?: string,
+  ) { this.sends = new JsonlRepository(path.join(storage.fsPath, "sends.jsonl")); }
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
     view.webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "media")] };
     view.webview.html = this.html(view.webview);
-    view.webview.onDidReceiveMessage((m: FromWebview) => this.onMessage(m));
+    view.webview.onDidReceiveMessage((m: unknown) => this.onMessage(m));
     view.onDidChangeVisibility(() => view.visible && void this.workspace.refresh());
   }
 
@@ -86,7 +114,12 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     return vscode.workspace.getConfiguration("promptPreflight");
   }
 
-  private async onMessage(m: FromWebview): Promise<void> {
+  private async onMessage(value: unknown): Promise<void> {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    const candidate = value as Record<string, unknown>;
+    if (!["ready", "input", "enhance", "deepReview", "useImproved", "improve", "send", "copy"].includes(String(candidate.type))) return;
+    if (candidate.type === "input" && typeof candidate.text !== "string") return;
+    const m = candidate as FromWebview;
     switch (m.type) {
       case "ready":
         if (this.text) this.post({ type: "setText", text: this.text });
@@ -95,8 +128,15 @@ export class PromptPanel implements vscode.WebviewViewProvider {
       case "input":
         this.onInput(m.text);
         break;
+      case "enhance":
+        await this.runReview("deep");
+        await this.runImprove();
+        break;
       case "deepReview":
         await this.runReview("deep");
+        break;
+      case "improve":
+        await this.runImprove();
         break;
       case "useImproved":
         if (this.improved) {
@@ -114,99 +154,148 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     }
   }
 
-  // Tier 1: rules on every keystroke. Tier 2: small model when typing pauses.
+  // Local rules run on every input. Models run only for an explicit enhancement.
   private onInput(text: string): void {
     this.text = text;
-    if (text.trim() && this.draft.startedAt === undefined) this.draft.startedAt = Date.now();
-    this.analysis = analyze(text, this.workspace.context());
-    if (this.draft.firstScore === undefined && text.trim().split(/\s+/).length >= 3) {
-      this.draft.firstScore = this.analysis.score;
+    this.improved = undefined;
+    if (this.running.deep && !this.running.deep.signal.aborted) {
+      this.running.deep.abort();
+      this.post({ type: "reviewCancelled", mode: "deep" });
     }
-    this.post({ type: "analysis", text, analysis: this.analysis });
+    if (text.trim() && this.draft.startedAt === undefined) this.draft.startedAt = Date.now();
+    this.analysis = analyzeRules(text, this.workspace.context());
+    if (!isFreshScore(this.score, text)) this.post({ type: "score", text, state: this.score ? "stale" : "idle", score: null });
+    else this.post({ type: "score", text, state: "scored", score: this.score });
+    // Keep highlights instant; visible advice waits for a pause.
+    this.post({ type: "analysis", text, analysis: this.analysis, feedback: null });
 
     clearTimeout(this.pauseTimer);
     const abortedQuick = this.running.quick;
-    abortedQuick?.abort();
-    const words = text.trim().split(/\s+/).filter(Boolean).length;
-    const willStartQuick =
-      this.cfg().get<boolean>("quickReviewOnPause", true) &&
-      words >= 5 &&
-      this.analysis.level !== "trivial" &&
-      text !== this.lastQuickText;
-    if (!willStartQuick) {
-      // An aborted quick review has no replacement run, so it would spin
-      // forever. Close it with a terminal quiet state: no notification and no
-      // log, because this is a supersede cleanup, not a provider error.
-      if (abortedQuick) {
-        if (this.running.quick === abortedQuick) delete this.running.quick;
-        this.post({ type: "review", mode: "quick", text, error: "The request was cancelled." });
-      }
-      return;
+    if (abortedQuick && !abortedQuick.signal.aborted) {
+      abortedQuick.abort();
+      this.post({ type: "reviewCancelled", mode: "quick" });
     }
-    this.pauseTimer = setTimeout(() => void this.runReview("quick"), this.cfg().get<number>("pauseMs", 1500));
+    if (abortedQuick && this.running.quick === abortedQuick) delete this.running.quick;
+    // Local notes settle after a short pause; typing never schedules inference.
+    this.pauseTimer = setTimeout(() => this.postFeedback(), Math.max(100, this.cfg().get<number>("feedbackPauseMs", 300)));
   }
 
-  // Tier 3: detailed feedback on request.
-  private async runReview(mode: ReviewMode, attempt = 0): Promise<void> {
+  private postFeedback(): void {
+    if (!this.analysis) return;
+    const current = this.quickText === this.text ? this.quick : undefined;
+    this.post({ type: "analysis", text: this.text, analysis: this.analysis, feedback: presentFeedback(this.analysis, current) });
+  }
+
+  private links(draft = this.draft): StudyLinks { return { draftId: draft.id, sendId: draft.sendId, sessionId: null }; }
+
+  private async record(event: "send" | "score" | "review" | "agent-usage", links: StudyLinks, data: Record<string, unknown>): Promise<void> {
+    try { await this.log.write(event, links, data); }
+    catch { console.error("Preflight study log write failed"); }
+  }
+
+  private runReview(mode: ReviewMode, attempt = 0, signal?: AbortSignal): Promise<ScoreReport | null> {
+    if (mode !== "quick") return this.performReview(mode, attempt, signal);
+    if (this.quickPending?.text === this.text && !this.running.quick?.signal.aborted) {
+      const active = this.running.quick;
+      const abort = () => active?.abort();
+      const promise = this.quickPending.promise;
+      signal?.addEventListener("abort", abort, { once: true });
+      return promise.finally(() => signal?.removeEventListener("abort", abort));
+    }
     const text = this.text;
-    if (!text.trim()) return;
+    const promise = this.performReview(mode, attempt, signal);
+    this.quickPending = { text, promise };
+    void promise.finally(() => { if (this.quickPending?.promise === promise) this.quickPending = undefined; });
+    return promise;
+  }
+
+  // No per-request CLI health process: activation probes once; execution maps actual failures.
+  private async performReview(mode: ReviewMode, attempt = 0, signal?: AbortSignal): Promise<ScoreReport | null> {
+    const text = this.text;
+    const draft = this.draft;
+    if (!text.trim() || signal?.aborted) return null;
     this.running[mode]?.abort();
     const ctrl = new AbortController();
+    const abort = () => ctrl.abort();
+    signal?.addEventListener("abort", abort, { once: true });
     this.running[mode] = ctrl;
-    if (mode === "quick") this.lastQuickText = text;
-    this.post({ type: "reviewing", mode });
-
-    // The outer finally always clears this attempt's controller, including on
-    // the pre-call paths (provider factory throw, failed health check). A
-    // recursive timeout retry installs a new controller first, so this
-    // finally never deletes the retry's controller.
+    const started = Date.now();
+    if (mode === "deep") this.deep = undefined;
+    this.post({ type: "reviewing", mode, text });
+    if (mode === "quick") this.post({ type: "score", text, state: "scoring", score: null });
     try {
       const config = readModelConfig();
       const profile = resolveProfile(config, mode);
-      let provider: ModelProvider;
-      try {
-        provider = createProvider(profile, config);
-      } catch (e) {
-        this.reportError(mode, text, mapError(e));
-        return;
-      }
-
-      // Pre-review health check: profile validation plus CLI presence. Fails
-      // before the model call, so a failing check leaves no spinner for long.
-      const health = await checkHealth(provider, profile, config.claudePath);
-      if (!health.ok) {
-        if (ctrl.signal.aborted) return; // superseded by newer input
-        this.reportError(mode, text, health.error);
-        return;
-      }
-
+      const provider = createProvider(profile, config);
+      const validation = provider.validateProfile(profile);
+      if (!validation.ok) throw new Error(validation.message);
       const run = claudeCliRunner(config.claudePath, this.workspace.root, profile.thinkingEffort);
-      try {
-        const r: Review = await review(
-          text,
-          mode,
-          run,
-          profile.model,
-          { analysis: this.analysis, projectNotes: this.workspace.notes() },
-          ctrl.signal,
-        );
-        this.draft[mode === "quick" ? "quickReviews" : "deepReviews"]++;
-        this.draft.inputTokens += r.usage.inputTokens;
-        this.draft.outputTokens += r.usage.outputTokens;
-        this.draft.costUsd += r.usage.costUsd;
-        if (mode === "deep") this.improved = r.improvedPrompt;
-        this.post({ type: "review", mode, text, review: r });
-      } catch (e) {
-        if (ctrl.signal.aborted) return; // superseded by newer input
-        const error = mapError(e);
-        // One automatic retry, only for a transient timeout; the manual Retry
-        // action comes from showFeedbackError on the final failure.
-        if (isRetryable(error) && attempt === 0) return void this.runReview(mode, 1);
-        this.reportError(mode, text, error);
+      const context = { analysis: this.analysis, projectNotes: this.workspace.notes() };
+      const quick = mode === "quick" ? await this.feedback.quick(text, run, profile, context, ctrl.signal) : null;
+      const response = quick ? null : await run(buildReviewRequest(text, mode, profile.model, context), ctrl.signal);
+      if (ctrl.signal.aborted || text !== this.text || draft !== this.draft) return null;
+      const usage = quick?.usage ?? { inputTokens: response!.inputTokens, outputTokens: response!.outputTokens, costUsd: response!.costUsd };
+      const latencyMs = Date.now() - started;
+      draft[mode === "quick" ? "quickReviews" : "deepReviews"]++;
+      draft.inputTokens += usage.inputTokens;
+      draft.outputTokens += usage.outputTokens;
+      draft.costUsd += usage.costUsd;
+      const reviewId = randomUUID();
+      const links = { ...this.links(draft), reviewId };
+      const metadata = { ...profile, latencyMs, contextManifestHash: null, tokens: usage, cost: usage.costUsd, promptHash: hashPrompt(text) };
+      if (mode === "quick") {
+        this.quick = quick!;
+        this.quickText = text;
+        this.score = this.quick.score;
+        if (draft.firstScore === undefined && this.score) draft.firstScore = this.score.score;
+        this.post({ type: "score", text, state: this.score ? "scored" : "error", score: this.score });
+        this.postFeedback();
+        const feedback = presentFeedback(this.analysis!, this.quick);
+        this.post({ type: "review", mode, text, review: { issues: feedback.issues, questions: [], usage } });
+        await this.record("score", links, { ...metadata, scoreSource: "quick", promptVersion: QUICK_PROMPT_VERSION, scoreAvailable: !!quick!.score, score: quick!.score });
+      } else {
+        const deep = parseDeepReview(response!.text, text, { usage, latency: latencyMs });
+        this.deep = { text, review: deep };
+        this.post({ type: "review", mode, text, review: { ...deep, questions: deep.questions.map(q => q.question) } });
       }
+      await this.record("review", links, { ...metadata, mode, issueCount: quick?.issues.length });
+      return quick?.score ?? null;
+    } catch (e) {
+      if (ctrl.signal.aborted || text !== this.text || draft !== this.draft) return null;
+      const error = mapError(e);
+      if (isRetryable(error) && attempt === 0 && !signal) return this.performReview(mode, 1);
+      this.reportError(mode, text, error);
+      return null;
     } finally {
-      if (this.running[mode] === ctrl) delete this.running[mode];
+      signal?.removeEventListener("abort", abort);
+      if (this.running[mode] === ctrl) {
+        delete this.running[mode];
+        if (ctrl.signal.aborted) {
+          this.post({ type: "reviewCancelled", mode });
+          if (mode === "quick" && text === this.text) this.post({ type: "score", text, state: "idle", score: null });
+        }
+      }
     }
+  }
+
+  private async runImprove(): Promise<void> {
+    const deep = this.deep;
+    if (!deep || deep.text !== this.text || !deep.review.questions.length || this.running.deep) return;
+    const draft = this.draft;
+    const ctrl = new AbortController();
+    this.running.deep = ctrl;
+    try {
+      const config = readModelConfig();
+      const profile = resolveProfile(config, "deep");
+      const run = claudeCliRunner(config.claudePath, this.workspace.root, profile.thinkingEffort);
+      const improved = await improvePrompt(deep.text, deep.review, [], run, profile.model, { now: Date.now }, ctrl.signal);
+      if (ctrl.signal.aborted || deep.text !== this.text || draft !== this.draft || !improved) return;
+      this.improved = improved.text;
+      draft.inputTokens += improved.usage.inputTokens; draft.outputTokens += improved.usage.outputTokens; draft.costUsd += improved.usage.costUsd;
+      this.post({ type: "improved", text: deep.text, improved: improved.text });
+      await this.record("review", { ...this.links(draft), reviewId: randomUUID() }, { ...profile, mode: "improve", latencyMs: improved.latency, tokens: improved.usage, cost: improved.usage.costUsd, promptVersion: improved.promptVersion, promptHash: hashPrompt(deep.text) });
+    } catch (e) { if (!ctrl.signal.aborted) showFeedbackError(mapError(e), () => void this.runImprove()); }
+    finally { if (this.running.deep === ctrl) delete this.running.deep; }
   }
 
   /**
@@ -215,7 +304,7 @@ export class PromptPanel implements vscode.WebviewViewProvider {
    * action. No improved prompt and no review stats on failure.
    */
   private reportError(mode: ReviewMode, text: string, error: FeedbackError): void {
-    if (mode === "quick") this.lastQuickText = ""; // allow a later pause to retry
+    if (mode === "quick") this.post({ type: "score", text, state: "error", score: null });
     this.post({
       type: "review",
       mode,
@@ -225,51 +314,67 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     showFeedbackError(error, () => void this.runReview(mode));
   }
 
-  // Tier 4: hand the prompt to the coding agent.
   private async send(): Promise<void> {
-    const text = this.text.trim();
-    if (!text) return;
-    const a = analyze(text, this.workspace.context());
-    let sentAnyway = false;
-    if (a.shouldClarify) {
-      const secret = a.findings.some((f) => f.category === "privacy");
-      const choice = await vscode.window.showWarningMessage(
-        secret
-          ? "Your prompt seems to contain a secret. Send anyway?"
-          : "Your prompt still has open questions. The agent will have to guess. Send anyway?",
-        { modal: true },
-        "Send anyway",
-      );
-      if (choice !== "Send anyway") return;
-      sentAnyway = true;
-    }
-    const target = await sendPrompt(text, this.workspace.root);
-    const d = this.draft;
-    await this.log.write("send", {
-      workspace: vscode.workspace.name,
-      target,
-      prompt: text,
-      promptChars: text.length,
-      draftMs: d.startedAt ? Date.now() - d.startedAt : 0,
-      firstScore: d.firstScore ?? a.score,
-      finalScore: a.score,
-      finalLevel: a.level,
-      dimensions: a.dimensions,
-      rules: a.findings.map((f) => f.rule),
-      shouldClarify: a.shouldClarify,
-      sentAnyway,
-      quickReviews: d.quickReviews,
-      deepReviews: d.deepReviews,
-      usedImprovedPrompt: d.usedImproved,
-      preflightInputTokens: d.inputTokens,
-      preflightOutputTokens: d.outputTokens,
-      preflightCostUsd: d.costUsd,
-    });
-    this.draft = newDraft();
-    this.improved = undefined;
-    this.lastQuickText = "";
-    this.setText("");
-    this.post({ type: "sent" });
+    if (this.sending || !this.text.trim()) return;
+    this.sending = true;
+    clearTimeout(this.pauseTimer);
+    const text = this.text;
+    const draft = this.draft;
+    const rules = analyzeRules(text, this.workspace.context());
+    try {
+      const score = isFreshScore(this.score, text) ? this.score : null;
+      const decision = GatePolicy.decide(rules, score, {
+        gateSending: this.cfg().get<boolean>("gateSending", false),
+        threshold: this.cfg().get<number>("scoreThreshold", 65),
+        scoreRequired: false,
+      });
+      // Never hand off different text after an asynchronous review or modal.
+      if (this.text !== text || this.draft !== draft) return;
+      if (decision.action === "confirm") {
+        const choice = await vscode.window.showWarningMessage(decision.reasons.join(" ") + " Send anyway?", { modal: true }, "Send anyway");
+        if (choice !== "Send anyway" || this.text !== text || this.draft !== draft) return;
+      }
+      const sessionId = this.cfg().get<string>("sendTo", "terminal") === "terminal" ? randomUUID() : null;
+      const links = { ...this.links(draft), sessionId };
+      const sentAt = Date.now();
+      const cwd = this.workspace.root;
+      const target = await sendPrompt(text, cwd, sessionId ?? undefined,
+        sessionId && this.log.enabled ? () => { void this.captureAgentUsage(links, cwd); } : undefined);
+      try { await this.sends.append({ id: draft.sendId, ts: new Date(sentAt).toISOString(), draftId: draft.id,
+        folderUri: this.workspace.root ? vscode.Uri.file(this.workspace.root).toString() : "", text,
+        promptHash: hashPrompt(text), sessionId: sessionId ?? undefined, target: target as "terminal" | "clipboard" }); }
+      catch { void vscode.window.showWarningMessage("Prompt sent, but its local send record could not be saved."); }
+      await this.record("send", links, {
+        target, promptHash: hashPrompt(text), promptChars: text.length, draftMs: draft.startedAt ? sentAt - draft.startedAt : 0,
+        firstScore: draft.firstScore ?? null, finalScore: score?.score ?? null,
+        scoreAvailable: !!score, score: score?.score ?? null, scoreSource: score ? "quick" : null,
+        scoreProvider: score?.provider ?? null, scoreModel: score?.model ?? null, scoreThinkingEffort: score?.thinkingEffort ?? null,
+        rubricVersion: score?.rubricVersion ?? null, scoreAgeMs: score ? Math.max(0, sentAt - Date.parse(score.scoredAt)) : null,
+        sentAnyway: decision.action === "confirm", usedImprovedPrompt: draft.usedImproved, quickReviews: draft.quickReviews, deepReviews: draft.deepReviews,
+        preflightInputTokens: draft.inputTokens, preflightOutputTokens: draft.outputTokens, preflightCostUsd: draft.costUsd,
+        agentInputTokens: null, agentOutputTokens: null, agentCacheReadTokens: null, agentCacheCreationTokens: null, agentCostUsd: null,
+      });
+      this.running.quick?.abort(); this.running.deep?.abort();
+      // A user may have typed while send persistence was in flight.
+      if (this.text === text && this.draft === draft) {
+        this.draft = newDraft(); this.score = null; this.quick = undefined; this.quickText = ""; this.improved = undefined;
+        this.setText(""); this.post({ type: "sent" });
+      }
+    } finally { this.sending = false; }
+  }
+
+  private async captureAgentUsage(links: StudyLinks, cwd = this.workspace.root): Promise<void> {
+    if (!this.log.enabled || !cwd || !links.sessionId) return;
+    try {
+      const folderUri = vscode.Uri.file(cwd).toString();
+      const candidates = await discoverCandidates(folderUri, this.homeDir ?? (await import("node:os")).homedir());
+      const candidate = candidates.find(c => c.sessionId === links.sessionId && canonicalFolderUri(c.folderUri) === canonicalFolderUri(folderUri));
+      if (!candidate) {
+        await this.record("agent-usage", links, { usageAvailable: false, reason: "session-not-found" });
+        return;
+      }
+      await this.record("agent-usage", links, { provider: candidate.provider, ...await readAgentUsage(candidate.filePath), complete: true });
+    } catch { await this.record("agent-usage", links, { usageAvailable: false, reason: "transcript-unreadable" }); }
   }
 
   private html(webview: vscode.Webview): string {
@@ -285,9 +390,9 @@ export class PromptPanel implements vscode.WebviewViewProvider {
 <title>Prompt Preflight</title>
 </head>
 <body>
-  <div class="score">
+  <div class="score" title="Local heuristic checks; no model call while typing.">
     <div class="bar"><div class="fill" id="fill"></div></div>
-    <span id="level" class="level">Start typing</span>
+    <span id="level" class="level">Local checks · Start typing</span>
   </div>
   <div id="dims" class="dims"></div>
   <div class="editor">
@@ -296,13 +401,13 @@ export class PromptPanel implements vscode.WebviewViewProvider {
   </div>
   <div class="actions">
     <button id="send" title="Cmd/Ctrl+Enter">Send to Claude Code</button>
-    <button id="deep" class="secondary">Detailed feedback</button>
+    <button id="deep" class="secondary" title="Use the model to review and improve this draft">Enhance</button>
     <button id="copy" class="secondary icon" title="Copy prompt">Copy</button>
   </div>
   <section id="questions" hidden><h3>Questions to answer</h3><ul></ul></section>
   <section id="findings" hidden><h3>Notes</h3><ul></ul></section>
   <section id="quick" hidden><h3>Quick check <span class="tag">small model</span></h3><div class="body"></div></section>
-  <section id="deepOut" hidden><h3>Detailed feedback</h3><div class="body"></div></section>
+  <section id="deepOut" hidden><h3>Enhancement</h3><div class="body"></div></section>
   <script nonce="${nonce}" src="${media("panel.js")}"></script>
 </body>
 </html>`;
