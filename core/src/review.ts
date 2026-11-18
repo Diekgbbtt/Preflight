@@ -110,7 +110,18 @@ export function parseReview(prompt: string, mode: ReviewMode, res: ModelResponse
       };
     })
     .filter((i) => i.problem);
-  const questions = (Array.isArray(raw.questions) ? raw.questions : []).map(String).slice(0, 3);
+  // The legacy panel needs strings even when deep feedback returns question objects.
+  const questions = (Array.isArray(raw.questions) ? raw.questions : [])
+    .map((item: unknown) => {
+      if (typeof item === "string") return item;
+      if (mode === "deep" && item && typeof item === "object" && !Array.isArray(item)) {
+        const question = (item as Record<string, unknown>).question;
+        if (typeof question === "string") return question;
+      }
+      return "";
+    })
+    .filter((question) => question.trim() !== "")
+    .slice(0, 3);
   return {
     mode,
     verdict: raw.verdict === "ready" ? "ready" : "needs-work",

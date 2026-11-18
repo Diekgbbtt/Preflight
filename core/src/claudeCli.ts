@@ -104,7 +104,11 @@ function execClaude(
             missing.code = code;
             return reject(missing);
           }
-          const failure: Error & { code?: string | number } = new Error(stderr.trim() || err.message);
+          const failure: Error & { code?: string | number; killed?: boolean; signal?: string | null } =
+            new Error(stderr.trim() || err.message);
+          // execFile identifies a silent timeout through these fields, not its message.
+          failure.killed = err.killed;
+          failure.signal = err.signal;
           if (code !== undefined) failure.code = code;
           return reject(failure);
         }
