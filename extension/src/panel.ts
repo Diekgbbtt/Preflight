@@ -1,5 +1,24 @@
+import { randomUUID } from "node:crypto";
 import * as vscode from "vscode";
-import { analyze, claudeCliRunner, review, type Analysis, type Review, type ReviewMode } from "@prompt-preflight/core";
+import {
+  ACTION_LABELS,
+  analyze,
+  checkHealth,
+  claudeCliRunner,
+  createProvider,
+  feedbackLogMessage,
+  feedbackMessage,
+  isRetryable,
+  mapError,
+  resolveProfile,
+  review,
+  type Analysis,
+  type FeedbackError,
+  type ModelProvider,
+  type Review,
+  type ReviewMode,
+} from "@prompt-preflight/core";
+import { readModelConfig } from "./modelSettings";
 import { sendPrompt } from "./send";
 import type { StudyLog } from "./studyLog";
 import type { WorkspaceIndex } from "./workspace";
@@ -106,15 +125,29 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     this.post({ type: "analysis", text, analysis: this.analysis });
 
     clearTimeout(this.pauseTimer);
-    this.running.quick?.abort();
-    if (!this.cfg().get<boolean>("quickReviewOnPause", true)) return;
+    const abortedQuick = this.running.quick;
+    abortedQuick?.abort();
     const words = text.trim().split(/\s+/).filter(Boolean).length;
-    if (words < 5 || this.analysis.level === "trivial" || text === this.lastQuickText) return;
+    const willStartQuick =
+      this.cfg().get<boolean>("quickReviewOnPause", true) &&
+      words >= 5 &&
+      this.analysis.level !== "trivial" &&
+      text !== this.lastQuickText;
+    if (!willStartQuick) {
+      // An aborted quick review has no replacement run, so it would spin
+      // forever. Close it with a terminal quiet state: no notification and no
+      // log, because this is a supersede cleanup, not a provider error.
+      if (abortedQuick) {
+        if (this.running.quick === abortedQuick) delete this.running.quick;
+        this.post({ type: "review", mode: "quick", text, error: "The request was cancelled." });
+      }
+      return;
+    }
     this.pauseTimer = setTimeout(() => void this.runReview("quick"), this.cfg().get<number>("pauseMs", 1500));
   }
 
   // Tier 3: detailed feedback on request.
-  private async runReview(mode: ReviewMode): Promise<void> {
+  private async runReview(mode: ReviewMode, attempt = 0): Promise<void> {
     const text = this.text;
     if (!text.trim()) return;
     this.running[mode]?.abort();
@@ -123,30 +156,73 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     if (mode === "quick") this.lastQuickText = text;
     this.post({ type: "reviewing", mode });
 
-    const model = this.cfg().get<string>(mode === "quick" ? "quickModel" : "deepModel", mode === "quick" ? "haiku" : "sonnet");
-    const run = claudeCliRunner(this.cfg().get<string>("claudePath", "claude"), this.workspace.root);
+    // The outer finally always clears this attempt's controller, including on
+    // the pre-call paths (provider factory throw, failed health check). A
+    // recursive timeout retry installs a new controller first, so this
+    // finally never deletes the retry's controller.
     try {
-      const r: Review = await review(
-        text,
-        mode,
-        run,
-        model,
-        { analysis: this.analysis, projectNotes: this.workspace.notes() },
-        ctrl.signal,
-      );
-      this.draft[mode === "quick" ? "quickReviews" : "deepReviews"]++;
-      this.draft.inputTokens += r.usage.inputTokens;
-      this.draft.outputTokens += r.usage.outputTokens;
-      this.draft.costUsd += r.usage.costUsd;
-      if (mode === "deep") this.improved = r.improvedPrompt;
-      this.post({ type: "review", mode, text, review: r });
-    } catch (e) {
-      if (ctrl.signal.aborted) return; // superseded by newer input
-      if (mode === "quick") this.lastQuickText = ""; // allow a retry
-      this.post({ type: "review", mode, text, error: (e as Error).message });
+      const config = readModelConfig();
+      const profile = resolveProfile(config, mode);
+      let provider: ModelProvider;
+      try {
+        provider = createProvider(profile, config);
+      } catch (e) {
+        this.reportError(mode, text, mapError(e));
+        return;
+      }
+
+      // Pre-review health check: profile validation plus CLI presence. Fails
+      // before the model call, so a failing check leaves no spinner for long.
+      const health = await checkHealth(provider, profile, config.claudePath);
+      if (!health.ok) {
+        if (ctrl.signal.aborted) return; // superseded by newer input
+        this.reportError(mode, text, health.error);
+        return;
+      }
+
+      const run = claudeCliRunner(config.claudePath, this.workspace.root, profile.thinkingEffort);
+      try {
+        const r: Review = await review(
+          text,
+          mode,
+          run,
+          profile.model,
+          { analysis: this.analysis, projectNotes: this.workspace.notes() },
+          ctrl.signal,
+        );
+        this.draft[mode === "quick" ? "quickReviews" : "deepReviews"]++;
+        this.draft.inputTokens += r.usage.inputTokens;
+        this.draft.outputTokens += r.usage.outputTokens;
+        this.draft.costUsd += r.usage.costUsd;
+        if (mode === "deep") this.improved = r.improvedPrompt;
+        this.post({ type: "review", mode, text, review: r });
+      } catch (e) {
+        if (ctrl.signal.aborted) return; // superseded by newer input
+        const error = mapError(e);
+        // One automatic retry, only for a transient timeout; the manual Retry
+        // action comes from showFeedbackError on the final failure.
+        if (isRetryable(error) && attempt === 0) return void this.runReview(mode, 1);
+        this.reportError(mode, text, error);
+      }
     } finally {
       if (this.running[mode] === ctrl) delete this.running[mode];
     }
+  }
+
+  /**
+   * Degraded reporting: post the fixed message and error code to the webview
+   * (which clears the loading state), keep the rule analysis, and surface one
+   * action. No improved prompt and no review stats on failure.
+   */
+  private reportError(mode: ReviewMode, text: string, error: FeedbackError): void {
+    if (mode === "quick") this.lastQuickText = ""; // allow a later pause to retry
+    this.post({
+      type: "review",
+      mode,
+      text,
+      error: feedbackMessage(error).message,
+    });
+    showFeedbackError(error, () => void this.runReview(mode));
   }
 
   // Tier 4: hand the prompt to the coding agent.
@@ -231,4 +307,36 @@ export class PromptPanel implements vscode.WebviewViewProvider {
 </body>
 </html>`;
   }
+}
+
+/**
+ * User-facing feedback error surfacing (#42): one fixed message, one action,
+ * no stack trace. Logs only the correlation id and the error code; never the
+ * message, cause, prompt, or stderr.
+ */
+export function showFeedbackError(error: FeedbackError, retry?: () => void): void {
+  console.error(feedbackLogMessage(error, randomUUID()));
+  const label = ACTION_LABELS[error.action];
+  void vscode.window.showWarningMessage(feedbackMessage(error).message, label).then((choice) => {
+    if (choice !== label) return;
+    switch (error.action) {
+      case "open-settings":
+        void vscode.commands.executeCommand("workbench.action.openSettings", "promptPreflight");
+        break;
+      case "install-cli":
+        void vscode.env.openExternal(vscode.Uri.parse("https://code.claude.com/docs/en/overview"));
+        break;
+      case "fix-permissions":
+        void vscode.commands.executeCommand("workbench.action.openSettings", "promptPreflight.claudePath");
+        break;
+      case "reduce-context":
+        void vscode.commands.executeCommand("workbench.action.openSettings", "promptPreflight.context.includeCode");
+        break;
+      case "retry":
+        retry?.();
+        break;
+      case "dismiss":
+        break;
+    }
+  });
 }

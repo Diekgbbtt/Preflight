@@ -20,7 +20,8 @@
     "commands": [
       { "command": "promptPreflight.focus", "title": "Open", "category": "Prompt Preflight" },
       { "command": "promptPreflight.checkSelection", "title": "Check Selected Text", "category": "Prompt Preflight" },
-      { "command": "promptPreflight.openStudyLog", "title": "Open Study Log", "category": "Prompt Preflight" }
+      { "command": "promptPreflight.openStudyLog", "title": "Open Study Log", "category": "Prompt Preflight" },
+      { "command": "promptPreflight.clearHistory", "title": "Clear History", "category": "Prompt Preflight" }
     ],
     "menus": {
       "editor/context": [{ "command": "promptPreflight.checkSelection", "when": "editorHasSelection", "group": "9_cutcopypaste" }]
@@ -32,8 +33,24 @@
       "title": "Prompt Preflight",
       "properties": {
         "promptPreflight.claudePath": { "type": "string", "default": "claude", "description": "Path to the Claude Code CLI." },
-        "promptPreflight.quickModel": { "type": "string", "default": "haiku", "description": "Model for the quick check when you pause typing." },
-        "promptPreflight.deepModel": { "type": "string", "default": "sonnet", "description": "Model for detailed feedback." },
+        "promptPreflight.provider": {
+          "type": "string",
+          "enum": ["claude", "codex"],
+          "default": "claude",
+          "description": "Model provider for preflight checks. Codex is not implemented yet; use claude."
+        },
+        "promptPreflight.model": {
+          "type": "string",
+          "default": "sonnet",
+          "description": "Fallback model used when the quick or deep model override is empty."
+        },
+        "promptPreflight.thinkingEffort": {
+          "type": "string",
+          "default": "medium",
+          "description": "Provider-native thinking effort passed to the inference request. Claude Code accepts low, medium, high, xhigh, or max."
+        },
+        "promptPreflight.quickModel": { "type": "string", "default": "haiku", "description": "Model for the quick check when you pause typing. Empty falls back to promptPreflight.model, then haiku." },
+        "promptPreflight.deepModel": { "type": "string", "default": "sonnet", "description": "Model for detailed feedback. Empty falls back to promptPreflight.model, then sonnet." },
         "promptPreflight.quickReviewOnPause": { "type": "boolean", "default": true, "description": "Run the quick model check when you stop typing. Uses your Claude account." },
         "promptPreflight.pauseMs": { "type": "number", "default": 1500, "minimum": 500, "description": "Milliseconds without typing before the quick check runs." },
         "promptPreflight.sendTo": {
@@ -41,18 +58,35 @@
           "enumDescriptions": ["Start Claude Code in a new terminal with the prompt.", "Copy the prompt, e.g. to paste into the Claude Code chat panel."]
         },
         "promptPreflight.studyLog.enabled": { "type": "boolean", "default": false, "description": "Log prompts, scores, timings and Preflight token use to a local file for the user study." },
-        "promptPreflight.studyLog.participantId": { "type": "string", "default": "", "description": "Participant ID written to the study log." }
+        "promptPreflight.studyLog.participantId": { "type": "string", "default": "", "description": "Participant ID written to the study log." },
+        "promptPreflight.context.includeCode": {
+          "type": "string",
+          "enum": ["off", "prompt-files", "workspace"],
+          "default": "prompt-files",
+          "description": "Which code may be sent to the model provider after secret redaction. Your draft and Q&A answers are always sent.",
+          "enumDescriptions": [
+            "No workspace code, diagnostics or session code is sent.",
+            "Only files referenced with @ in the draft are sent.",
+            "Every non-excluded workspace file may be sent."
+          ]
+        }
       }
     }
   },
   "scripts": {
-    "build": "esbuild src/extension.ts --bundle --platform=node --target=node18 --format=cjs --external:vscode --outfile=dist/extension.js",
+    "build": "esbuild src/extension.ts --bundle --platform=node --target=node18 --format=cjs --external:vscode --outfile=dist/extension.js && node scripts/copy-rg.mjs",
     "watch": "npm run build -- --watch",
     "package": "npm run build && vsce package --no-dependencies"
   },
   "devDependencies": {
     "@prompt-preflight/core": "*",
     "@types/vscode": "~1.90.0",
+    "@vscode/ripgrep": "^1.18.0",
     "@vscode/vsce": "^3.2.0"
+  },
+  "dependencies": {
+    "vscode-jsonrpc": "^10.0.0",
+    "vscode-languageserver-protocol": "^3.18.5",
+    "vscode-languageserver-types": "^3.18.5"
   }
 }

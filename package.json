@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit -p .",
     "test": "vitest run",
     "build": "npm run build -w extension && npm run build -w hook",
+    "e2e": "npm run build && node e2e/run.mjs",
     "package": "npm run package -w extension"
   },
   "devDependencies": {

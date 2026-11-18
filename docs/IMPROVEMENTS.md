@@ -1,5 +1,7 @@
 # Improvement suggestions
 
+Status note (2026-11-18): this is the original review snapshot, not a live issue-status report. PRs #51 and #52 have since merged the control-plane foundation and fixed canonical file-boundary checks, legacy deep-question rendering and timeout metadata. See [the current architecture](ARCHITECTURE.md) and [lane handoff](handoff/lane-1.md) before treating a recommendation below as unimplemented.
+
 Reviewed against local source and 47 open GitHub issues on 2026-11-16. This is a prioritized review, not an implementation claim or replacement issue tracker. [#28](https://github.com/Diekgbbtt/Preflight/issues/28) describes the target architecture; individual issue contracts and native dependency links should be rechecked before implementation.
 
 ## Protect the draft and make failures recoverable

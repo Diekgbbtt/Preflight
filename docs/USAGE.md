@@ -1,6 +1,6 @@
 # Using Prompt Preflight
 
-This guide describes the current prototype. Planned capabilities are listed in [improvement suggestions](IMPROVEMENTS.md).
+This guide describes the active panel after PRs #51 and #52. The [architecture guide](ARCHITECTURE.md) distinguishes the merged control-plane components from pending panel integration.
 
 ## Install and open
 
@@ -36,6 +36,10 @@ All settings below have the `promptPreflight.` prefix.
 | Setting | Default | Effect |
 |---|---|---|
 | `claudePath` | `claude` | CLI executable; review execution uses it directly, terminal sending inserts it into shell text |
+| `provider` | `claude` | Review provider; Codex inference is not implemented |
+| `model` | `sonnet` | Fallback when a mode-specific model is empty |
+| `thinkingEffort` | `medium` | Passed through to the Claude CLI |
+| `context.includeCode` | `prompt-files` | Policy for new context consumers after consent; the current panel does not yet attach this code context |
 | `quickModel` | `haiku` | Quick-review model |
 | `deepModel` | `sonnet` | Detailed-review model |
 | `quickReviewOnPause` | `true` | Automatic quick reviews |
@@ -57,7 +61,7 @@ Detailed feedback still calls the model when requested. Clipboard mode is useful
 
 ## Data and logging
 
-Rules run locally. A model review sends the draft, rule messages, top-level workspace entry names and up to eight recently changed file names through the Claude CLI. The context builder does not explicitly attach file contents or session transcripts. The CLI receives `--tools ""`, `--setting-sources ""` and a custom system prompt; canonical instruction-file isolation is a planned improvement, not a verified privacy guarantee.
+Rules run locally. A model review sends the draft, rule messages, top-level workspace entry names and up to eight recently changed file names through the Claude CLI. The active panel does not explicitly attach file contents or session transcripts. The separate context assembler, redaction, canonical file resolver and session readers have merged, but their panel integration is pending. The CLI receives `--tools ""`, `--setting-sources ""` and a custom system prompt; canonical instruction-file isolation is a planned improvement, not a verified privacy guarantee.
 
 Secret detection reports findings but does not redact the draft or prevent an automatic or requested review from receiving it. Do not treat it as a privacy boundary. See [the improvement plan](IMPROVEMENTS.md#privacy-before-context-expansion).
 

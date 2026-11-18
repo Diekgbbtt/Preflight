@@ -1,6 +1,6 @@
 # Current architecture
 
-This is a source-based description of the prototype, not the target design in [issue #28](https://github.com/Diekgbbtt/Preflight/issues/28).
+This describes the active panel and the control-plane foundation merged through PRs #51 and #52. The remaining integration follows [issue #28](https://github.com/Diekgbbtt/Preflight/issues/28).
 
 ## Packages and boundaries
 
@@ -36,4 +36,14 @@ The hook reads one JSON object from stdin (`prompt`, optional `cwd`). It checks 
 
 Target, Action, Scope and Done each contribute up to 25 points. Non-trivial levels are clear at 80+, needs-work at 55–79, and vague below 55. The clarification threshold and exceptions are separate from these display levels; see [usage](USAGE.md). Model verdicts are separate from rule scores.
 
-Current review parsing tolerates JSON fences and surrounding text. A future strict versioned model score schema is tracked in [#40](https://github.com/Diekgbbtt/Preflight/issues/40); it is not implemented here. Planned providers, persistent sessions, context manifests and instruction loading are likewise roadmap items, not current APIs.
+The legacy panel review parser tolerates JSON fences and surrounding text. Structured deep questions are adapted to strings for that panel. The separate versioned schema in `core/src/schema.ts` validates model dimension scores and defines quick review, deep review and improved-prompt contracts. The panel still displays rule scores and uses the legacy review path.
+
+## Merged control-plane foundation
+
+- `core/src/model.ts` resolves provider/model/effort profiles. Claude is implemented; Codex inference remains a stub. The panel uses the resolved profile and CLI health checks, then calls the legacy Claude runner. CLI timeout metadata is retained for classification and retry.
+- `core/src/context.ts` assembles bounded context with a manifest and injected redaction. Prompt-file resolution checks canonical workspace and target paths, including symlinks, before permitting reads.
+- `extension/src/privacy.ts` defines consent, inclusion policy and secret redaction. Activation prompts for consent; consumers must use the consent-adjusted policy.
+- `extension/src/repository.ts` implements JSONL persistence. Activation creates repositories and a Clear History command, but the panel does not yet persist drafts, Q&A, reviews or sends through them.
+- Language/code tools support VS Code providers and bundled ripgrep fallback. Session modules discover and parse bounded Claude and Codex transcript slices.
+
+These context, persistence and session components are exercised through unit tests and the E2E facade. They are not yet wired into the normal panel review flow. Instruction loading and durable feedback-service orchestration remain follow-up work. See [the authoritative lane handoff](handoff/lane-1.md) for the implemented contracts and integration seams.
