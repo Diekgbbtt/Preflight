@@ -95,6 +95,13 @@ The same directory holds:
 Quick and deep review records share `reviews.jsonl`.
 The derived `SessionSlice` is stored inside the review record. There is no `slices.jsonl`.
 
+The repository creates each file on its first append, including the global storage directory.
+
+The current panel does not append draft, question, review, or send records yet.
+It writes only the opt-in study log (`study-log.jsonl`) on send.
+The four JSONL interfaces above are the control-plane contract for the panel integration in #43, #46, and #47.
+Without the Claude CLI, the health check returns `provider-missing`; no review runs and no review record is created.
+
 ### Machine-agnostic setting
 
 The machine-agnostic seam is `context.globalStorageUri`.
