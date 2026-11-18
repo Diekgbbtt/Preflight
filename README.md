@@ -4,20 +4,29 @@ Preflight (working name) gives feedback on coding-agent prompts before they're s
 
 Vague prompts make agents guess, loop and spend tokens. Preflight checks the prompt while the user writes it, asks for missing goals, context and success criteria, and only then hands it to Claude Code. Users write a prompt the agent can solve in one run, and learn what a complete prompt looks like.
 
+## Documentation
+
+- [Install, settings, workflow and troubleshooting](docs/USAGE.md)
+- [Current architecture and data flow](docs/ARCHITECTURE.md)
+- [Contributing and validation](CONTRIBUTING.md)
+- [Prioritized improvement suggestions and linked GitHub issues](docs/IMPROVEMENTS.md)
+
+The linked guides describe the current prototype separately from the planned architecture in [issue #28](https://github.com/Diekgbbtt/Preflight/issues/28).
+
 ## Cheap checks first
 
 | Tier | When | What | Cost |
 |---|---|---|---|
 | 1. Rules | every keystroke | `core/src/analyze.ts`: highlights, score, questions | free |
-| 2. Small model | typing pauses (1.5 s) | Haiku looks for gaps the rules missed | ~$0.0004 |
-| 3. Detailed feedback | on request | Sonnet explains each issue, suggests an improved prompt with `[placeholders]` | ~$0.02 |
+| 2. Small model | typing pauses (1.5 s) | Haiku looks for gaps the rules missed | CLI-reported usage; varies |
+| 3. Detailed feedback | on request | Sonnet explains each issue, suggests an improved prompt with `[placeholders]` | CLI-reported usage; varies |
 | 4. Send | button / Cmd+Enter | Claude Code starts in a terminal with the prompt | agent tokens |
 
-Tiers 2 and 3 run through `claude -p` with the user's own Claude login: no API key, no tools, no project settings.
+Tiers 2 and 3 run through `claude -p` with the user's own Claude login: no API key needed. The adapter disables tools and setting sources; see [data handling and limitations](docs/USAGE.md#data-and-logging).
 
 ## Score
 
-Four parts, 25 points each: **Target** (file, function, component), **Action** (concrete change, not "improve"), **Scope** (bounded, one task), **Done when** (expected behaviour or test). Below 65, or with secrets, unfilled placeholders or risky work, the prompt "should clarify": Send asks for confirmation, the hook blocks.
+Four parts, 25 points each: **Target** (file, function, component), **Action** (concrete change, not "improve"), **Scope** (bounded, one task), **Done when** (expected behaviour or test). The clarification decision also considers placeholders, secrets, risk and missing target/success criteria; it is separate from the displayed level. Send asks for confirmation; the hook blocks. See the [exact behavior](docs/USAGE.md#write-review-and-send).
 
 Rule ideas borrowed (MIT) from [akg268/prompt-preflight](https://github.com/akg268/prompt-preflight) (gate on ambiguity, at most three questions, `[preflight:skip]`, calibration corpus) and [preflight-dev/preflight](https://github.com/preflight-dev/preflight) (four-part score, vague verbs and pronouns, candidate files in questions).
 
@@ -63,7 +72,7 @@ Blocks vague prompts typed directly into Claude Code and shows the questions ins
 }
 ```
 
-Add `[preflight:skip]` to a prompt to send it as is. On any error the hook lets the prompt through.
+Add `[preflight:skip]` to bypass ambiguity checks; detected secrets still require clarification. On any error the hook lets the prompt through.
 
 ## User study
 
