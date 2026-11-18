@@ -8,30 +8,51 @@ Vague prompts make agents guess, loop and spend tokens. Preflight checks the pro
 
 | Tier | When | What | Cost |
 |---|---|---|---|
-| 1. Rules | every keystroke | `core/src/analyze.ts`: highlights, score, questions | free |
-| 2. Small model | typing pauses (1.5 s) | Haiku looks for gaps the rules missed | ~$0.0004 |
-| 3. Detailed feedback | on request | Sonnet explains each issue, suggests an improved prompt with `[placeholders]` | ~$0.02 |
-| 4. Send | button / Cmd+Enter | Claude Code starts in a terminal with the prompt | agent tokens |
+| 1. Rules | every keystroke | `core/src/analyze.ts`: highlights, rule findings, a deterministic pre-check score, and questions | free |
+| 2. Quick review | after a typing pause | one model call that returns the four-dimension score, issues, and questions; this is the only model score | provider tokens |
+| 3. Deep review | on request | issues, questions, assumptions, and context gaps; never a score | provider tokens |
+| 4. Improved prompt | after a deep review with a question | a separate rewrite that leaves unknown details as `[placeholders]` | provider tokens |
+| 5. Send | button / Cmd+Enter | Claude Code starts in a terminal with the prompt, or the prompt is copied | agent tokens |
 
-Tiers 2 and 3 run through `claude -p` with the user's own Claude login: no API key, no tools, no project settings.
+Tiers 2 to 4 run through `claude -p` with the user's own Claude login: no API key, no tools, no project settings. The provider layer is ready for a Codex adapter.
 
 ## Score
 
-Four parts, 25 points each: **Target** (file, function, component), **Action** (concrete change, not "improve"), **Scope** (bounded, one task), **Done when** (expected behaviour or test). Below 65, or with secrets, unfilled placeholders or risky work, the prompt "should clarify": Send asks for confirmation, the hook blocks.
+Two scores have different jobs.
 
-Rule ideas borrowed (MIT) from [akg268/prompt-preflight](https://github.com/akg268/prompt-preflight) (gate on ambiguity, at most three questions, `[preflight:skip]`, calibration corpus) and [preflight-dev/preflight](https://github.com/preflight-dev/preflight) (four-part score, vague verbs and pronouns, candidate files in questions).
+- The **rule pre-check** is free and immediate. It scores Target, Action, Scope, and Done when, 25 points each. A score below 65, or a secret, unfilled placeholder, or risky work, marks the prompt "should clarify": the hook blocks it, and Send asks for confirmation.
+- The **quick review score** is model-scored and asynchronous. It returns a `ScoreReport` with the four dimensions, a 0-100 total, and a level: `clear` at 80 or more, `needs-work` at 55 or more, `vague` below 55. It records the provider, model, thinking effort, rubric version, and prompt hash. This is the only model score.
+- A **deep review never scores**. It returns issues, questions, assumptions, and context gaps. The improved prompt is a separate action, enabled only when the deep review asked at least one question.
+
+Quick and deep reviews keep at most 20 issues and 20 questions. A question has at most 3 options.
+
+Rule ideas borrowed (MIT) from [akg268/prompt-preflight](https://github.com/akg268/prompt-preflight) (gate on ambiguity, question lists, `[preflight:skip]`, calibration corpus) and [preflight-dev/preflight](https://github.com/preflight-dev/preflight) (four-part score, vague verbs and pronouns, candidate files in questions).
 
 ## Layout
 
 ```
-core/       rule engine + model review, plain TypeScript, no VS Code dependency
-  src/patterns.ts    word lists and regexes
-  src/analyze.ts     rules, score, questions
-  src/review.ts      prompts for the model tiers, JSON parsing
-  src/claudeCli.ts   runs a model call via `claude -p`
-  test/corpus.jsonl  reviewed prompts with expected results
-extension/  VS Code extension: side panel, workspace index, send, study log
+core/       control plane, plain TypeScript, no VS Code dependency
+  src/analyze.ts: rule checks and the rule pre-check score
+  src/schema.ts: review schemas, rubric, score parser
+  src/model.ts: provider profiles and the provider factory
+  src/claudeCli.ts: Claude Code CLI adapter
+  src/context.ts: bounded context assembler and manifest
+  src/promptFiles.ts: explicit @ file references
+  src/review.ts: review prompt builders
+  src/repository.ts: JSONL event repository
+  src/errors.ts: feedback error taxonomy
+  test/corpus.jsonl: rule cases
+  test/review-corpus.jsonl: review cases
+extension/  VS Code client: panel, workspace and language tools, sessions, send, study log
+  src/panel.ts: webview panel and review flow
+  src/sessionSlice.ts: bounded Claude and Codex session reader
+  src/sessionLocator.ts: session selection
+  src/codeTools.ts: agent tools over LSP types
+  src/vscodeCodeTools.ts: VS Code LSP adapter and bundled rg
+  src/privacy.ts: consent and redaction
+  src/repository.ts: storage composition
 hook/       Claude Code UserPromptSubmit hook (rules only)
+e2e/        VS Code extension-host walkthroughs
 ```
 
 ## Develop
@@ -47,7 +68,7 @@ npm run package       # extension/prompt-preflight-0.1.0.vsix
 Run the extension: open this folder in VS Code, press F5 (launch config "Run Extension").
 Install the build: `code --install-extension extension/prompt-preflight-0.1.0.vsix`.
 
-Found a wrong result? Add a line to `core/test/corpus.jsonl` and make it pass.
+Found a wrong result? Add a rule case to `core/test/corpus.jsonl` or a review case to `core/test/review-corpus.jsonl`, then make the test pass.
 
 ## Claude Code hook
 
