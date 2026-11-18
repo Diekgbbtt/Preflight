@@ -2,6 +2,7 @@
 // text, apply #41's privacy predicate, and describe the result. Token caps,
 // budget and manifest bookkeeping live in the core assembler.
 import * as vscode from "vscode";
+import { realpath } from "node:fs/promises";
 import {
   SOURCE_PRIORITIES,
   estimateTokens,
@@ -97,11 +98,11 @@ export function createPromptFilesSource(deps: PromptFilesSourceDeps): ContextSou
         } catch {
           return false;
         }
-      });
+      }, realpath);
 
       const resolvedPolicy: IncludePolicy = { ...deps.policy, promptFiles: resolution.files.map((file) => file.path) };
       const allowed = resolution.files.filter((file) => shouldInclude(file.path, "prompt-file", resolvedPolicy));
-      const excluded = resolution.files.length - allowed.length;
+      const excluded = resolution.excluded.length + resolution.files.length - allowed.length;
 
       const readText =
         deps.readText ?? ((uri: vscode.Uri) => vscode.workspace.openTextDocument(uri).then((document) => document.getText()));

@@ -59,7 +59,7 @@ export async function assembleContext(input: AssembleInput): Promise<ContextBund
       return false;
     }
   };
-  const resolution = await resolvePromptFileRefs(refs, roots, exists);
+  const resolution = await resolvePromptFileRefs(refs, roots, exists, fs.realpath);
   const policy = { includeCode: input.includeCode, promptFiles: resolution.files.map((file) => file.path) };
   const sources = [
     createPromptFilesSource({

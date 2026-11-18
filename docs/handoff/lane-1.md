@@ -91,7 +91,7 @@ When this document conflicts with a per-ticket section, this section wins.
 - `SOURCE_PRIORITIES`: `prompt-files` 80, `git-diff` 50, `diagnostics` 45, `symbols` 40, `references` 39, `definitions` 38, `workspace-symbols` 37, `test-command` 30.
 - `selection`, `active-editor`, and `open-editors` are removed.
 - `findPromptFileRefs(text)` returns unique `PromptFileRef` records in prompt order. It accepts `@src/a.ts`, `@./src/a.ts`, `@src\\a.ts`, and quoted paths with spaces. It ignores emails, decorators, npm scopes without an extension, bare paths, and directories.
-- `resolvePromptFileRefs(refs, roots, exists, pathApi?)` resolves across roots. It reports `missing`, `outside`, `ambiguous`, and `duplicate`; an ambiguous reference is never guessed.
+- `resolvePromptFileRefs(refs, roots, exists, realPath, pathApi?)` resolves across roots. `realPath` is an injected canonical-path resolver (Node `fs.realpath` in production). Both the original path and canonical target must pass exclusions; targets outside the canonical root are rejected before reading. It reports `missing`, `outside`, `ambiguous`, `excluded`, and `duplicate`; an ambiguous reference is never guessed.
 - `buildPromptFilesResult(input)` reads only allowed files. It counts `files`, `dropped`, `missing`, `ambiguous`, `excluded`, `duplicate`, and `unreadable`.
 - `createPromptFilesSource({ folders, policy, draft, readText? })` is the only prompt-file collector.
 - The source checks policy before reading. An excluded file is never opened.

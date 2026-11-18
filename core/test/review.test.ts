@@ -235,6 +235,21 @@ describe("review", () => {
     expect(r.usage.costUsd).toBe(0.001);
   });
 
+  it("adapts structured deep questions for the legacy panel and ignores malformed entries", async () => {
+    const run: ModelRunner = async () => ({
+      text: JSON.stringify({
+        questions: [
+          { question: "Which file?", why: "Find the target", options: ["a.ts"] },
+          null, {}, 42, { question: false }, { question: "   " },
+          "What should happen?",
+        ],
+      }),
+      inputTokens: 10, outputTokens: 5, costUsd: 0,
+    });
+    const result = await review("Fix login", "deep", run, "sonnet");
+    expect(result.questions).toEqual(["Which file?", "What should happen?"]);
+  });
+
   it("throws on replies without JSON", () => {
     expect(() => extractJson("sorry, no")).toThrow();
   });

@@ -35,6 +35,7 @@ export interface PromptFileResolution {
   missing: string[];
   outside: string[];
   ambiguous: string[];
+  excluded: string[];
   duplicate: number;
 }
 
@@ -48,19 +49,22 @@ export interface PromptFileContent {
 /**
  * Resolves @ references across workspace roots. A reference that exists in
  * more than one root is ambiguous and is never guessed. Paths that leave a
- * root, absolute paths, and drive-letter paths are outside. Duplicate resolved
+ * root (including through symlinks), absolute paths, and drive-letter paths are outside.
+ * Both the reference and canonical target must pass file exclusions. Duplicate resolved
  * files are counted, not repeated.
  */
 export async function resolvePromptFileRefs(
   refs: string[],
   roots: WorkspaceRoot[],
   exists: (fsPath: string) => Promise<boolean>,
+  realPath: (fsPath: string) => Promise<string>,
   pathApi: Pick<typeof path, "resolve" | "relative" | "isAbsolute" | "sep"> = path,
 ): Promise<PromptFileResolution> {
   const files: ResolvedPromptFile[] = [];
   const missing: string[] = [];
   const outside: string[] = [];
   const ambiguous: string[] = [];
+  const excluded: string[] = [];
   const seen = new Set<string>();
   let duplicate = 0;
 
@@ -72,20 +76,41 @@ export async function resolvePromptFileRefs(
     }
 
     const matches: Array<{ root: WorkspaceRoot; fsPath: string; path: string }> = [];
+    let rejectedOutside = false;
+    let rejectedExcluded = false;
     for (const root of roots) {
       const candidate = pathApi.resolve(root.fsPath, normalized);
       const relative = pathApi.relative(root.fsPath, candidate);
       if (relative === "" || relative.startsWith("..") || pathApi.isAbsolute(relative)) continue;
       if (!(await exists(candidate))) continue;
-      matches.push({
-        root,
-        fsPath: candidate,
-        path: relative.split(pathApi.sep).join("/").replace(/\\/g, "/"),
-      });
+      // Resolve both ends: lexical containment does not constrain symlink targets.
+      let canonicalRoot: string;
+      let canonicalFile: string;
+      try {
+        [canonicalRoot, canonicalFile] = await Promise.all([realPath(root.fsPath), realPath(candidate)]);
+      } catch {
+        continue; // An unreadable or dangling target is never safe to include.
+      }
+      const targetRelative = pathApi.relative(canonicalRoot, canonicalFile);
+      const targetPath = targetRelative.split(pathApi.sep).join("/").replace(/\\/g, "/");
+      if (targetRelative === "" || pathApi.isAbsolute(targetRelative) || isOutsideWorkspace(targetPath)) {
+        rejectedOutside = true;
+        continue;
+      }
+      if (
+        !shouldInclude(normalized, "workspace", { includeCode: "workspace" }) ||
+        !shouldInclude(targetPath, "workspace", { includeCode: "workspace" })
+      ) {
+        rejectedExcluded = true;
+        continue;
+      }
+      matches.push({ root, fsPath: canonicalFile, path: targetPath });
     }
 
     if (matches.length === 0) {
-      missing.push(ref);
+      if (rejectedOutside) outside.push(ref);
+      else if (rejectedExcluded) excluded.push(ref);
+      else missing.push(ref);
       continue;
     }
     if (matches.length > 1) {
@@ -104,7 +129,7 @@ export async function resolvePromptFileRefs(
     files.push({ ref, path: match.path, fsPath: match.fsPath, folderUri: match.root.uri });
   }
 
-  return { files, missing, outside, ambiguous, duplicate };
+  return { files, missing, outside, ambiguous, excluded, duplicate };
 }
 
 /** What the source needs from the resolver and the reader. */
