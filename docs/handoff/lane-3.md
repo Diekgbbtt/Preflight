@@ -83,7 +83,23 @@ On the first enabled write, legacy `study-log.jsonl` lines are read and passed t
 
 Each terminal launch uses an explicit `--session-id` and runs the Claude executable directly with argument arrays (paths with spaces are supported). When the process exits/closes, the reader selects only that exact workspace/session. It streams transcript rows and retains only usage metadata. Assistant snapshots sharing `message.id` replace earlier snapshots; counters are summed once per message. Cache read/creation tokens stay separate from uncached input. `SessionSlice.tokens` is never used.
 
-No explicit transcript cost means null, not an estimate based on model pricing. Clipboard sends have no automatic agent session association. A missing/unreadable session produces an unavailable observation rather than guessing from recency. Closing VS Code before the agent terminates can lose the follow-up event; persistent watcher recovery is not implemented. A user who continues chatting in the same terminal session will contribute those turns to that one session's usage, matching the one-prompt/one-session study assumption.
+No explicit transcript cost means null, not an estimate based on model pricing. Clipboard sends have no automatic agent session association. A missing/unreadable session produces an unavailable observation rather than guessing from recency. Persistent recovery now resumes pending collection after restart; see the follow-up below. A user who continues chatting in the same terminal session will contribute those turns to that one session's usage, matching the one-prompt/one-session study assumption.
+
+## Lane-3 follow-up: durable agent usage recovery (#1, #45)
+
+Implemented on 2026-11-19. This follow-up stays within lane 3. Connecting Enhance to workspace artifacts, Q&A and instruction files remains with lane 2 (#46, #15, #48); those features were not changed here.
+
+- `AgentUsageRecovery` persists a prompt-free tracking intent in `agent-usage-pending.jsonl` before terminal handoff. Jobs carry the original draft/send/session/folder IDs and participant label. A failed handoff cancels the intent.
+- Activation reconstructs jobs from disk. A background retry runs every 30 seconds, including when no panel is open. Previous opt-in terminal sends are joined with the durable send records to seed missing jobs; unlogged, clipboard, cancelled and already-completed sends are excluded.
+- Reads target the exact Claude project directory and session filename, using the shared project-path encoding. Invalid session IDs are rejected; no recency fallback and no LLM call exist in the recovery path.
+- A terminal close persists exit evidence before reading usage. Launch metadata (`PREFLIGHT_AGENT_SESSION_ID`, with argument-array fallback) lets a restored terminal attach its close event to a known job. Both the original callback and activation listener may fire; the serialized collector handles them idempotently.
+- Recovered snapshots are `complete: false` until exit is confirmed. A quiet file or an absent terminal handle is not evidence of completion. If restored terminal metadata is unavailable, usage still recovers but remains partial. Missing, malformed/empty and unreadable transcripts remain retryable, even after a known exit.
+- `agent-usage` events have `observation: "cumulative-snapshot"`, `recovered`, and `complete`. Join by `sendId`, then use the latest available observation (highest sequence), preferring a confirmed complete observation; never sum snapshots. Input/output/cache counters remain separate from Preflight usage and `SessionSlice.tokens`.
+- Snapshot IDs are derived from send ID and observed counters/completion state. `StudyLog.writeOnce` serializes ID checks and appends. If the host stops after the study append but before the job checkpoint, recovery reuses that event ID and finishes the checkpoint without duplicating the observation.
+- The original participant label is persisted on the job. Changing the current setting does not relabel a recovered send. Logging off prevents transcript reads and study writes; exit evidence can still be checkpointed. Re-enabling logging resumes pending jobs.
+- Terminal sending and local-first typing behavior are unchanged. No deep-context, Q&A, panel-protocol, benchmark, or other-lane implementation is included.
+
+Verification: `npm run typecheck`, `npm test` (586 passed), and `npm run e2e` (13 scenarios passed; the command builds extension and hook). Recovery tests cover collector recreation from disk, growing/missing transcripts, opt-out and opt-out races, write/checkpoint failures, duplicate recovery, exact-session association, historical opt-in sends, failed handoff cancellation and participant changes. E13 runs persisted collector/log recreation inside a real VS Code extension host; it simulates losing in-memory state rather than restarting the entire VS Code application.
 
 ## Latency
 

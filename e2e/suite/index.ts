@@ -5,6 +5,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { AgentUsageRecovery, terminalSessionId } from "../../extension/src/agentUsageRecovery";
 import { PromptPanel } from "../../extension/src/panel";
 import { StudyLog } from "../../extension/src/studyLog";
 import type { WorkspaceIndex } from "../../extension/src/workspace";
@@ -303,6 +304,41 @@ fs.writeFileSync(path.join(${JSON.stringify(transcriptDir)}, sessionId + '.jsonl
     for (const [key, value] of Object.entries(previous)) await config.update(key, value, vscode.ConfigurationTarget.Global);
     await config.update("claudePath", oldCli, vscode.ConfigurationTarget.Global);
     if (process.env.PREFLIGHT_E2E_KEEP !== "1") await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("E13: usage recovery survives recreated services without duplicated counters", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-e2e-recovery-"));
+  const config = vscode.workspace.getConfiguration("promptPreflight");
+  const oldEnabled = config.inspect("studyLog.enabled")?.globalValue;
+  try {
+    await config.update("studyLog.enabled", true, vscode.ConfigurationTarget.Global);
+    const home = path.join(dir, "home");
+    const storage = vscode.Uri.file(dir);
+    const links = { draftId: "restart-draft", sendId: "restart-send", sessionId: "restart-session" };
+    const options = { storagePath: dir, homeDir: home };
+    const original = new AgentUsageRecovery({ ...options, log: new StudyLog(storage) });
+    await original.track(links, folderUri());
+    const project = workspaceRoot().replace(/[^A-Za-z0-9_-]/g, "-");
+    const transcriptDir = path.join(home, ".claude", "projects", project);
+    await fs.mkdir(transcriptDir, { recursive: true });
+    await fs.writeFile(path.join(transcriptDir, "restart-session.jsonl"), JSON.stringify({ type: "assistant", message: { id: "message", usage: { input_tokens: 30, output_tokens: 9, cache_read_input_tokens: 200, cache_creation_input_tokens: 50 } } }) + "\n");
+    // New log and collector instances must reconstruct all state from disk.
+    const afterRestart = new AgentUsageRecovery({ ...options, log: new StudyLog(storage) });
+    await afterRestart.recover(); await afterRestart.recover();
+    let rows = await new StudyLog(storage).getEvents();
+    assert.equal(rows.length, 1); assert.equal(rows[0].complete, false);
+    assert.equal(rows[0].agentInputTokens, 30); assert.equal(rows[0].agentOutputTokens, 9);
+    const restoredId = terminalSessionId({ env: { PREFLIGHT_AGENT_SESSION_ID: links.sessionId } });
+    assert.equal(restoredId, links.sessionId);
+    await afterRestart.closeSession(restoredId!);
+    await new AgentUsageRecovery({ ...options, log: new StudyLog(storage) }).recover();
+    rows = await new StudyLog(storage).getEvents();
+    assert.equal(rows.length, 2); assert.equal(rows[1].complete, true);
+    assert.equal(rows[1].sendId, links.sendId); assert.equal(rows[1].agentCacheReadTokens, 200);
+  } finally {
+    await config.update("studyLog.enabled", oldEnabled, vscode.ConfigurationTarget.Global);
+    await fs.rm(dir, { recursive: true, force: true });
   }
 });
 

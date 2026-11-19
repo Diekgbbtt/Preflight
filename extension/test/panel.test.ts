@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { hashPrompt } from "@prompt-preflight/core";
+import type { AgentUsageRecovery } from "../src/agentUsageRecovery";
 import { PromptPanel } from "../src/panel";
 import type { WorkspaceIndex } from "../src/workspace";
 import { StudyLog } from "../src/studyLog";
@@ -15,7 +16,12 @@ const platform = vi.hoisted(() => {
     workspace: { getConfiguration: () => ({ get: (key: string, fallback: unknown) => settings[key] ?? fallback }) },
     env: { clipboard: { writeText: vi.fn(async () => {}) }, openExternal: vi.fn() },
     commands: { executeCommand: vi.fn() },
-    window: { showWarningMessage: vi.fn(async () => "Send anyway"), showInformationMessage: vi.fn() },
+    window: {
+      showWarningMessage: vi.fn<() => Promise<string | undefined>>(async () => "Send anyway"),
+      showErrorMessage: vi.fn(), showInformationMessage: vi.fn(),
+      createTerminal: vi.fn(() => ({ show: vi.fn() })),
+      onDidCloseTerminal: vi.fn(() => ({ dispose: vi.fn() })),
+    },
   };
 });
 vi.mock("vscode", () => ({ ...platform, default: platform }));
@@ -31,12 +37,13 @@ beforeEach(async () => {
   platform.settings.sendTo = "clipboard";
   platform.settings.quickReviewOnPause = true; // Even a legacy opt-in must not start inference.
   platform.env.clipboard.writeText.mockClear(); platform.window.showWarningMessage.mockClear();
+  platform.window.createTerminal.mockClear(); platform.window.showErrorMessage.mockClear();
   const cli = path.join(dir, "fake-claude");
   await writeFile(cli, '#!/usr/bin/env node\nprocess.stdin.resume();process.stdin.on("end",()=>console.log(JSON.stringify({result:JSON.stringify(process.argv.join(" ").includes("improvedPrompt")?{improvedPrompt:"Add greet to [target]"}:process.argv.join(" ").includes("contextGaps")?{issues:[],questions:[{question:"Which target?",why:"Locate the change",options:[]}],assumptions:[],contextGaps:[]}:{dimensions:{target:25,action:25,scope:25,done:25},issues:[],questions:[]}),usage:{input_tokens:12,output_tokens:7},total_cost_usd:0.002})));\n');
   await chmod(cli, 0o755);
   platform.settings.claudePath = cli;
   events = []; messages = [];
-  const log = { enabled: true, write: async (event: string, links: unknown, data: unknown) => { events.push({ event, ...links as object, ...data as object }); } } as unknown as StudyLog;
+  const log = { enabled: true, participant: "", getEvents: async () => events, writeOnce: async (event: string, links: unknown, data: unknown, id: string) => { if (!events.some(e => e.id === id)) events.push({ event, ...links as object, ...data as object, id }); return true; }, write: async (event: string, links: unknown, data: unknown) => { events.push({ event, ...links as object, ...data as object }); } } as unknown as StudyLog;
   const uri = platform.Uri.file(dir) as vscode.Uri;
   panel = new PromptPanel(uri, { root: dir, context: () => ({}), notes: () => "" } as unknown as WorkspaceIndex, log, uri, path.join(dir, "home"));
   panel.resolveWebviewView({ webview: { options: {}, cspSource: "", asWebviewUri: () => "", postMessage: (m: unknown) => messages.push(m), onDidReceiveMessage: (fn: typeof receive) => { receive = fn; } }, onDidChangeVisibility: () => {} } as unknown as vscode.WebviewView);
@@ -139,6 +146,59 @@ it("does not send a draft edited while confirmation is open", async () => {
   expect(platform.env.clipboard.writeText).not.toHaveBeenCalled();
   expect(events.some(e => e.event === "send")).toBe(false);
 });
+
+it("publishes local advice even when a fast Send is declined", async () => {
+  vi.useFakeTimers();
+  try {
+    platform.settings.gateSending = true;
+    platform.window.showWarningMessage.mockResolvedValueOnce(undefined);
+    panel.setText("Improve it");
+    await receive({ type: "send" });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(messages.filter(m => m.type === "analysis").at(-1).feedback.findings.length).toBeGreaterThan(0);
+    expect(messages.filter(m => m.type === "sending").at(-1).busy).toBe(false);
+    expect(platform.env.clipboard.writeText).not.toHaveBeenCalled();
+  } finally { vi.useRealTimers(); }
+});
+
+it("cancels the pending session when the draft changes during tracking and tracks the next send", async () => {
+  platform.settings.sendTo = "terminal";
+  const recovery = (panel as unknown as { usageRecovery: AgentUsageRecovery }).usageRecovery;
+  const track = recovery.track.bind(recovery);
+  vi.spyOn(recovery, "track").mockImplementationOnce(async (...args) => {
+    const tracked = await track(...args);
+    panel.setText("A new draft");
+    return tracked;
+  });
+  panel.setText("Original draft");
+  await receive({ type: "send" });
+  expect(platform.window.createTerminal).not.toHaveBeenCalled();
+  await receive({ type: "send" });
+  expect(platform.window.createTerminal).toHaveBeenCalledOnce();
+  const jobs = (await readFile(path.join(dir, "agent-usage-pending.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
+  expect(jobs.map(job => job.state)).toEqual(["pending", "cancelled", "pending"]);
+  expect(jobs[0].sessionId).not.toBe(jobs[2].sessionId);
+});
+
+it("preserves text typed during clipboard handoff and assigns the next send its own ID", async () => {
+  platform.env.clipboard.writeText.mockImplementationOnce(async () => { panel.setText("Next draft"); });
+  panel.setText("First draft");
+  await receive({ type: "send" });
+  expect(messages.filter(m => m.type === "setText").at(-1).text).toBe("Next draft");
+  await receive({ type: "send" });
+  const sends = events.filter(e => e.event === "send");
+  expect(new Set(sends.map(e => e.sendId)).size).toBe(2);
+  expect(platform.env.clipboard.writeText.mock.calls).toEqual([["First draft"], ["Next draft"]]);
+});
+
+it("reports malformed rewrites inline and retains the draft and review", async () => {
+  panel.setText("Improve it");
+  await receive({ type: "deepReview" });
+  await writeFile(platform.settings.claudePath as string, '#!/usr/bin/env node\nprocess.stdin.resume();process.stdin.on("end",()=>console.log(JSON.stringify({result:"not JSON"})));\n');
+  await receive({ type: "improve" });
+  expect(messages.filter(m => m.type === "rewriteError").at(-1)).toMatchObject({ text: "Improve it", error: expect.stringContaining("unreadable") });
+  expect(messages.filter(m => m.type === "setText").at(-1).text).toBe("Improve it");
+});
 it("resumes legacy migration without importing the same line again", async () => {
   platform.settings["studyLog.enabled"] = true;
   await writeFile(path.join(dir, "study-log.jsonl"), JSON.stringify({ event: "send", ts: "2026-11-18T00:00:00Z", prompt: "old", finalScore: 95 }) + "\n");
@@ -159,4 +219,15 @@ it("Enhance explicitly reviews and rewrites without changing the draft until app
   expect(messages.filter(m => m.type === "setText").at(-1).text).toBe("Improve the greeting");
   await receive({ type: "useImproved" });
   expect(messages.filter(m => m.type === "setText").at(-1).text).toBe("Add greet to [target]");
+});
+
+it("serializes concurrent duplicate usage writes and deduplicates them after restart", async () => {
+  platform.settings["studyLog.enabled"] = true;
+  const storage = platform.Uri.file(dir) as vscode.Uri;
+  const links = { draftId: "d", sendId: "s", sessionId: "session" };
+  const study = new StudyLog(storage);
+  await Promise.all(Array.from({ length: 5 }, () => study.writeOnce("agent-usage", links, { agentInputTokens: 5 }, "stable-usage", "original")));
+  await new StudyLog(storage).writeOnce("agent-usage", links, { agentInputTokens: 5 }, "stable-usage", "new-label");
+  const rows = await new StudyLog(storage).getEvents();
+  expect(rows).toHaveLength(1); expect(rows[0].participant).toBe("original");
 });

@@ -81,7 +81,7 @@ The hook is a separate, opt-in rule-only policy. It cannot read VS Code settings
 
 ## User study
 
-Enable `promptPreflight.studyLog.enabled` and set `promptPreflight.studyLog.participantId`. Append-only `study-events-v2.jsonl` links send, quick score, review, agent usage and outcome events by draft/send/session IDs. Model observations supply first/final scores; unavailable scores stay null. The exact sent draft is stored once in `sends.jsonl`. Preflight tokens stay separate from agent input/output/cache counters, collected from the exact Claude session when its terminal closes. Unreported agent cost stays null. Clipboard sends have no automatic agent attribution.
+Enable `promptPreflight.studyLog.enabled` and set `promptPreflight.studyLog.participantId`. Append-only `study-events-v2.jsonl` links send, quick score, review, agent usage and outcome events by draft/send/session IDs. Model observations supply first/final scores; unavailable scores stay null. The exact sent draft is stored once in `sends.jsonl`. Preflight tokens stay separate from agent input/output/cache counters. Pending collection survives restart and samples the exact Claude session; terminal exit confirms the final observation. Unreported agent cost stays null. Clipboard sends have no automatic agent attribution. Recovery observations are cumulative snapshots: use the latest available observation per send, never sum them.
 
 Legacy `study-log.jsonl` sends migrate without treating their symbolic scores as model scores. Run *Prompt Preflight: Open Study Log* to open the new log. See [schema, migration and verification](docs/handoff/lane-3.md).
 

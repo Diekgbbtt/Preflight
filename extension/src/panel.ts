@@ -19,6 +19,7 @@ import {
   type RuleReport,
   claudeCliRunner,
   createProvider,
+  extractJson,
   feedbackLogMessage,
   feedbackMessage,
   isRetryable,
@@ -29,9 +30,7 @@ import {
 } from "@prompt-preflight/core";
 import * as path from "node:path";
 import { JsonlRepository } from "./repository";
-import { discoverCandidates } from "./sessionSlice";
-import { canonicalFolderUri } from "./sessionLocator";
-import { readAgentUsage } from "./agentUsage";
+import { AgentUsageRecovery } from "./agentUsageRecovery";
 import type { StudyLinks } from "./studyEvents";
 import { readModelConfig } from "./modelSettings";
 import { sendPrompt } from "./send";
@@ -74,9 +73,12 @@ export class PromptPanel implements vscode.WebviewViewProvider {
   private quick?: QuickReview;
   private quickText = "";
   private sending = false;
+  private enhancing = false;
+  private revision = 0;
   private quickPending?: { text: string; promise: Promise<ScoreReport | null> };
   private readonly feedback = new FeedbackService({ now: Date.now });
   private readonly sends: JsonlRepository<SendRecord>;
+  private readonly usageRecovery: AgentUsageRecovery;
   private improved?: string;
   private deep?: { text: string; review: DeepReview };
   private draft = newDraft();
@@ -88,8 +90,12 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     private readonly workspace: WorkspaceIndex,
     private readonly log: StudyLog,
     storage: vscode.Uri,
-    private readonly homeDir?: string,
-  ) { this.sends = new JsonlRepository(path.join(storage.fsPath, "sends.jsonl")); }
+    homeDir?: string,
+    usageRecovery?: AgentUsageRecovery,
+  ) {
+    this.sends = new JsonlRepository(path.join(storage.fsPath, "sends.jsonl"));
+    this.usageRecovery = usageRecovery ?? new AgentUsageRecovery({ storagePath: storage.fsPath, log, homeDir });
+  }
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
@@ -97,11 +103,16 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     view.webview.html = this.html(view.webview);
     view.webview.onDidReceiveMessage((m: unknown) => this.onMessage(m));
     view.onDidChangeVisibility(() => view.visible && void this.workspace.refresh());
+    const settings = vscode.workspace.onDidChangeConfiguration?.(event => {
+      if (event.affectsConfiguration("promptPreflight.sendTo")) this.postSendTarget();
+    });
+    view.onDidDispose?.(() => settings?.dispose());
   }
 
   /** Put text into the prompt box, e.g. from an editor selection. */
   setText(text: string): void {
-    this.text = text;
+    // The textarea exposes LF even when editor selections use CRLF.
+    text = text.replace(/\r\n?/g, "\n");
     this.post({ type: "setText", text });
     this.onInput(text);
   }
@@ -114,14 +125,23 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     return vscode.workspace.getConfiguration("promptPreflight");
   }
 
+  private sendTarget(): SendRecord["target"] {
+    return this.cfg().get<string>("sendTo", "terminal") === "clipboard" ? "clipboard" : "terminal";
+  }
+
+  private postSendTarget(): void {
+    this.post({ type: "sendTarget", target: this.sendTarget() });
+  }
+
   private async onMessage(value: unknown): Promise<void> {
     if (!value || typeof value !== "object" || Array.isArray(value)) return;
     const candidate = value as Record<string, unknown>;
-    if (!["ready", "input", "enhance", "deepReview", "useImproved", "improve", "send", "copy"].includes(String(candidate.type))) return;
+    if (typeof candidate.type !== "string" || !["ready", "input", "enhance", "deepReview", "useImproved", "improve", "send", "copy"].includes(candidate.type)) return;
     if (candidate.type === "input" && typeof candidate.text !== "string") return;
     const m = candidate as FromWebview;
     switch (m.type) {
       case "ready":
+        this.postSendTarget();
         if (this.text) this.post({ type: "setText", text: this.text });
         this.onInput(this.text);
         break;
@@ -129,8 +149,7 @@ export class PromptPanel implements vscode.WebviewViewProvider {
         this.onInput(m.text);
         break;
       case "enhance":
-        await this.runReview("deep");
-        await this.runImprove();
+        await this.enhance();
         break;
       case "deepReview":
         await this.runReview("deep");
@@ -145,8 +164,12 @@ export class PromptPanel implements vscode.WebviewViewProvider {
         }
         break;
       case "copy":
-        await vscode.env.clipboard.writeText(this.text);
-        void vscode.window.showInformationMessage("Prompt copied.");
+        if (this.text.trim()) {
+          try {
+            await vscode.env.clipboard.writeText(this.text);
+            this.post({ type: "copied" });
+          } catch { void vscode.window.showErrorMessage("Could not copy the prompt. Try again."); }
+        }
         break;
       case "send":
         await this.send();
@@ -156,6 +179,7 @@ export class PromptPanel implements vscode.WebviewViewProvider {
 
   // Local rules run on every input. Models run only for an explicit enhancement.
   private onInput(text: string): void {
+    if (this.text !== text) this.revision++;
     this.text = text;
     this.improved = undefined;
     if (this.running.deep && !this.running.deep.signal.aborted) {
@@ -193,6 +217,17 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     catch { console.error("Preflight study log write failed"); }
   }
 
+  private async enhance(): Promise<void> {
+    if (this.enhancing || this.running.deep || this.sending || !this.text.trim()) return;
+    const revision = this.revision;
+    this.enhancing = true;
+    this.improved = undefined;
+    try {
+      await this.runReview("deep");
+      if (revision === this.revision && !this.sending) await this.runImprove();
+    } finally { this.enhancing = false; }
+  }
+
   private runReview(mode: ReviewMode, attempt = 0, signal?: AbortSignal): Promise<ScoreReport | null> {
     if (mode !== "quick") return this.performReview(mode, attempt, signal);
     if (this.quickPending?.text === this.text && !this.running.quick?.signal.aborted) {
@@ -209,7 +244,7 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     return promise;
   }
 
-  // No per-request CLI health process: activation probes once; execution maps actual failures.
+  // Execution reports provider failures on the explicit review path.
   private async performReview(mode: ReviewMode, attempt = 0, signal?: AbortSignal): Promise<ScoreReport | null> {
     const text = this.text;
     const draft = this.draft;
@@ -234,6 +269,12 @@ export class PromptPanel implements vscode.WebviewViewProvider {
       const quick = mode === "quick" ? await this.feedback.quick(text, run, profile, context, ctrl.signal) : null;
       const response = quick ? null : await run(buildReviewRequest(text, mode, profile.model, context), ctrl.signal);
       if (ctrl.signal.aborted || text !== this.text || draft !== this.draft) return null;
+      if (response) {
+        const payload = extractJson(response.text) as Partial<DeepReview> | null;
+        if (!payload || !Array.isArray(payload.issues) || !Array.isArray(payload.questions)) {
+          throw new SyntaxError("Invalid review JSON");
+        }
+      }
       const usage = quick?.usage ?? { inputTokens: response!.inputTokens, outputTokens: response!.outputTokens, costUsd: response!.costUsd };
       const latencyMs = Date.now() - started;
       draft[mode === "quick" ? "quickReviews" : "deepReviews"]++;
@@ -280,21 +321,28 @@ export class PromptPanel implements vscode.WebviewViewProvider {
 
   private async runImprove(): Promise<void> {
     const deep = this.deep;
-    if (!deep || deep.text !== this.text || !deep.review.questions.length || this.running.deep) return;
+    if (!deep || deep.text !== this.text || !deep.review.questions.length || this.running.deep || this.sending) return;
     const draft = this.draft;
     const ctrl = new AbortController();
     this.running.deep = ctrl;
+    this.post({ type: "rewriting", text: deep.text });
     try {
       const config = readModelConfig();
       const profile = resolveProfile(config, "deep");
       const run = claudeCliRunner(config.claudePath, this.workspace.root, profile.thinkingEffort);
       const improved = await improvePrompt(deep.text, deep.review, [], run, profile.model, { now: Date.now }, ctrl.signal);
-      if (ctrl.signal.aborted || deep.text !== this.text || draft !== this.draft || !improved) return;
+      if (ctrl.signal.aborted || deep.text !== this.text || draft !== this.draft) return;
+      if (!improved) throw new SyntaxError("Invalid rewrite JSON");
       this.improved = improved.text;
       draft.inputTokens += improved.usage.inputTokens; draft.outputTokens += improved.usage.outputTokens; draft.costUsd += improved.usage.costUsd;
       this.post({ type: "improved", text: deep.text, improved: improved.text });
       await this.record("review", { ...this.links(draft), reviewId: randomUUID() }, { ...profile, mode: "improve", latencyMs: improved.latency, tokens: improved.usage, cost: improved.usage.costUsd, promptVersion: improved.promptVersion, promptHash: hashPrompt(deep.text) });
-    } catch (e) { if (!ctrl.signal.aborted) showFeedbackError(mapError(e), () => void this.runImprove()); }
+    } catch (e) {
+      if (!ctrl.signal.aborted) {
+        const error = mapError(e);
+        this.post({ type: "rewriteError", text: deep.text, error: feedbackMessage(error).message });
+      }
+    }
     finally { if (this.running.deep === ctrl) delete this.running.deep; }
   }
 
@@ -311,15 +359,16 @@ export class PromptPanel implements vscode.WebviewViewProvider {
       text,
       error: feedbackMessage(error).message,
     });
-    showFeedbackError(error, () => void this.runReview(mode));
+    showFeedbackError(error, () => void (mode === "deep" ? this.enhance() : this.runReview(mode)));
   }
 
   private async send(): Promise<void> {
     if (this.sending || !this.text.trim()) return;
     this.sending = true;
-    clearTimeout(this.pauseTimer);
+    this.post({ type: "sending", busy: true });
     const text = this.text;
     const draft = this.draft;
+    const revision = this.revision;
     const rules = analyzeRules(text, this.workspace.context());
     try {
       const score = isFreshScore(this.score, text) ? this.score : null;
@@ -328,21 +377,39 @@ export class PromptPanel implements vscode.WebviewViewProvider {
         threshold: this.cfg().get<number>("scoreThreshold", 65),
         scoreRequired: false,
       });
-      // Never hand off different text after an asynchronous review or modal.
-      if (this.text !== text || this.draft !== draft) return;
+      const target = this.sendTarget();
       if (decision.action === "confirm") {
         const choice = await vscode.window.showWarningMessage(decision.reasons.join(" ") + " Send anyway?", { modal: true }, "Send anyway");
-        if (choice !== "Send anyway" || this.text !== text || this.draft !== draft) return;
+        if (choice !== "Send anyway" || this.revision !== revision) return;
       }
-      const sessionId = this.cfg().get<string>("sendTo", "terminal") === "terminal" ? randomUUID() : null;
+      const sessionId = target === "terminal" ? randomUUID() : null;
       const links = { ...this.links(draft), sessionId };
       const sentAt = Date.now();
       const cwd = this.workspace.root;
-      const target = await sendPrompt(text, cwd, sessionId ?? undefined,
-        sessionId && this.log.enabled ? () => { void this.captureAgentUsage(links, cwd); } : undefined);
+      let tracking = false;
+      if (sessionId && cwd && this.log.enabled) {
+        try { tracking = await this.usageRecovery.track(links, vscode.Uri.file(cwd).toString()); }
+        catch { console.error("Preflight could not persist pending agent usage"); }
+      }
+      if (this.revision !== revision || this.sendTarget() !== target) {
+        if (tracking) await this.usageRecovery.cancel(links.sendId).catch(() => {});
+        return;
+      }
+      await sendPrompt(text, cwd, target, sessionId ?? undefined,
+          tracking ? () => { void this.captureAgentUsage(links, cwd); } : undefined).catch(async error => {
+        if (tracking) await this.usageRecovery.cancel(links.sendId).catch(() => {});
+        throw error;
+      });
+      this.running.quick?.abort(); this.running.deep?.abort();
+      this.draft = newDraft();
+      this.score = null; this.quick = undefined; this.quickText = ""; this.improved = undefined; this.deep = undefined;
+      if (this.revision === revision) this.setText("");
+      else if (this.text.trim()) this.draft.startedAt = Date.now();
+      this.post({ type: "sent", target });
+      if (this.text.trim()) this.postFeedback();
       try { await this.sends.append({ id: draft.sendId, ts: new Date(sentAt).toISOString(), draftId: draft.id,
-        folderUri: this.workspace.root ? vscode.Uri.file(this.workspace.root).toString() : "", text,
-        promptHash: hashPrompt(text), sessionId: sessionId ?? undefined, target: target as "terminal" | "clipboard" }); }
+        folderUri: cwd ? vscode.Uri.file(cwd).toString() : "", text,
+        promptHash: hashPrompt(text), sessionId: sessionId ?? undefined, target }); }
       catch { void vscode.window.showWarningMessage("Prompt sent, but its local send record could not be saved."); }
       await this.record("send", links, {
         target, promptHash: hashPrompt(text), promptChars: text.length, draftMs: draft.startedAt ? sentAt - draft.startedAt : 0,
@@ -354,27 +421,19 @@ export class PromptPanel implements vscode.WebviewViewProvider {
         preflightInputTokens: draft.inputTokens, preflightOutputTokens: draft.outputTokens, preflightCostUsd: draft.costUsd,
         agentInputTokens: null, agentOutputTokens: null, agentCacheReadTokens: null, agentCacheCreationTokens: null, agentCostUsd: null,
       });
-      this.running.quick?.abort(); this.running.deep?.abort();
-      // A user may have typed while send persistence was in flight.
-      if (this.text === text && this.draft === draft) {
-        this.draft = newDraft(); this.score = null; this.quick = undefined; this.quickText = ""; this.improved = undefined;
-        this.setText(""); this.post({ type: "sent" });
-      }
-    } finally { this.sending = false; }
+    } catch { void vscode.window.showErrorMessage("Could not send the prompt. Try again."); }
+    finally {
+      this.sending = false;
+      this.post({ type: "sending", busy: false });
+    }
   }
 
   private async captureAgentUsage(links: StudyLinks, cwd = this.workspace.root): Promise<void> {
-    if (!this.log.enabled || !cwd || !links.sessionId) return;
+    if (!cwd || !links.sessionId) return;
     try {
-      const folderUri = vscode.Uri.file(cwd).toString();
-      const candidates = await discoverCandidates(folderUri, this.homeDir ?? (await import("node:os")).homedir());
-      const candidate = candidates.find(c => c.sessionId === links.sessionId && canonicalFolderUri(c.folderUri) === canonicalFolderUri(folderUri));
-      if (!candidate) {
-        await this.record("agent-usage", links, { usageAvailable: false, reason: "session-not-found" });
-        return;
-      }
-      await this.record("agent-usage", links, { provider: candidate.provider, ...await readAgentUsage(candidate.filePath), complete: true });
-    } catch { await this.record("agent-usage", links, { usageAvailable: false, reason: "transcript-unreadable" }); }
+      await this.usageRecovery.track(links, vscode.Uri.file(cwd).toString());
+      await this.usageRecovery.closeSession(links.sessionId);
+    } catch { console.error("Preflight agent usage remains pending for recovery"); }
   }
 
   private html(webview: vscode.Webview): string {
@@ -390,19 +449,20 @@ export class PromptPanel implements vscode.WebviewViewProvider {
 <title>Prompt Preflight</title>
 </head>
 <body>
-  <div class="score" title="Local heuristic checks; no model call while typing.">
+  <div class="score" title="Local rule checks">
     <div class="bar"><div class="fill" id="fill"></div></div>
     <span id="level" class="level">Local checks · Start typing</span>
   </div>
   <div id="dims" class="dims"></div>
   <div class="editor">
     <div class="backdrop" id="backdrop"><div id="highlights"></div></div>
-    <textarea id="prompt" spellcheck="false" placeholder="Describe the task for Claude Code…&#10;&#10;Which files? What should change? How will you know it's done?"></textarea>
+    <textarea id="prompt" aria-label="Prompt" spellcheck="false" placeholder="Describe the task for Claude Code…&#10;&#10;Which files? What should change? How will you know it's done?"></textarea>
   </div>
+  <p id="actionStatus" class="action-status" role="status" hidden></p>
   <div class="actions">
     <button id="send" title="Cmd/Ctrl+Enter">Send to Claude Code</button>
     <button id="deep" class="secondary" title="Use the model to review and improve this draft">Enhance</button>
-    <button id="copy" class="secondary icon" title="Copy prompt">Copy</button>
+    <button id="copy" class="secondary icon" title="Copy and keep the draft">Copy</button>
   </div>
   <section id="questions" hidden><h3>Questions to answer</h3><ul></ul></section>
   <section id="findings" hidden><h3>Notes</h3><ul></ul></section>

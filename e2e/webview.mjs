@@ -8,6 +8,7 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const source = await readFile(join(root, "extension/src/panel.ts"), "utf8");
 const body = source.match(/<body>([\s\S]*?)<\/body>/)[1].replace(/<script[\s\S]*?<\/script>/, "");
 const script = await readFile(join(root, "extension/media/panel.js"), "utf8");
+const css = await readFile(join(root, "extension/media/panel.css"), "utf8");
 const dir = await mkdtemp(join(tmpdir(), "preflight-webview-"));
 const browser = process.env.CHROME_BIN ?? (platform() === "darwin" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" : "chromium");
 const test = `
@@ -22,7 +23,10 @@ try {
  assert(el('level').textContent.includes('Local checks'), 'initially unscored');
  assert(el('send').disabled, 'empty send disabled');
  input('Fix src/a.ts');
- message({type:'analysis',text:'Fix src/a.ts',analysis:rules,feedback:{findings:[],questions:['What should happen?'],issues:[]}});
+ const finding={category:'action',message:'Clarify the action',severity:'warning',range:{start:0,end:3}};
+ message({type:'analysis',text:'Fix src/a.ts',analysis:{findings:[finding]},feedback:{findings:[finding],questions:['What should happen?'],issues:[]}});
+ el('findings').querySelector('button').click();
+ assert(el('prompt').selectionEnd === 3, 'current note selects the affected text with a native button');
  scored('Fix src/a.ts');
  assert(el('level').textContent.includes('90/100') && el('fill').style.width === '90%', 'current model score rendered');
  assert(!el('questions').hidden, 'coaching displayed');
@@ -33,6 +37,7 @@ try {
  message({type:'analysis',text:'Fix src/b.ts',analysis:rules,feedback:null});
  assert(el('dims').textContent.includes('Target') && el('fill').parentElement.hidden, 'typing shows a local checklist without a score bar');
  assert(el('questions').classList.contains('stale'), 'previous coaching stays stable and dimmed');
+ assert(!el('findings').querySelector('button'), 'stale advice cannot select text in the next draft');
  scored('Fix src/a.ts');
  assert(el('level').textContent.includes('Local checks'), 'late score ignored');
  message({type:'score',text:'Fix src/b.ts',state:'scoring',score:null});
@@ -43,6 +48,10 @@ try {
  assert(el('quick').hidden, 'late review ignored');
  message({type:'review',mode:'deep',text:'Fix src/b.ts',review:{issues:[],questions:['Which target?'],usage:{inputTokens:1,outputTokens:1,costUsd:0}}});
  assert(!!document.getElementById('improve'), 'deep questions enable separate rewrite');
+ message({type:'rewriting',text:'Fix src/b.ts'});
+ assert(el('deep').disabled && el('deepOut').textContent.includes('Writing suggested prompt'), 'rewrite shows progress and disables duplicate requests');
+ message({type:'rewriteError',text:'Fix src/b.ts',error:'Try again'});
+ assert(el('improve').textContent === 'Retry rewrite' && !el('deep').disabled, 'failed rewrite offers a retry');
  message({type:'improved',text:'Fix src/b.ts',improved:'Fix [target]'});
  assert(!!document.getElementById('useImproved'), 'separate rewrite can be applied');
  input('<img src=x onerror=alert(1)>');
@@ -51,16 +60,22 @@ try {
  message({type:'reviewing',mode:'deep',text:el('prompt').value});
  message({type:'reviewCancelled',mode:'deep'});
  assert(el('deepOut').hidden, 'cancelled deep review leaves no spinner');
- message({type:'sent'});
- message({type:'setText',text:''});
- assert(el('level').textContent.includes('Local checks') && el('questions').hidden, 'send clears model and advice');
+ message({type:'sendTarget',target:'clipboard'});
+ assert(el('send').textContent === 'Copy for Claude Code', 'destination matches clipboard setting');
+ message({type:'sending',busy:true});
+ assert(el('send').disabled && el('send').textContent === 'Copying…', 'handoff shows progress');
+ message({type:'sending',busy:false});
  el('copy').click();
  assert(window.sent.some(x => x.type === 'copy'), 'copy action reaches host bridge');
+ message({type:'setText',text:''});
+ message({type:'sent',target:'clipboard'});
+ assert(el('level').textContent.includes('Local checks') && el('questions').hidden, 'send clears model and advice');
+ assert(el('copy').disabled && el('actionStatus').textContent === 'Prompt copied.', 'successful handoff is announced and empty copy disabled');
 } catch(e) { results.push({ name: e.message, passed:false }); }
 document.getElementById('result').textContent = JSON.stringify(results);
 `;
 try {
-  const html = `<!doctype html><html><body>${body}<pre id="result"></pre><script>window.sent=[];window.acquireVsCodeApi=()=>({postMessage:m=>window.sent.push(m),setState:()=>{},getState:()=>null});</script><script>${script}</script><script>${test}</script></body></html>`;
+  const html = `<!doctype html><html><head><style>${css}</style></head><body>${body}<pre id="result"></pre><script>window.sent=[];window.acquireVsCodeApi=()=>({postMessage:m=>window.sent.push(m),setState:()=>{},getState:()=>null});</script><script>${script}</script><script>${test}</script></body></html>`;
   const file = join(dir, "test.html");
   await writeFile(file, html);
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;

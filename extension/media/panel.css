@@ -97,8 +97,17 @@ button.warn { outline: 1px solid var(--vscode-editorWarning-foreground, #cca700)
 .finding.error .dot { background: var(--vscode-editorError-foreground, #f14c4c); }
 .finding.warning .dot { background: var(--vscode-editorWarning-foreground, #cca700); }
 .finding.info .dot { background: var(--vscode-editorInfo-foreground, #3794ff); }
-.clickable { cursor: pointer; }
-.clickable:hover { color: var(--vscode-textLink-activeForeground); }
+.feedback-link, .feedback-link:hover {
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  text-align: left;
+}
+.feedback-link:hover { color: var(--vscode-textLink-activeForeground); text-decoration: underline; }
+.feedback-link:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+.action-status { margin: 6px 0; color: var(--vscode-descriptionForeground); }
 .issue { list-style: none; margin-left: -18px; padding: 4px 0 4px 8px; border-left: 2px solid var(--vscode-charts-purple, #b180d7); }
 .stale { opacity: .5; }
 .improved {

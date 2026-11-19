@@ -2,6 +2,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import type { SendRecord } from "@prompt-preflight/core";
 import { CONSENT_VERSION, consentKey, consentMessage, parseConsent, type IncludeCode } from "./privacy";
+import { AgentUsageRecovery, terminalSessionId } from "./agentUsageRecovery";
 import { PromptPanel } from "./panel";
 import { JsonlRepository } from "./repository";
 import { StudyLog } from "./studyLog";
@@ -10,7 +11,12 @@ import { WorkspaceIndex } from "./workspace";
 export function activate(context: vscode.ExtensionContext): void {
   const workspace = new WorkspaceIndex();
   const log = new StudyLog(context.globalStorageUri);
-  const panel = new PromptPanel(context.extensionUri, workspace, log, context.globalStorageUri);
+  const usageRecovery = new AgentUsageRecovery({ storagePath: context.globalStorageUri.fsPath, log });
+  const panel = new PromptPanel(context.extensionUri, workspace, log, context.globalStorageUri, undefined, usageRecovery);
+  const recoverUsage = () => { void usageRecovery.recover().catch(() => console.error("Preflight agent usage recovery will retry")); };
+  recoverUsage();
+  const usageTimer = setInterval(recoverUsage, 30_000);
+  usageTimer.unref();
 
   const storage = context.globalStorageUri.fsPath;
   const drafts = new JsonlRepository<Record<string, unknown>>(path.join(storage, "drafts.jsonl"));
@@ -22,6 +28,12 @@ export function activate(context: vscode.ExtensionContext): void {
   void ensureConsent(context);
 
   context.subscriptions.push(
+    { dispose: () => clearInterval(usageTimer) },
+    vscode.window.onDidCloseTerminal(terminal => {
+      const options = terminal.creationOptions;
+      const sessionId = terminalSessionId("shellArgs" in options || "env" in options ? options : {});
+      if (sessionId) void usageRecovery.closeSession(sessionId).catch(() => console.error("Preflight terminal usage will be recovered later"));
+    }),
     workspace,
     vscode.window.registerWebviewViewProvider(PromptPanel.viewId, panel, {
       webviewOptions: { retainContextWhenHidden: true },

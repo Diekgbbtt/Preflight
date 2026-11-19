@@ -16,9 +16,9 @@ export interface StudyLinks { draftId: string; sendId: string; sessionId: string
 /** Generic repository envelope stays v1; study payload is independently versioned v2. */
 export class StudyRecorder {
   constructor(private readonly repository: Repository<StudyData>, private readonly clock: Clock, private readonly id: IdGenerator) {}
-  write(event: StudyEventType, links: StudyLinks, data: Record<string, unknown>, participant = ""): Promise<Event<StudyData>> {
+  write(event: StudyEventType, links: StudyLinks, data: Record<string, unknown>, participant = "", eventId?: string): Promise<Event<StudyData>> {
     return this.repository.append({ provider: null, model: null, thinkingEffort: null, rubricVersion: null, scoreSource: null, latencyMs: null, contextManifestHash: null, tokens: null, cost: null, ...data, ...links, event, participant, studySchemaVersion: 2,
-      id: this.id(), ts: new Date(this.clock.now()).toISOString() });
+      id: eventId ?? this.id(), ts: new Date(this.clock.now()).toISOString() });
   }
 }
 
