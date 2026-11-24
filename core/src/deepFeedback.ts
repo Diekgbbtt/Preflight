@@ -16,6 +16,8 @@ export interface InstructionFile {
   included: boolean;
   truncated: boolean;
   redactions: number;
+  /** "docs" for design and spec files (#18): their own block, same budget. Default "instructions". */
+  kind?: "instructions" | "docs";
 }
 
 export interface InstructionBlock {
@@ -23,9 +25,12 @@ export interface InstructionBlock {
   files: InstructionFile[];
 }
 
-/** #48 may extend this (e.g. design files, #57). */
 export interface InstructionLoaderConfig {
   instructionFileNames: string[];
+  /** Design and spec files (#18 decision 4); opt-in. */
+  designFileNames?: string[];
+  /** includeCode is not "off", i.e. code-sharing consent was accepted. */
+  shareCode: boolean;
 }
 
 /** Port implemented by #48 in the extension. */
@@ -91,6 +96,7 @@ export interface DeepFeedbackInput {
 export type DeepFeedbackResult = { ok: true; reviewId: string; review: DeepReviewRecord } | { ok: false; error: FeedbackError };
 
 export const NO_INSTRUCTION_CONTROL_GAP = "provider cannot disable project-instruction auto-load";
+export const INSTRUCTIONS_NOT_SHARED_GAP = "Project instruction files were not checked: code sharing is off.";
 
 const tooLarge = (): FeedbackError => mapError(new Error("context is too large"));
 
@@ -158,7 +164,7 @@ export function manifestGaps(manifest: ContextManifest, supportsInstructionFiles
 
 function instructionEntries(files: InstructionFile[]): ContextSourceEntry[] {
   return files.map((f) => ({
-    source: `instructions:${f.displayPath}`,
+    source: `${f.kind ?? "instructions"}:${f.displayPath}`,
     chars: f.included ? f.bytes : 0,
     tokens: f.included ? f.tokens : 0,
     included: f.included,
@@ -218,8 +224,10 @@ export async function deepFeedback(input: DeepFeedbackInput, deps: DeepFeedbackD
     const { questions } = await loadDeepSession(input.draftId, deps);
 
     let block: InstructionBlock = { text: "", files: [] };
-    if (caps.supportsInstructionFiles && deps.instructions) {
-      block = await deps.instructions.load(input.folders, input.draft, deps.instructionConfig ?? { instructionFileNames: [] });
+    const instructionConfig = deps.instructionConfig ?? { instructionFileNames: [], shareCode: false };
+    const instructionsSkipped = !!deps.instructions && caps.supportsInstructionFiles && !instructionConfig.shareCode;
+    if (caps.supportsInstructionFiles && deps.instructions && instructionConfig.shareCode) {
+      block = await deps.instructions.load(input.folders, input.draft, instructionConfig);
     }
 
     const bundle = await assemble({ draft: input.draft, qa: qaFrom(questions) }, await deps.sources(input.draft), {
@@ -250,7 +258,13 @@ export async function deepFeedback(input: DeepFeedbackInput, deps: DeepFeedbackD
     const review: DeepReviewRecord = {
       ...parsed,
       promptVersion: prompt.promptVersion,
-      contextGaps: [...new Set([...parsed.contextGaps, ...manifestGaps(bundle.manifest, caps.supportsInstructionFiles)])],
+      contextGaps: [
+        ...new Set([
+          ...parsed.contextGaps,
+          ...manifestGaps(bundle.manifest, caps.supportsInstructionFiles),
+          ...(instructionsSkipped ? [INSTRUCTIONS_NOT_SHARED_GAP] : []),
+        ]),
+      ],
       draftId: input.draftId,
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       contextManifest: bundle.manifest,
