@@ -21,6 +21,8 @@ import {
   type ContextSource,
   createClaudeProvider,
   type ModelProfile,
+  buildDeepPrompt,
+  restoreMentions,
 } from "@prompt-preflight/core";
 import { redact, type IncludePolicy } from "../extension/src/privacy";
 import { git, gitChangedFiles } from "../extension/src/exec";
@@ -288,9 +290,9 @@ async function writeLabelSheet(out: string, runs: Array<{ folder: string; run: R
 }
 
 /** --merge: one shuffled sheet over VALID_RUNS, so the labeler never sees which folder a question came from. */
-async function mergeValid(out: string): Promise<void> {
+async function mergeValid(out: string, sets: Array<{ folder: string; drafts: string[] }> = VALID_RUNS): Promise<void> {
   const runs: Array<{ folder: string; run: RunRecord }> = [];
-  for (const { folder, drafts } of VALID_RUNS) {
+  for (const { folder, drafts } of sets) {
     const file = JSON.parse(await readFile(path.join(folder, "runs.json"), "utf8")) as { runs: RunRecord[] };
     for (const run of file.runs) if (drafts.includes(run.draftId as string)) runs.push({ folder, run });
   }
@@ -307,8 +309,18 @@ async function main(): Promise<void> {
   // --drafts d2,d4 limits the run to those drafts on both models; --raw-mentions reproduces the first, invalid run.
   const only = args.includes("--drafts") ? args[args.indexOf("--drafts") + 1].split(",") : undefined;
   const rawMentions = args.includes("--raw-mentions");
+  // --prompt deep-v2 uses the real deep prompt (#13) instead of the temporary EVAL_SYSTEM; the context stays the same.
+  const realPrompt = args.includes("--prompt") && args[args.indexOf("--prompt") + 1] === "deep-v2";
+  const empty = buildDeepPrompt({ bundle: { draft: "", qa: [], fragments: [], manifest: { sources: [], totalTokens: 0, budget: 0 } } });
+  const prompt = realPrompt ? { version: empty.promptVersion, system: empty.system } : { version: "eval-temporary", system: EVAL_SYSTEM };
+  // --merge-from a,b: one blind sheet over every run of those folders (e.g. the clean re-run of both prompts).
+  if (args.includes("--merge-from")) {
+    const folders = args[args.indexOf("--merge-from") + 1].split(",");
+    return mergeValid(out, folders.map((folder) => ({ folder, drafts: DRAFTS.map((d) => d.id) })));
+  }
   if (args.includes("--merge")) return mergeValid(args.includes("--out") ? out : "docs/measurements/code-access-2026-11-24-labels");
-  const rgPath = path.join(cwd, "extension", "dist", process.platform === "win32" ? "rg.exe" : "rg");
+  // PREFLIGHT_EVAL_RG lets the context come from another checkout (e.g. a worktree of the first run's commit).
+  const rgPath = process.env.PREFLIGHT_EVAL_RG ?? path.join(cwd, "extension", "dist", process.platform === "win32" ? "rg.exe" : "rg");
 
   const plan = [
     ...HAIKU_DRAFTS.flatMap((d) => TIERS.map((t) => ({ draft: d, tier: t, model: "haiku" }))),
@@ -318,7 +330,10 @@ async function main(): Promise<void> {
   for (const [i, p] of plan.entries()) {
     const draft = DRAFTS.find((d) => d.id === p.draft)!;
     const bundle = await buildBundle(draft, p.tier as Tier, cwd, rgPath);
-    const user = rawMentions ? renderUser(bundle) : neutralizeMentions(renderUser(bundle));
+    const deep = realPrompt ? buildDeepPrompt({ bundle }) : undefined;
+    const system = deep?.system ?? EVAL_SYSTEM;
+    // buildDeepPrompt neutralizes @ itself.
+    const user = deep ? deep.user : rawMentions ? renderUser(bundle) : neutralizeMentions(renderUser(bundle));
     const run: Record<string, unknown> = {
       runId: `r${String(i + 1).padStart(2, "0")}`,
       draftId: draft.id,
@@ -333,9 +348,9 @@ async function main(): Promise<void> {
       const provider = createClaudeProvider(profile, { claudePath: process.env.PREFLIGHT_EVAL_CLI ?? "claude" });
       const started = Date.now();
       try {
-        const res = await provider.complete({ system: EVAL_SYSTEM, user, model: p.model });
+        const res = await provider.complete({ system, user, model: p.model });
         const latency = Date.now() - started;
-        const review = parseDeepReview(res.text, draft.text, {
+        const review = parseDeepReview(realPrompt ? restoreMentions(res.text) : res.text, draft.text, {
           usage: { inputTokens: res.inputTokens, outputTokens: res.outputTokens, costUsd: res.costUsd },
           latency,
         });
@@ -351,7 +366,7 @@ async function main(): Promise<void> {
   await mkdir(out, { recursive: true });
   await writeFile(
     path.join(out, "runs.json"),
-    JSON.stringify({ date, rawMentions, system: EVAL_SYSTEM, drafts: DRAFTS, runs }, null, 2) + "\n",
+    JSON.stringify({ date, rawMentions, promptVersion: prompt.version, system: prompt.system, drafts: DRAFTS, runs }, null, 2) + "\n",
   );
 
   const n = await writeLabelSheet(out, runs.map((run) => ({ folder: out, run })));
