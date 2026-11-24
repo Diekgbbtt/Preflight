@@ -31,6 +31,7 @@ import { createCodeTools, type LanguageProtocol, type TextSearchPort } from "../
 import { createSymbolsSource, createWorkspaceSymbolsSource } from "../extension/src/languageContext";
 import { resolvePromptFileRefs, buildPromptFilesResult } from "../extension/src/promptFiles";
 import { createInstructionLoader, DEFAULT_INSTRUCTION_FILE_NAMES } from "../extension/src/instructionFiles";
+import { draftIdentifiers, shuffled } from "./evalShared";
 
 /** The #48 loader on the plain file system: same discovery rules, no VS Code. */
 function nodeInstructionLoader(cwd: string) {
@@ -104,16 +105,6 @@ Reply with JSON only, no prose, in this shape:
 ${DEEP_REPLY_SCHEMA}
 At most 3 questions, each with at most 3 options.`;
 
-/** Identifiers a user typed: backticked words, camelCase, PascalCase with an inner capital, snake_case. */
-export function draftIdentifiers(draft: string): string[] {
-  const found = new Set<string>();
-  for (const m of draft.matchAll(/`([^`\s]+)`/g)) found.add(m[1]);
-  for (const m of draft.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)) {
-    const w = m[0];
-    if (/[a-z][A-Z]/.test(w) || /[a-z0-9]_[a-z0-9]/i.test(w)) found.add(w);
-  }
-  return [...found];
-}
 
 /** Regex alternation for rg; identifiers are word characters, anything else is escaped. */
 export function identifierQuery(ids: string[]): string | undefined {
@@ -272,17 +263,6 @@ export function neutralizeMentions(text: string): string {
   return text.replace(/@/g, "@\u200b");
 }
 
-/** Deterministic shuffle so the sheet order is reproducible but hides draft, tier and model. */
-export function shuffled<T>(items: T[], seed: number): T[] {
-  const out = [...items];
-  let s = seed >>> 0;
-  for (let i = out.length - 1; i > 0; i--) {
-    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
-    const j = s % (i + 1);
-    [out[i], out[j]] = [out[j], out[i]];
-  }
-  return out;
-}
 
 const csv = (v: string) => `"${v.replace(/"/g, '""')}"`;
 
