@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   deepFeedback,
   EMPTY_DRAFT_QUESTION,
+  INSTRUCTIONS_NOT_SHARED_GAP,
   loadDeepSession,
   NO_INSTRUCTION_CONTROL_GAP,
   SCHEMA_VERSION,
@@ -164,9 +165,10 @@ describe("deepFeedback", () => {
       files: [{ displayPath: "AGENTS.md", relativePath: "AGENTS.md", folder: "file:///w", bytes: 40, tokens: 10, included: true, truncated: false, redactions: 0 }],
     }));
     const { deps, requests } = setup({ instructions: { load } });
+    deps.instructionConfig = { instructionFileNames: ["AGENTS.md"], shareCode: true };
     const res = await deepFeedback(input, deps);
     if (!res.ok) throw new Error(res.error.code);
-    expect(load).toHaveBeenCalledWith(["file:///w"], "fix the login", { instructionFileNames: [] });
+    expect(load).toHaveBeenCalledWith(["file:///w"], "fix the login", { instructionFileNames: ["AGENTS.md"], shareCode: true });
     expect(requests[0].system).toContain("use pnpm");
     expect(res.review.contextManifest.sources.map((s) => s.source)).toContain("instructions:AGENTS.md");
   });
@@ -202,6 +204,41 @@ describe("deepFeedback", () => {
     expect(requests[0].user).toContain("<session>\nturn 1: npm test failed\n</session>");
     expect(res.review.sessionSlice).toEqual({ content: "turn 1: npm test failed", tokens: 6, truncated: false });
     expect(res.review.sessionId).toBe("agent-1");
+  });
+});
+
+describe("instruction files and consent (#48)", () => {
+  it("skips the loader and says why when code sharing is off", async () => {
+    const load = vi.fn(async () => ({ text: "x", files: [] }));
+    const { deps } = setup({ instructions: { load } });
+    deps.instructionConfig = { instructionFileNames: ["AGENTS.md"], shareCode: false };
+    const res = await deepFeedback(input, deps);
+    if (!res.ok) throw new Error(res.error.code);
+    expect(load).not.toHaveBeenCalled();
+    expect(res.review.contextGaps).toContain(INSTRUCTIONS_NOT_SHARED_GAP);
+  });
+
+  it("adds no consent gap when no loader is wired", async () => {
+    const { deps } = setup();
+    const res = await deepFeedback(input, deps);
+    if (!res.ok) throw new Error(res.error.code);
+    expect(res.review.contextGaps).not.toContain(INSTRUCTIONS_NOT_SHARED_GAP);
+  });
+
+  it("keeps design files apart from instruction files in the manifest", async () => {
+    const file = { relativePath: "x", folder: "file:///w", bytes: 10, tokens: 3, included: true, truncated: false, redactions: 0 };
+    const load = vi.fn(async () => ({
+      text: "blocks",
+      files: [
+        { ...file, displayPath: "AGENTS.md" },
+        { ...file, displayPath: "docs/ARCHITECTURE.md", kind: "docs" as const },
+      ],
+    }));
+    const { deps } = setup({ instructions: { load } });
+    deps.instructionConfig = { instructionFileNames: ["AGENTS.md"], designFileNames: ["ARCHITECTURE.md"], shareCode: true };
+    const res = await deepFeedback(input, deps);
+    if (!res.ok) throw new Error(res.error.code);
+    expect(res.review.contextManifest.sources.map((s) => s.source)).toEqual(expect.arrayContaining(["instructions:AGENTS.md", "docs:docs/ARCHITECTURE.md"]));
   });
 });
 
