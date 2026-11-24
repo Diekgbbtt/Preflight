@@ -4,10 +4,10 @@
 //
 // Build and run:
 //   npx esbuild scripts/eval-code-access.ts --bundle --platform=node --format=esm \
-//     --outfile=/tmp/eval-code-access.mjs --external:vscode
+//     --outfile=/tmp/eval-code-access.mjs --alias:vscode=./scripts/vscode-stub.ts
 //   node /tmp/eval-code-access.mjs [--out docs/measurements/code-access-YYYY-MM-DD] [--dry-run]
 
-import { mkdir, writeFile, access, realpath, readFile } from "node:fs/promises";
+import { mkdir, writeFile, access, realpath, readFile, readdir, stat } from "node:fs/promises";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -30,6 +30,34 @@ import { runRipgrep, parseRipgrepJson } from "../extension/src/ripgrep";
 import { createCodeTools, type LanguageProtocol, type TextSearchPort } from "../extension/src/codeTools";
 import { createSymbolsSource, createWorkspaceSymbolsSource } from "../extension/src/languageContext";
 import { resolvePromptFileRefs, buildPromptFilesResult } from "../extension/src/promptFiles";
+import { createInstructionLoader, DEFAULT_INSTRUCTION_FILE_NAMES } from "../extension/src/instructionFiles";
+
+/** The #48 loader on the plain file system: same discovery rules, no VS Code. */
+function nodeInstructionLoader(cwd: string) {
+  const walk = async (dir: string): Promise<string[]> => {
+    const out: string[] = [];
+    for (const e of await readdir(dir, { withFileTypes: true })) {
+      if (e.name === ".git" || e.name === "node_modules") continue;
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) out.push(...(await walk(p)));
+      else out.push(p);
+    }
+    return out;
+  };
+  return createInstructionLoader({
+    folders: () => [{ uri: pathToFileURL(cwd).href, fsPath: cwd, name: path.basename(cwd) }],
+    findFiles: async (folder, names) => (await walk(folder.fsPath)).filter((p) => names.includes(path.basename(p))),
+    stat: async (p) => {
+      try {
+        const s = await stat(p);
+        return s.isDirectory() ? "dir" : s.isFile() ? "file" : null;
+      } catch {
+        return null;
+      }
+    },
+    redact,
+  });
+}
 
 export type Tier = "T0" | "T1" | "T2";
 
@@ -311,6 +339,8 @@ async function main(): Promise<void> {
   const rawMentions = args.includes("--raw-mentions");
   // --prompt deep-v2 uses the real deep prompt (#13) instead of the temporary EVAL_SYSTEM; the context stays the same.
   const realPrompt = args.includes("--prompt") && args[args.indexOf("--prompt") + 1] === "deep-v2";
+  // --instructions adds the #48 instruction block (AGENTS.md, CLAUDE.md); only with --prompt deep-v2.
+  const withInstructions = args.includes("--instructions");
   const empty = buildDeepPrompt({ bundle: { draft: "", qa: [], fragments: [], manifest: { sources: [], totalTokens: 0, budget: 0 } } });
   const prompt = realPrompt ? { version: empty.promptVersion, system: empty.system } : { version: "eval-temporary", system: EVAL_SYSTEM };
   // --merge-from a,b: one blind sheet over every run of those folders (e.g. the clean re-run of both prompts).
@@ -330,7 +360,10 @@ async function main(): Promise<void> {
   for (const [i, p] of plan.entries()) {
     const draft = DRAFTS.find((d) => d.id === p.draft)!;
     const bundle = await buildBundle(draft, p.tier as Tier, cwd, rgPath);
-    const deep = realPrompt ? buildDeepPrompt({ bundle }) : undefined;
+    const block = realPrompt && withInstructions
+      ? await nodeInstructionLoader(cwd).load([pathToFileURL(cwd).href], draft.text, { instructionFileNames: DEFAULT_INSTRUCTION_FILE_NAMES, shareCode: true })
+      : undefined;
+    const deep = realPrompt ? buildDeepPrompt({ bundle }, block?.text ?? "") : undefined;
     const system = deep?.system ?? EVAL_SYSTEM;
     // buildDeepPrompt neutralizes @ itself.
     const user = deep ? deep.user : rawMentions ? renderUser(bundle) : neutralizeMentions(renderUser(bundle));
@@ -341,6 +374,7 @@ async function main(): Promise<void> {
       tier: p.tier,
       model: p.model,
       manifest: bundle.manifest,
+      ...(block ? { instructionFiles: block.files } : {}),
       userChars: user.length,
     };
     if (!dryRun) {
@@ -366,7 +400,7 @@ async function main(): Promise<void> {
   await mkdir(out, { recursive: true });
   await writeFile(
     path.join(out, "runs.json"),
-    JSON.stringify({ date, rawMentions, promptVersion: prompt.version, system: prompt.system, drafts: DRAFTS, runs }, null, 2) + "\n",
+    JSON.stringify({ date, rawMentions, promptVersion: prompt.version, instructions: realPrompt && withInstructions, system: prompt.system, drafts: DRAFTS, runs }, null, 2) + "\n",
   );
 
   const n = await writeLabelSheet(out, runs.map((run) => ({ folder: out, run })));
