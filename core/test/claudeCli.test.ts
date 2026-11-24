@@ -22,6 +22,12 @@ describe("buildClaudeArgs", () => {
     ]);
   });
 
+  it("keeps instruction auto-load off so CLAUDE.md and AGENTS.md are not loaded twice (#48)", () => {
+    const args = buildClaudeArgs(request, { provider: "claude", model: "sonnet", thinkingEffort: "medium" });
+    expect(args[args.indexOf("--setting-sources") + 1]).toBe("");
+    expect(args[args.indexOf("--system-prompt") + 1]).toBe(request.system);
+  });
+
   it("does not put the user prompt in the args", () => {
     const profile: ModelProfile = { provider: "claude", model: "haiku", thinkingEffort: "low" };
     const args = buildClaudeArgs(request, profile).join(" ");
