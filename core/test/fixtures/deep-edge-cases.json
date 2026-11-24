@@ -1,0 +1,126 @@
+[
+  {
+    "id": "empty-draft",
+    "draft": "   ",
+    "rule": null,
+    "expect": {
+      "modelCall": false,
+      "questions": 1
+    },
+    "note": "Handled in deepFeedback without a model call."
+  },
+  {
+    "id": "question-only",
+    "draft": "Why does assemble drop the git diff when the budget is small?",
+    "rule": "A draft that is only a question: do not answer it.",
+    "expect": {
+      "maxIssues": 1
+    },
+    "note": "The reply must not explain the budget logic; at most one issue about the subject."
+  },
+  {
+    "id": "trivial-command",
+    "draft": "run npm test",
+    "rule": "A short command that is complete, such as \"run npm test\": no issues and no questions.",
+    "expect": {
+      "maxIssues": 0,
+      "maxQuestions": 0
+    }
+  },
+  {
+    "id": "non-english",
+    "draft": "Ändere in src/greet.ts die Begrüßung von Hallo zu Servus und passe die Tests an.",
+    "rule": "A draft in another language: write every text field, including problem and suggestion, in that language",
+    "expect": {
+      "maxIssues": 3
+    },
+    "note": "Manual: every text field is German; JSON keys stay English."
+  },
+  {
+    "id": "secret",
+    "draft": "Call the payment API in src/pay.ts with the key [redacted] and log the response.",
+    "rule": "\"[redacted]\" in the draft means Preflight removed a secret",
+    "expect": {
+      "gapsMatch": "secret|key|redact"
+    },
+    "note": "Manual: no guessed key value anywhere in the reply."
+  },
+  {
+    "id": "placeholder",
+    "draft": "Add a retry with 3 attempts to [TODO: which client] and keep the existing timeout.",
+    "rule": "A placeholder such as [TODO] or <name> in the draft",
+    "expect": {
+      "gapsMatch": "client|TODO|placeholder"
+    }
+  },
+  {
+    "id": "missing-file",
+    "draft": "Update @core/src/gate.ts so the gate threshold can be configured in settings.",
+    "rule": "When the manifest shows a referenced file as missing, do not assume what it contains.",
+    "manifest": [
+      {
+        "source": "prompt-files",
+        "chars": 0,
+        "tokens": 0,
+        "included": false,
+        "truncated": false,
+        "omittedReason": "empty",
+        "redactions": 0,
+        "details": {
+          "files": 0,
+          "missing": 1
+        }
+      }
+    ],
+    "expect": {
+      "gapsMatchCount": {
+        "pattern": "not found|missing|does not exist",
+        "max": 1
+      }
+    },
+    "note": "Exactly one missing-file gap: the code's, not a second one from the model."
+  },
+  {
+    "id": "conflicting-instructions",
+    "draft": "Add lodash as a dependency of the web package.",
+    "rule": "When project instructions conflict, add one contextGaps entry naming both files",
+    "instructionText": "<project-instructions path=\"AGENTS.md\">\nInstall packages with npm.\n</project-instructions>\n<project-instructions path=\"packages%2Fweb%2FCLAUDE.md\">\nInstall packages with pnpm only.\n</project-instructions>",
+    "expect": {
+      "gapsMatch": "AGENTS\\.md[\\s\\S]*CLAUDE\\.md|CLAUDE\\.md[\\s\\S]*AGENTS\\.md"
+    },
+    "note": "The draft names no path, so no winner may be named."
+  },
+  {
+    "id": "no-session",
+    "draft": "Rename greet to welcome in src/greet.ts and its callers; npm test must still pass.",
+    "rule": "never report an empty or absent section as a gap",
+    "expect": {
+      "noGapsMatch": "session|qa|empty section",
+      "maxIssues": 1
+    },
+    "note": "Same draft as the clear example in the prompt; a filled issue list shows the model ignores it."
+  },
+  {
+    "id": "manifest-omission",
+    "draft": "Fix the off-by-one in src/pager.ts so the last page is shown; add a test.",
+    "rule": "sources that were left out or cut. Do not repeat these in contextGaps",
+    "manifest": [
+      {
+        "source": "git-diff",
+        "chars": 0,
+        "tokens": 0,
+        "included": false,
+        "truncated": false,
+        "omittedReason": "budget",
+        "redactions": 0
+      }
+    ],
+    "expect": {
+      "gapsMatchCount": {
+        "pattern": "diff|uncommitted|budget",
+        "max": 1
+      }
+    },
+    "note": "Only the code's 'Left out: the uncommitted changes' gap; the model does not repeat it."
+  }
+]

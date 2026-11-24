@@ -93,7 +93,7 @@ describe("deepFeedback", () => {
     if (!res.ok) return;
     expect(requests).toHaveLength(1);
     expect(res.review.issues).toEqual([]);
-    expect(res.review.promptVersion).toBe("deep-v1");
+    expect(res.review.promptVersion).toBe("deep-v2");
     expect(res.review.contextManifest.sources[0].source).toBe("draft");
     expect(reviews.events).toHaveLength(1);
     expect(reviews.events[0]).toMatchObject({ id: res.reviewId, draftId: "d1", ts: "2023-11-14T22:13:20.000Z" });
