@@ -1,0 +1,1247 @@
+[
+  {
+    "id": "vague",
+    "draft": "fix the review, it is broken sometimes",
+    "ok": true,
+    "checks": {
+      "limits": true,
+      "noRawAt": true
+    },
+    "res": {
+      "ok": true,
+      "reviewId": "vague-1",
+      "review": {
+        "issues": [
+          {
+            "quote": "fix the review, it is broken sometimes",
+            "range": {
+              "start": 0,
+              "end": 38
+            },
+            "problem": "'The review' is not a named file, function, or feature, so the agent cannot tell which code to change. 'Sometimes' gives no symptom or trigger, so the agent cannot reproduce the bug.",
+            "suggestion": "Name the exact file or function that implements the review, describe what goes wrong (for example, the error message or wrong output), state when it happens, and say what the correct behaviour should be."
+          },
+          {
+            "quote": "it is broken sometimes",
+            "range": {
+              "start": 16,
+              "end": 38
+            },
+            "problem": "There is no expected behaviour and no test that proves the fix works. The agent would have no way to know when it is done.",
+            "suggestion": "Add the expected result for the failing case and a command that must pass afterwards, such as a specific test or 'npm test'."
+          },
+          {
+            "quote": "fix the review",
+            "range": {
+              "start": 0,
+              "end": 14
+            },
+            "problem": "No scope is given. The agent does not know whether to change only the failing path or to refactor nearby code, and nothing says what must not change.",
+            "suggestion": "Limit the change to the failing case and state what must stay the same, such as the output format or other review checks."
+          }
+        ],
+        "questions": [
+          {
+            "question": "What exactly goes wrong when the review breaks?",
+            "why": "The symptom points to the cause and tells the agent what to reproduce.",
+            "options": [
+              "It crashes or throws an error",
+              "It gives a wrong or missing result",
+              "It hangs or runs too slowly"
+            ]
+          },
+          {
+            "question": "When does it break?",
+            "why": "The trigger narrows down which code path to inspect.",
+            "options": [
+              "Only for some input files",
+              "Only on some runs or machines",
+              "Only after a specific action"
+            ]
+          },
+          {
+            "question": "Which file or function implements the review?",
+            "why": "Without a location the agent must search and may change the wrong code.",
+            "options": []
+          }
+        ],
+        "assumptions": [
+          "'The review' refers to a feature in this repository, most likely the Preflight review step.",
+          "The user wants a minimal bug fix rather than a redesign."
+        ],
+        "contextGaps": [
+          "No error message, stack trace, or steps to reproduce the failure.",
+          "No expected behaviour or test command to confirm the fix."
+        ],
+        "usage": {
+          "inputTokens": 2777,
+          "outputTokens": 653,
+          "costUsd": 0.0010135
+        },
+        "latency": 5434,
+        "promptVersion": "deep-v2",
+        "draftId": "vague",
+        "contextManifest": {
+          "sources": [
+            {
+              "source": "draft",
+              "chars": 38,
+              "tokens": 10,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "qa",
+              "chars": 0,
+              "tokens": 0,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "prompt-files",
+              "chars": 0,
+              "tokens": 0,
+              "included": false,
+              "truncated": false,
+              "omittedReason": "empty",
+              "redactions": 0
+            }
+          ],
+          "totalTokens": 10,
+          "budget": 200000
+        }
+      }
+    }
+  },
+  {
+    "id": "clear",
+    "draft": "In @core/src/patterns.ts add \"handle\" and \"deal with\" to VAGUE_VERBS, add one flagged and one passing line for each to core/test/corpus.jsonl, and npm test must pass.",
+    "ok": true,
+    "checks": {
+      "maxIssues": false,
+      "limits": true,
+      "noRawAt": true
+    },
+    "res": {
+      "ok": true,
+      "reviewId": "clear-1",
+      "review": {
+        "issues": [
+          {
+            "quote": "add \"handle\" and \"deal with\" to VAGUE_VERBS",
+            "range": {
+              "start": 25,
+              "end": 68
+            },
+            "problem": "Both phrases already appear in VAGUE_VERBS in core/src/patterns.ts (\"handle\" and \"deal with\"). Adding them again does nothing, and the agent would have to guess whether the real goal is different.",
+            "suggestion": "Check the VAGUE_VERBS list first. If you meant other words, name them. If you want tests for these two existing entries, say that the change is only to corpus.jsonl."
+          },
+          {
+            "quote": "add one flagged and one passing line for each to core/test/corpus.jsonl",
+            "range": {
+              "start": 70,
+              "end": 141
+            },
+            "problem": "The draft does not say the line format of corpus.jsonl, and it does not define a \"passing\" line (a line the check should not flag, or one that should flag and then be accepted). The agent could write lines that fail to parse or that test the wrong thing.",
+            "suggestion": "Say the expected fields, or tell the agent to copy an existing line's format. Define \"passing\" as a line the check must not flag, and give one example of each."
+          }
+        ],
+        "questions": [
+          {
+            "question": "Which phrases did you actually want to add to VAGUE_VERBS?",
+            "why": "\"handle\" and \"deal with\" are already in the list, so the requested change would not change behaviour.",
+            "options": [
+              "Other vague verbs (please name them)",
+              "Keep the list as is and only add corpus tests for these two",
+              "Something else"
+            ]
+          }
+        ],
+        "assumptions": [
+          "npm test runs the corpus checks in core/test/corpus.jsonl.",
+          "VAGUE_VERBS in core/src/patterns.ts is the only pattern list that should change."
+        ],
+        "contextGaps": [
+          "The exact JSON fields and format used in core/test/corpus.jsonl.",
+          "The intended word or phrase, if it is not already in VAGUE_VERBS."
+        ],
+        "usage": {
+          "inputTokens": 6315,
+          "outputTokens": 2395,
+          "costUsd": 0.00259584
+        },
+        "latency": 13421,
+        "promptVersion": "deep-v2",
+        "draftId": "clear",
+        "contextManifest": {
+          "sources": [
+            {
+              "source": "draft",
+              "chars": 166,
+              "tokens": 42,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "qa",
+              "chars": 0,
+              "tokens": 0,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "prompt-files",
+              "chars": 6463,
+              "tokens": 1616,
+              "included": true,
+              "truncated": false,
+              "redactions": 0,
+              "details": {
+                "files": 1,
+                "dropped": 0,
+                "missing": 0,
+                "ambiguous": 0,
+                "excluded": 0,
+                "duplicate": 0,
+                "unreadable": 0
+              }
+            }
+          ],
+          "totalTokens": 1658,
+          "budget": 200000
+        }
+      }
+    }
+  },
+  {
+    "id": "empty-draft",
+    "draft": "   ",
+    "ok": true,
+    "checks": {
+      "noModelCall": true,
+      "questions": true,
+      "limits": true,
+      "noRawAt": true
+    },
+    "res": {
+      "ok": true,
+      "reviewId": "empty-draft-1",
+      "review": {
+        "issues": [],
+        "questions": [
+          {
+            "question": "What should the agent do?",
+            "why": "The draft is empty.",
+            "options": []
+          }
+        ],
+        "assumptions": [],
+        "contextGaps": [],
+        "usage": {
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "costUsd": 0
+        },
+        "latency": 0,
+        "promptVersion": "deep-v2",
+        "draftId": "empty-draft",
+        "contextManifest": {
+          "sources": [],
+          "totalTokens": 0,
+          "budget": 200000
+        }
+      }
+    }
+  },
+  {
+    "id": "question-only",
+    "draft": "Why does assemble drop the git diff when the budget is small?",
+    "ok": true,
+    "checks": {
+      "maxIssues": true,
+      "limits": true,
+      "noRawAt": true
+    },
+    "res": {
+      "ok": true,
+      "reviewId": "question-only-1",
+      "review": {
+        "issues": [
+          {
+            "quote": "Why does assemble drop the git diff when the budget is small?",
+            "range": {
+              "start": 0,
+              "end": 61
+            },
+            "problem": "The draft asks a question about behaviour but does not say what the agent should do. It is unclear whether it should find the cause only, fix it, or change the budget rules. It also names 'assemble' without a file or function, and the agent cannot tell whether that means a function, a command or a stage.",
+            "suggestion": "Say whether the goal is an explanation, a fix or both. Name the file or function that implements assemble, and state the expected result, such as which parts of the diff should be kept when the budget is small."
+          }
+        ],
+        "questions": [
+          {
+            "question": "Do you want only an explanation of why the diff is dropped, or a code change that keeps it?",
+            "why": "The agent needs to know whether to stop at analysis or edit files.",
+            "options": [
+              "Explanation only",
+              "Explanation and a fix",
+              "Fix only, cause already known"
+            ]
+          },
+          {
+            "question": "Which code does 'assemble' refer to?",
+            "why": "The name may match a function, a command or a pipeline stage, and the agent should not guess which one.",
+            "options": [
+              "A function in the source code",
+              "A command-line command",
+              "A build or packaging step"
+            ]
+          },
+          {
+            "question": "What should happen when the budget is small?",
+            "why": "The expected result defines when the task is done.",
+            "options": [
+              "Keep part of the diff, truncated to fit",
+              "Keep only file names and stats",
+              "Drop the diff but log a warning"
+            ]
+          }
+        ],
+        "assumptions": [
+          "The repository is the Preflight project in the working directory.",
+          "'Budget' means a size or token limit used when building a context or prompt."
+        ],
+        "contextGaps": [
+          "The file or function that implements assemble.",
+          "The budget value at which the diff is dropped, and the current budget rules.",
+          "Whether the current behaviour is intended."
+        ],
+        "usage": {
+          "inputTokens": 2785,
+          "outputTokens": 550,
+          "costUsd": 0.00061114
+        },
+        "latency": 4887,
+        "promptVersion": "deep-v2",
+        "draftId": "question-only",
+        "contextManifest": {
+          "sources": [
+            {
+              "source": "draft",
+              "chars": 61,
+              "tokens": 16,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "qa",
+              "chars": 0,
+              "tokens": 0,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "prompt-files",
+              "chars": 0,
+              "tokens": 0,
+              "included": false,
+              "truncated": false,
+              "omittedReason": "empty",
+              "redactions": 0
+            }
+          ],
+          "totalTokens": 16,
+          "budget": 200000
+        }
+      }
+    }
+  },
+  {
+    "id": "trivial-command",
+    "draft": "run npm test",
+    "ok": true,
+    "checks": {
+      "maxIssues": true,
+      "maxQuestions": true,
+      "limits": true,
+      "noRawAt": true
+    },
+    "res": {
+      "ok": true,
+      "reviewId": "trivial-command-1",
+      "review": {
+        "issues": [],
+        "questions": [],
+        "assumptions": [
+          "The repository has an npm test script defined in package.json.",
+          "Running the tests is the whole task, with no code changes expected."
+        ],
+        "contextGaps": [],
+        "usage": {
+          "inputTokens": 2765,
+          "outputTokens": 231,
+          "costUsd": 0.00044164
+        },
+        "latency": 3354,
+        "promptVersion": "deep-v2",
+        "draftId": "trivial-command",
+        "contextManifest": {
+          "sources": [
+            {
+              "source": "draft",
+              "chars": 12,
+              "tokens": 3,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "qa",
+              "chars": 0,
+              "tokens": 0,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "prompt-files",
+              "chars": 0,
+              "tokens": 0,
+              "included": false,
+              "truncated": false,
+              "omittedReason": "empty",
+              "redactions": 0
+            }
+          ],
+          "totalTokens": 3,
+          "budget": 200000
+        }
+      }
+    }
+  },
+  {
+    "id": "non-english",
+    "draft": "Ändere in src/greet.ts die Begrüßung von Hallo zu Servus und passe die Tests an.",
+    "ok": true,
+    "checks": {
+      "maxIssues": true,
+      "limits": true,
+      "noRawAt": true
+    },
+    "res": {
+      "ok": true,
+      "reviewId": "non-english-1",
+      "review": {
+        "issues": [
+          {
+            "quote": "und passe die Tests an",
+            "range": {
+              "start": 57,
+              "end": 79
+            },
+            "problem": "The draft does not say which tests to change or when the job counts as done. The agent could edit unrelated tests, or stop after any small edit without checking that the suite passes.",
+            "suggestion": "Name the test file or the command that runs the tests, and state the done condition, for example: the tests pass with the new greeting."
+          },
+          {
+            "quote": "Ändere in src/greet.ts die Begrüßung von Hallo zu Servus",
+            "range": {
+              "start": 0,
+              "end": 56
+            },
+            "problem": "It is unclear whether 'Hallo' appears once or several times in the file, and whether variants such as 'hallo' or 'Hallo!' should change too. The agent has to guess how far the replacement reaches.",
+            "suggestion": "State whether to replace only the main greeting or every occurrence in that file, and whether casing and punctuation must be kept."
+          },
+          {
+            "problem": "No limit is set on what must stay unchanged. While editing the greeting, the agent might rename functions, change exports or restructure the file.",
+            "suggestion": "Add a line such as: change only the greeting text; function names, exports and other behaviour stay the same."
+          }
+        ],
+        "questions": [
+          {
+            "question": "Soll jedes Vorkommen von Hallo in src/greet.ts ersetzt werden?",
+            "why": "The answer decides how much of the file is edited.",
+            "options": [
+              "Nur die Hauptbegrüßung",
+              "Alle Vorkommen in der Datei",
+              "Alle Vorkommen im gesamten Repository"
+            ]
+          },
+          {
+            "question": "Wie sollen die Tests angepasst werden?",
+            "why": "The answer decides whether existing expected strings change, new tests are added, or the tests are only kept passing.",
+            "options": [
+              "Erwartete Texte auf Servus ändern",
+              "Einen neuen Test für Servus ergänzen",
+              "Nur sicherstellen, dass sie grün sind"
+            ]
+          }
+        ],
+        "assumptions": [
+          "src/greet.ts existiert im Repository und enthält die Begrüßung.",
+          "Die Tests prüfen die Begrüßung aus src/greet.ts.",
+          "Die Antwort soll auf Deutsch sein."
+        ],
+        "contextGaps": [
+          "Der aktuelle Inhalt von src/greet.ts und der zugehörigen Testdateien.",
+          "Der Befehl, mit dem das Projekt seine Tests ausführt."
+        ],
+        "usage": {
+          "inputTokens": 2805,
+          "outputTokens": 2727,
+          "costUsd": 0.0017060399999999998
+        },
+        "latency": 14638,
+        "promptVersion": "deep-v2",
+        "draftId": "non-english",
+        "contextManifest": {
+          "sources": [
+            {
+              "source": "draft",
+              "chars": 80,
+              "tokens": 20,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "qa",
+              "chars": 0,
+              "tokens": 0,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "prompt-files",
+              "chars": 0,
+              "tokens": 0,
+              "included": false,
+              "truncated": false,
+              "omittedReason": "empty",
+              "redactions": 0
+            }
+          ],
+          "totalTokens": 20,
+          "budget": 200000
+        }
+      }
+    }
+  },
+  {
+    "id": "secret",
+    "draft": "Call the payment API in src/pay.ts with the key [redacted] and log the response.",
+    "ok": true,
+    "checks": {
+      "gapsMatch": true,
+      "limits": true,
+      "noRawAt": true
+    },
+    "res": {
+      "ok": true,
+      "reviewId": "secret-1",
+      "review": {
+        "issues": [
+          {
+            "quote": "Call the payment API in src/pay.ts",
+            "range": {
+              "start": 0,
+              "end": 34
+            },
+            "problem": "The draft names a file but no function, endpoint or HTTP method. The agent cannot tell which call to make or where it belongs in src/pay.ts.",
+            "suggestion": "Name the function in src/pay.ts that should make the call, plus the endpoint, HTTP method and request payload."
+          },
+          {
+            "quote": "and log the response",
+            "range": {
+              "start": 59,
+              "end": 79
+            },
+            "problem": "There is no success condition. The draft does not say what to log, where the log goes, or what to do on an error or a non-200 reply, so the agent cannot tell when the task is finished.",
+            "suggestion": "State the expected log output (for example, the status code and body) and where it is written. Add a check that proves it works, such as a test that mocks the API and asserts the log line."
+          },
+          {
+            "quote": "with the key [redacted]",
+            "range": {
+              "start": 35,
+              "end": 58
+            },
+            "problem": "The draft puts the credential inline, and the value is removed, so the agent does not know where the key comes from. Hardcoding it in src/pay.ts would also be a security risk.",
+            "suggestion": "Name the environment variable or config entry that holds the key, and state that the key must not be written into source files."
+          }
+        ],
+        "questions": [
+          {
+            "question": "Which operation should the call perform?",
+            "why": "The draft does not say whether this is a charge, a refund, a status lookup or something else, so the agent cannot build the request.",
+            "options": [
+              "Create a charge",
+              "Refund a payment",
+              "Check a payment status"
+            ]
+          },
+          {
+            "question": "Where should the logged response go?",
+            "why": "The draft says to log it but not where, so the agent cannot tell whether a console line or a file is expected.",
+            "options": [
+              "Console output",
+              "A log file",
+              "An existing logger in the project"
+            ]
+          },
+          {
+            "question": "How should the task be checked as done?",
+            "why": "The draft has no success criteria, so the agent cannot tell when the work is complete.",
+            "options": [
+              "A test that mocks the API and checks the log",
+              "A manual run against a sandbox key",
+              "Code compiles and the function is called"
+            ]
+          }
+        ],
+        "assumptions": [
+          "src/pay.ts exists in this repository and is the intended place for the change.",
+          "The payment API is an external HTTP service the agent can reach from this environment."
+        ],
+        "contextGaps": [
+          "Preflight redacted the API key in the draft, so the key's source (environment variable or config entry) is not given.",
+          "The draft does not say whether a sandbox or live payment API should be used."
+        ],
+        "usage": {
+          "inputTokens": 2792,
+          "outputTokens": 1642,
+          "costUsd": 0.0011588400000000002
+        },
+        "latency": 9902,
+        "promptVersion": "deep-v2",
+        "draftId": "secret",
+        "contextManifest": {
+          "sources": [
+            {
+              "source": "draft",
+              "chars": 80,
+              "tokens": 20,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "qa",
+              "chars": 0,
+              "tokens": 0,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "prompt-files",
+              "chars": 0,
+              "tokens": 0,
+              "included": false,
+              "truncated": false,
+              "omittedReason": "empty",
+              "redactions": 0
+            }
+          ],
+          "totalTokens": 20,
+          "budget": 200000
+        }
+      }
+    }
+  },
+  {
+    "id": "placeholder",
+    "draft": "Add a retry with 3 attempts to [TODO: which client] and keep the existing timeout.",
+    "ok": true,
+    "checks": {
+      "gapsMatch": true,
+      "limits": true,
+      "noRawAt": true
+    },
+    "res": {
+      "ok": true,
+      "reviewId": "placeholder-1",
+      "review": {
+        "issues": [
+          {
+            "quote": "[TODO: which client]",
+            "range": {
+              "start": 31,
+              "end": 51
+            },
+            "problem": "The target is an unfilled placeholder, so the agent cannot tell which client, module or file gets the retry logic.",
+            "suggestion": "Replace the placeholder with the file path and client name, for example the HTTP client class or function that makes the call."
+          },
+          {
+            "quote": "Add a retry with 3 attempts",
+            "range": {
+              "start": 0,
+              "end": 27
+            },
+            "problem": "It is unclear what counts as a failure worth retrying (any error, only timeouts, only 5xx responses) and whether the 3 attempts include the first call or are retries after it.",
+            "suggestion": "State which errors trigger a retry and whether 3 means 3 total attempts or 3 retries after the first call."
+          },
+          {
+            "quote": "Add a retry with 3 attempts",
+            "range": {
+              "start": 0,
+              "end": 27
+            },
+            "problem": "No success criteria are given, so the agent has no way to confirm the retry works.",
+            "suggestion": "Add the expected behaviour, such as a test that fails the first two calls and expects the third to succeed, or a named existing test command that must pass."
+          }
+        ],
+        "questions": [
+          {
+            "question": "Which client should get the retry?",
+            "why": "The draft contains a placeholder and the agent cannot pick a target without it.",
+            "options": [
+              "An HTTP or API client",
+              "A database connection",
+              "Another client, I will name it"
+            ]
+          },
+          {
+            "question": "Which errors should trigger a retry?",
+            "why": "Retrying every error can repeat non-recoverable failures such as bad input.",
+            "options": [
+              "Timeouts and network errors only",
+              "Timeouts and 5xx server responses",
+              "Any error"
+            ]
+          }
+        ],
+        "assumptions": [
+          "The client is part of this repository.",
+          "\"Keep the existing timeout\" means the current timeout value and its setting must not change."
+        ],
+        "contextGaps": [
+          "The name of the client or the file that contains it.",
+          "The current timeout value, so the agent can confirm it is kept unchanged."
+        ],
+        "usage": {
+          "inputTokens": 2795,
+          "outputTokens": 577,
+          "costUsd": 0.00062734
+        },
+        "latency": 4672,
+        "promptVersion": "deep-v2",
+        "draftId": "placeholder",
+        "contextManifest": {
+          "sources": [
+            {
+              "source": "draft",
+              "chars": 82,
+              "tokens": 21,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "qa",
+              "chars": 0,
+              "tokens": 0,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "prompt-files",
+              "chars": 0,
+              "tokens": 0,
+              "included": false,
+              "truncated": false,
+              "omittedReason": "empty",
+              "redactions": 0
+            }
+          ],
+          "totalTokens": 21,
+          "budget": 200000
+        }
+      }
+    }
+  },
+  {
+    "id": "missing-file",
+    "draft": "Update @core/src/gate.ts so the gate threshold can be configured in settings.",
+    "ok": true,
+    "checks": {
+      "gapsMatchCount": true,
+      "limits": true,
+      "noRawAt": true
+    },
+    "res": {
+      "ok": true,
+      "reviewId": "missing-file-1",
+      "review": {
+        "issues": [
+          {
+            "quote": "Update @core/src/gate.ts so the gate threshold can be configured in settings.",
+            "range": {
+              "start": 0,
+              "end": 77
+            },
+            "problem": "The draft names no settings file, config key, or format, so the agent cannot tell where the threshold is read from or what its default should be.",
+            "suggestion": "Name the settings source (for example, a specific config file or key), the expected name of the setting, its type and default value, and how the gate should behave when the setting is missing or invalid."
+          },
+          {
+            "quote": "so the gate threshold can be configured in settings",
+            "range": {
+              "start": 25,
+              "end": 76
+            },
+            "problem": "The draft does not say what the current threshold is or how it is hard-coded now, so the agent must guess what to replace and whether existing behaviour must stay the same.",
+            "suggestion": "Describe the current threshold value and where it is set, and state that the default must keep today's behaviour unless the user says otherwise."
+          },
+          {
+            "quote": "Update @core/src/gate.ts",
+            "range": {
+              "start": 0,
+              "end": 24
+            },
+            "problem": "No done condition is given. The agent cannot tell what proves the change works, such as a test or a sample setting that changes the gate result.",
+            "suggestion": "Add a check, for example: with the setting set to a given value, the gate passes or fails at that threshold, and the existing tests still pass."
+          }
+        ],
+        "questions": [
+          {
+            "question": "Where should the threshold setting live?",
+            "why": "The draft says 'settings' but the agent needs the exact file or config source to read from.",
+            "options": [
+              "A project config file",
+              "Environment variable",
+              "User settings file"
+            ]
+          },
+          {
+            "question": "What should happen when the setting is missing?",
+            "why": "The default decides whether existing behaviour changes.",
+            "options": [
+              "Keep the current hard-coded threshold",
+              "Fail with an error",
+              "Use a new default you specify"
+            ]
+          }
+        ],
+        "assumptions": [
+          "The gate threshold is a single numeric value in core/src/gate.ts.",
+          "The draft's path refers to the file in the Preflight repository."
+        ],
+        "contextGaps": [
+          "The current threshold value and how it is defined in gate.ts.",
+          "The name and format of the settings source the threshold should read from.",
+          "1 referenced file was not found in the workspace"
+        ],
+        "usage": {
+          "inputTokens": 2798,
+          "outputTokens": 629,
+          "costUsd": 0.0006565399999999999
+        },
+        "latency": 5430,
+        "promptVersion": "deep-v2",
+        "draftId": "missing-file",
+        "contextManifest": {
+          "sources": [
+            {
+              "source": "draft",
+              "chars": 77,
+              "tokens": 20,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "qa",
+              "chars": 0,
+              "tokens": 0,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "prompt-files",
+              "chars": 0,
+              "tokens": 0,
+              "included": false,
+              "truncated": false,
+              "omittedReason": "empty",
+              "redactions": 0,
+              "details": {
+                "files": 0,
+                "dropped": 0,
+                "missing": 1,
+                "ambiguous": 0,
+                "excluded": 0,
+                "duplicate": 0,
+                "unreadable": 0
+              }
+            }
+          ],
+          "totalTokens": 20,
+          "budget": 200000
+        }
+      }
+    }
+  },
+  {
+    "id": "conflicting-instructions",
+    "draft": "Add lodash as a dependency of the web package.",
+    "ok": true,
+    "checks": {
+      "gapsMatch": true,
+      "limits": true,
+      "noRawAt": true
+    },
+    "res": {
+      "ok": true,
+      "reviewId": "conflicting-instructions-1",
+      "review": {
+        "issues": [
+          {
+            "quote": "Add lodash as a dependency of the web package.",
+            "range": {
+              "start": 0,
+              "end": 46
+            },
+            "problem": "No done condition. The agent cannot tell whether success means the package is listed, the lockfile is updated, or the install and build still work.",
+            "suggestion": "State how to verify it, for example: lodash is listed in the web package's manifest, the install completes, and the web build or tests still pass."
+          },
+          {
+            "quote": "Add lodash as a dependency of the web package.",
+            "range": {
+              "start": 0,
+              "end": 46
+            },
+            "problem": "The draft does not say whether lodash is a runtime dependency or a dev dependency, or which version to use. Each choice changes the manifest and the lockfile.",
+            "suggestion": "Say the dependency type (runtime or dev) and the version or range, or say 'latest stable' if any version is acceptable."
+          },
+          {
+            "quote": "Add lodash as a dependency of the web package.",
+            "range": {
+              "start": 0,
+              "end": 46
+            },
+            "problem": "The scope is unclear. The agent cannot tell whether it should only install the package or also import it in source files.",
+            "suggestion": "Say 'install only, no code changes' or name the file or function where lodash should be used."
+          }
+        ],
+        "questions": [
+          {
+            "question": "Should lodash be a runtime dependency or a dev dependency?",
+            "why": "The two options are written to different sections of the manifest and affect what ships with the web package.",
+            "options": [
+              "Runtime dependency",
+              "Dev dependency"
+            ]
+          },
+          {
+            "question": "Which version should be installed?",
+            "why": "Without a version or range, the agent must pick one, and the choice is hard to reverse.",
+            "options": [
+              "Latest stable",
+              "A specific version I will name",
+              "Any version that matches the existing lodash usage"
+            ]
+          },
+          {
+            "question": "Should the change stop at installing the package, or also use it in code?",
+            "why": "A bare install and an install with imports touch different files and need different checks.",
+            "options": [
+              "Install only, no code changes",
+              "Install and use it in a file I will name"
+            ]
+          }
+        ],
+        "assumptions": [
+          "The web package is the one at packages/web in this repository.",
+          "The task is limited to adding the dependency, not changing application logic."
+        ],
+        "contextGaps": [
+          "AGENTS.md says to install packages with npm, but packages/web/CLAUDE.md says to install packages with pnpm only. The draft does not say which package manager to use, and the two instructions contradict each other."
+        ],
+        "usage": {
+          "inputTokens": 2863,
+          "outputTokens": 2038,
+          "costUsd": 0.0017243999999999996
+        },
+        "latency": 12254,
+        "promptVersion": "deep-v2",
+        "draftId": "conflicting-instructions",
+        "contextManifest": {
+          "sources": [
+            {
+              "source": "draft",
+              "chars": 46,
+              "tokens": 12,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "qa",
+              "chars": 0,
+              "tokens": 0,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "prompt-files",
+              "chars": 0,
+              "tokens": 0,
+              "included": false,
+              "truncated": false,
+              "omittedReason": "empty",
+              "redactions": 0
+            }
+          ],
+          "totalTokens": 12,
+          "budget": 200000
+        }
+      }
+    }
+  },
+  {
+    "id": "no-session",
+    "draft": "Rename greet to welcome in src/greet.ts and its callers; npm test must still pass.",
+    "ok": true,
+    "checks": {
+      "noGapsMatch": true,
+      "limits": true,
+      "noRawAt": true
+    },
+    "res": {
+      "ok": true,
+      "reviewId": "no-session-1",
+      "review": {
+        "issues": [
+          {
+            "quote": "and its callers",
+            "range": {
+              "start": 40,
+              "end": 55
+            },
+            "problem": "The callers are not named or bounded. The agent cannot tell whether they are only in src/, or also in tests, docs, scripts or other packages, so it may miss some or change files the user did not expect.",
+            "suggestion": "List the files that call greet, or state the bound, for example \"all callers under src/ and test/, found by search\"."
+          },
+          {
+            "quote": "Rename greet to welcome",
+            "range": {
+              "start": 0,
+              "end": 23
+            },
+            "problem": "It is unclear what greet is (a named export, default export or local helper) and whether the old name must stop working. The agent has to guess whether to keep a compatibility alias.",
+            "suggestion": "Say whether greet is a named or default export, and whether the old name should be removed or kept as an alias."
+          },
+          {
+            "quote": "npm test must still pass",
+            "range": {
+              "start": 57,
+              "end": 81
+            },
+            "problem": "This only says existing tests must keep passing. It does not say whether new tests are needed, or whether the output or signature of greet must stay the same apart from the name.",
+            "suggestion": "Add what must not change (for example the arguments and return value) and whether the agent should add or update a test that checks welcome."
+          }
+        ],
+        "questions": [
+          {
+            "question": "Should the old name greet remain available after the rename?",
+            "why": "Removing it breaks any code that imports it, and keeping it adds an alias the agent would need to write.",
+            "options": [
+              "Remove greet completely",
+              "Keep greet as an alias for welcome"
+            ]
+          },
+          {
+            "question": "Where may callers of greet appear?",
+            "why": "This sets how far the agent searches and edits.",
+            "options": [
+              "Only under src/",
+              "Across the whole repository, including tests and docs",
+              "Also in other packages or published consumers"
+            ]
+          }
+        ],
+        "assumptions": [
+          "greet is a function or value exported from src/greet.ts.",
+          "npm test is defined in package.json and runs the existing test suite.",
+          "The rename should not change behaviour, only the name."
+        ],
+        "contextGaps": [
+          "Whether any code outside this repository imports greet."
+        ],
+        "usage": {
+          "inputTokens": 2797,
+          "outputTokens": 1457,
+          "costUsd": 0.0010696400000000002
+        },
+        "latency": 9233,
+        "promptVersion": "deep-v2",
+        "draftId": "no-session",
+        "contextManifest": {
+          "sources": [
+            {
+              "source": "draft",
+              "chars": 82,
+              "tokens": 21,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "qa",
+              "chars": 0,
+              "tokens": 0,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "prompt-files",
+              "chars": 0,
+              "tokens": 0,
+              "included": false,
+              "truncated": false,
+              "omittedReason": "empty",
+              "redactions": 0
+            }
+          ],
+          "totalTokens": 21,
+          "budget": 200000
+        }
+      }
+    }
+  },
+  {
+    "id": "manifest-omission",
+    "draft": "Fix the off-by-one in src/pager.ts so the last page is shown; add a test.",
+    "ok": true,
+    "checks": {
+      "gapsMatchCount": true,
+      "limits": true,
+      "noRawAt": true
+    },
+    "res": {
+      "ok": true,
+      "reviewId": "manifest-omission-1",
+      "review": {
+        "issues": [
+          {
+            "quote": "Fix the off-by-one in src/pager.ts",
+            "range": {
+              "start": 0,
+              "end": 34
+            },
+            "problem": "No function, line, or symptom is named. The agent has to find which off-by-one to fix, and a file may contain several index calculations.",
+            "suggestion": "Name the function in src/pager.ts that computes the page range, and give the wrong and correct values for one example, such as 10 items with a page size of 4."
+          },
+          {
+            "quote": "so the last page is shown",
+            "range": {
+              "start": 35,
+              "end": 60
+            },
+            "problem": "The expected result is not defined. It is unclear whether the last page is currently missing entirely, cut short, or shown with an extra empty page, so the agent cannot tell when the fix is done.",
+            "suggestion": "State what the user sees now and what should appear instead, with a concrete input and output for the last page."
+          },
+          {
+            "quote": "add a test",
+            "range": {
+              "start": 62,
+              "end": 72
+            },
+            "problem": "The test has no file, name, or assertion, and nothing says that other paging behaviour must stay the same. The agent may write a test that passes without checking the bug.",
+            "suggestion": "Say which test file to use (or that an existing one should be extended), name the case the test must cover (the final page with a partial count), and state that other pagination behaviour must not change."
+          }
+        ],
+        "questions": [
+          {
+            "question": "What does the user see on the last page right now?",
+            "why": "The symptom shows which index is wrong and what the fixed output must look like.",
+            "options": [
+              "Last page is missing",
+              "Last page has a duplicate or wrong item",
+              "Extra empty page appears"
+            ]
+          },
+          {
+            "question": "Which function in src/pager.ts computes the page range?",
+            "why": "The file may hold more than one index calculation, and the fix must target the right one.",
+            "options": []
+          },
+          {
+            "question": "Should the test cover only the final partial page, or the boundaries around it too?",
+            "why": "This sets how many cases the test needs and what counts as done.",
+            "options": [
+              "Only the final partial page",
+              "Final page and the page before it",
+              "Full boundary set including an exact multiple of page size"
+            ]
+          }
+        ],
+        "assumptions": [
+          "src/pager.ts holds the pagination logic for this repository.",
+          "An existing test suite is already set up, so a new test can be added to it.",
+          "The off-by-one affects the final page only."
+        ],
+        "contextGaps": [
+          "No example of the input, page size, or resulting page contents that shows the bug.",
+          "No test framework or existing test file name for the pager.",
+          "Left out: the uncommitted changes (the context budget was full)"
+        ],
+        "usage": {
+          "inputTokens": 2808,
+          "outputTokens": 1281,
+          "costUsd": 0.0009845400000000001
+        },
+        "latency": 8066,
+        "promptVersion": "deep-v2",
+        "draftId": "manifest-omission",
+        "contextManifest": {
+          "sources": [
+            {
+              "source": "draft",
+              "chars": 73,
+              "tokens": 19,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "qa",
+              "chars": 0,
+              "tokens": 0,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "prompt-files",
+              "chars": 0,
+              "tokens": 0,
+              "included": false,
+              "truncated": false,
+              "omittedReason": "empty",
+              "redactions": 0
+            },
+            {
+              "source": "git-diff",
+              "chars": 0,
+              "tokens": 0,
+              "included": false,
+              "truncated": false,
+              "omittedReason": "budget",
+              "redactions": 0
+            }
+          ],
+          "totalTokens": 19,
+          "budget": 200000
+        }
+      }
+    }
+  }
+]
