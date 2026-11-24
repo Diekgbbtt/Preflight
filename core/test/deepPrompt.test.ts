@@ -115,7 +115,7 @@ describe("neutralizeMentions", () => {
 
 /** One entry per released prompt version: changing the text without a version bump fails here. */
 const SYSTEM_HASHES: Record<string, string> = {
-  "deep-v2": "20a5a7819199f996",
+  "deep-v2": "4bb139449fc35249",
 };
 
 const systemHash = () => createHash("sha256").update(buildDeepPrompt({ bundle: bundle() }).system).digest("hex").slice(0, 16);

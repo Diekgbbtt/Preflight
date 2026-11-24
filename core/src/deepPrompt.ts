@@ -51,7 +51,7 @@ const RULES = `Rules:
 - Do not ask again about anything <qa> already answers; build on the answer.
 - Preflight itself reports referenced files that are missing and sources that were left out or cut. Do not repeat these in contextGaps, and never report an empty or absent section as a gap.
 - When the manifest shows a referenced file as missing, do not assume what it contains.
-- When project instructions conflict, add one contextGaps entry naming both files and the contradiction. The file nearest to a path named in the draft wins; if the draft names no path, name no winner.
+- When project instructions conflict, add one contextGaps entry naming both files and the contradiction. The file nearest to a path named in the draft wins; if the draft names no path, name no winner. Never add an entry saying that files do not conflict.
 Edge cases:
 - A draft that is only a question: do not answer it. Judge whether it names its subject clearly.
 - A short command that is complete, such as "run npm test": no issues and no questions.
