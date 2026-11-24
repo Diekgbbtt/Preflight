@@ -1,0 +1,128 @@
+{
+  "date": "2026-11-24",
+  "commit": "d4dc55f",
+  "source": "docs/measurements/code-access-2026-11-24-deep-v2/runs.json",
+  "pairs": [
+    {
+      "runId": "r04",
+      "draftId": "d2",
+      "tier": "T0",
+      "model": "haiku",
+      "question": "Which corpus file should receive the new lines?",
+      "terms": [
+        "corpus"
+      ],
+      "original": [],
+      "grounded": [
+        "core/test/corpus.jsonl",
+        "core/test/corpus.test.ts",
+        "core/test/review-corpus.jsonl"
+      ]
+    },
+    {
+      "runId": "r05",
+      "draftId": "d2",
+      "tier": "T1",
+      "model": "haiku",
+      "question": "Which corpus file should receive the new lines?",
+      "terms": [
+        "corpus"
+      ],
+      "original": [
+        "A test fixture file (please name it)",
+        "Another location (please name it)"
+      ],
+      "grounded": [
+        "core/test/corpus.jsonl",
+        "core/test/corpus.test.ts",
+        "core/test/review-corpus.jsonl"
+      ]
+    },
+    {
+      "runId": "r06",
+      "draftId": "d2",
+      "tier": "T2",
+      "model": "haiku",
+      "question": "Which corpus file should the new lines go in?",
+      "terms": [
+        "corpus"
+      ],
+      "original": [],
+      "grounded": [
+        "core/test/corpus.jsonl",
+        "core/test/corpus.test.ts",
+        "core/test/review-corpus.jsonl"
+      ]
+    },
+    {
+      "runId": "r15",
+      "draftId": "d5",
+      "tier": "T2",
+      "model": "haiku",
+      "question": "Where is the assemble function?",
+      "terms": [
+        "assemble"
+      ],
+      "original": [
+        "It is in core/src/index.ts",
+        "It is in another file (I will name it)"
+      ],
+      "grounded": [
+        "core/src/context.ts"
+      ]
+    },
+    {
+      "runId": "r18",
+      "draftId": "d6",
+      "tier": "T2",
+      "model": "haiku",
+      "question": "Which part of the code runs the deep review?",
+      "terms": [
+        "deep",
+        "review"
+      ],
+      "original": [
+        "The Claude CLI call in core/src/claudeCli.ts",
+        "The orchestration in core/src/index.ts",
+        "Something else (please name it)"
+      ],
+      "grounded": [
+        "core/src/review.ts",
+        "core/test/review.test.ts",
+        "core/test/review-corpus.jsonl"
+      ]
+    },
+    {
+      "runId": "r28",
+      "draftId": "d2",
+      "tier": "T0",
+      "model": "sonnet",
+      "question": "Where is the corpus stored?",
+      "terms": [
+        "corpus"
+      ],
+      "original": [],
+      "grounded": [
+        "core/test/corpus.jsonl",
+        "core/test/corpus.test.ts",
+        "core/test/review-corpus.jsonl"
+      ]
+    },
+    {
+      "runId": "r30",
+      "draftId": "d2",
+      "tier": "T2",
+      "model": "sonnet",
+      "question": "Where is the corpus that the new lines belong in?",
+      "terms": [
+        "corpus"
+      ],
+      "original": [],
+      "grounded": [
+        "core/test/corpus.jsonl",
+        "core/test/corpus.test.ts",
+        "core/test/review-corpus.jsonl"
+      ]
+    }
+  ]
+}

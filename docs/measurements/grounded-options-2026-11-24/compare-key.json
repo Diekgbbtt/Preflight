@@ -1,0 +1,37 @@
+[
+  {
+    "qid": "g01",
+    "pair": 1,
+    "groundedIs": 2
+  },
+  {
+    "qid": "g02",
+    "pair": 5,
+    "groundedIs": 1
+  },
+  {
+    "qid": "g03",
+    "pair": 4,
+    "groundedIs": 1
+  },
+  {
+    "qid": "g04",
+    "pair": 6,
+    "groundedIs": 2
+  },
+  {
+    "qid": "g05",
+    "pair": 3,
+    "groundedIs": 2
+  },
+  {
+    "qid": "g06",
+    "pair": 2,
+    "groundedIs": 2
+  },
+  {
+    "qid": "g07",
+    "pair": 0,
+    "groundedIs": 1
+  }
+]
