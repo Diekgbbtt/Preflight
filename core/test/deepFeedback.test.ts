@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   deepFeedback,
+  EMPTY_DRAFT_QUESTION,
   loadDeepSession,
   NO_INSTRUCTION_CONTROL_GAP,
   SCHEMA_VERSION,
@@ -93,7 +94,7 @@ describe("deepFeedback", () => {
     if (!res.ok) return;
     expect(requests).toHaveLength(1);
     expect(res.review.issues).toEqual([]);
-    expect(res.review.promptVersion).toBe("deep-v1");
+    expect(res.review.promptVersion).toBe("deep-v2");
     expect(res.review.contextManifest.sources[0].source).toBe("draft");
     expect(reviews.events).toHaveLength(1);
     expect(reviews.events[0]).toMatchObject({ id: res.reviewId, draftId: "d1", ts: "2023-11-14T22:13:20.000Z" });
@@ -201,6 +202,19 @@ describe("deepFeedback", () => {
     expect(requests[0].user).toContain("<session>\nturn 1: npm test failed\n</session>");
     expect(res.review.sessionSlice).toEqual({ content: "turn 1: npm test failed", tokens: 6, truncated: false });
     expect(res.review.sessionId).toBe("agent-1");
+  });
+});
+
+describe("empty draft", () => {
+  it("asks one fixed question without a model call and stores it like any round", async () => {
+    const { deps, reviews, questions } = setup();
+    const res = await deepFeedback({ ...input, draft: "  \n " }, deps);
+    if (!res.ok) throw new Error(res.error.code);
+    expect(deps.provider.complete).not.toHaveBeenCalled();
+    expect(res.review.questions).toEqual([EMPTY_DRAFT_QUESTION]);
+    expect(res.review.usage).toEqual({ inputTokens: 0, outputTokens: 0, costUsd: 0 });
+    expect(reviews.events).toHaveLength(1);
+    expect(questions.events.map((q) => q.question)).toEqual(["What should the agent do?"]);
   });
 });
 

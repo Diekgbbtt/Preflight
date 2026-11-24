@@ -1,6 +1,6 @@
 // Deep feedback contract (#46): ContextBundle in, persisted DeepReview out.
 import { assemble, estimateTokens as defaultEstimate, type ContextManifest, type ContextSource, type ContextSourceEntry, type RedactResult } from "./context";
-import { buildDeepPrompt, restoreMentions } from "./deepPrompt";
+import { buildDeepPrompt, DEEP_PROMPT_VERSION, restoreMentions } from "./deepPrompt";
 import { exceedsBudget, exceedsContext, mapError, type FeedbackError } from "./errors";
 import type { ModelProvider } from "./model";
 import type { Clock, Event, IdGenerator, Repository } from "./repository";
@@ -168,6 +168,44 @@ function instructionEntries(files: InstructionFile[]): ContextSourceEntry[] {
   }));
 }
 
+/** Appends the review and one event per question; returns the new review id. */
+async function persist(review: DeepReviewRecord, input: DeepFeedbackInput, deps: DeepFeedbackDeps): Promise<{ reviewId: string; review: DeepReviewRecord }> {
+  const reviewId = deps.ids();
+  const ts = new Date(deps.clock.now()).toISOString();
+  await deps.reviews.append({ id: reviewId, ts, ...review });
+  for (const q of review.questions) {
+    await deps.questions.append({
+      id: deps.ids(),
+      ts,
+      draftId: input.draftId,
+      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      reviewId,
+      question: q.question,
+      why: q.why,
+      options: q.options,
+    });
+  }
+  return { reviewId, review };
+}
+
+export const EMPTY_DRAFT_QUESTION = { question: "What should the agent do?", why: "The draft is empty.", options: [] as string[] };
+
+/** An empty draft needs no model: the only useful review is one question. Stored like any round. */
+function emptyDraftReview(input: DeepFeedbackInput, budget: number): DeepReviewRecord {
+  return {
+    issues: [],
+    questions: [EMPTY_DRAFT_QUESTION],
+    assumptions: [],
+    contextGaps: [],
+    usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+    latency: 0,
+    promptVersion: DEEP_PROMPT_VERSION,
+    draftId: input.draftId,
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    contextManifest: { sources: [], totalTokens: 0, budget },
+  };
+}
+
 /**
  * One deep round: load instructions, assemble the draft with every answered
  * question, check the budget, call the model once, parse, add code gaps, persist.
@@ -176,6 +214,7 @@ export async function deepFeedback(input: DeepFeedbackInput, deps: DeepFeedbackD
   const caps = deps.provider.capabilities;
   const estimate = deps.estimateTokens ?? defaultEstimate;
   try {
+    if (!input.draft.trim()) return { ok: true, ...(await persist(emptyDraftReview(input, caps.maxContextTokens), input, deps)) };
     const { questions } = await loadDeepSession(input.draftId, deps);
 
     let block: InstructionBlock = { text: "", files: [] };
@@ -217,23 +256,7 @@ export async function deepFeedback(input: DeepFeedbackInput, deps: DeepFeedbackD
       contextManifest: bundle.manifest,
       ...(slice ? { sessionSlice: { content: slice.content, tokens: slice.tokens, truncated: slice.provenance.truncated } } : {}),
     };
-
-    const reviewId = deps.ids();
-    const ts = new Date(deps.clock.now()).toISOString();
-    await deps.reviews.append({ id: reviewId, ts, ...review });
-    for (const q of review.questions) {
-      await deps.questions.append({
-        id: deps.ids(),
-        ts,
-        draftId: input.draftId,
-        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-        reviewId,
-        question: q.question,
-        why: q.why,
-        options: q.options,
-      });
-    }
-    return { ok: true, reviewId, review };
+    return { ok: true, ...(await persist(review, input, deps)) };
   } catch (err) {
     return { ok: false, error: mapError(err) };
   }
