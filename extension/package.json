@@ -64,6 +64,18 @@
         "promptPreflight.studyLog.participantId": { "type": "string", "default": "", "description": "Participant ID written to the study log." },
         "promptPreflight.debug": { "type": "boolean", "default": false, "description": "Enable the local debug trace. Stores full prompts and model responses in a JSONL file. Off by default." },
         "promptPreflight.debugLogDir": { "type": "string", "default": "", "scope": "machine", "description": "Directory for the debug trace. Empty uses the extension global storage debug directory. A relative path resolves under it; an absolute path is used as is." },
+        "promptPreflight.context.instructionFileNames": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["AGENTS.md", "CLAUDE.md"],
+          "description": "File names of agent instruction files that detailed feedback checks your draft against. Names only, no paths. Sent only when code sharing is on."
+        },
+        "promptPreflight.context.designFileNames": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "File names of design or specification documents, for example ARCHITECTURE.md, that detailed feedback may use to ask better questions. Names only, no paths. Sent only when code sharing is on."
+        },
         "promptPreflight.context.includeCode": {
           "type": "string",
           "enum": ["off", "prompt-files", "workspace"],
