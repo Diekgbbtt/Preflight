@@ -1,0 +1,372 @@
+[
+  {
+    "qid": "q001",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r02"
+  },
+  {
+    "qid": "q002",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r02"
+  },
+  {
+    "qid": "q003",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r15"
+  },
+  {
+    "qid": "q004",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r04"
+  },
+  {
+    "qid": "q005",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r28"
+  },
+  {
+    "qid": "q006",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r21"
+  },
+  {
+    "qid": "q007",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r30"
+  },
+  {
+    "qid": "q008",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r21"
+  },
+  {
+    "qid": "q009",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r09"
+  },
+  {
+    "qid": "q010",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r08"
+  },
+  {
+    "qid": "q011",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r03"
+  },
+  {
+    "qid": "q012",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r07"
+  },
+  {
+    "qid": "q013",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r26"
+  },
+  {
+    "qid": "q014",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r25"
+  },
+  {
+    "qid": "q015",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r10"
+  },
+  {
+    "qid": "q016",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r08"
+  },
+  {
+    "qid": "q017",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r23"
+  },
+  {
+    "qid": "q018",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r14"
+  },
+  {
+    "qid": "q019",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r17"
+  },
+  {
+    "qid": "q020",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r22"
+  },
+  {
+    "qid": "q021",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r24"
+  },
+  {
+    "qid": "q022",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r11"
+  },
+  {
+    "qid": "q023",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r04"
+  },
+  {
+    "qid": "q024",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r12"
+  },
+  {
+    "qid": "q025",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r16"
+  },
+  {
+    "qid": "q026",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r13"
+  },
+  {
+    "qid": "q027",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r07"
+  },
+  {
+    "qid": "q028",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r06"
+  },
+  {
+    "qid": "q029",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r09"
+  },
+  {
+    "qid": "q030",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r31"
+  },
+  {
+    "qid": "q031",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r20"
+  },
+  {
+    "qid": "q032",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r15"
+  },
+  {
+    "qid": "q033",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r24"
+  },
+  {
+    "qid": "q034",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r03"
+  },
+  {
+    "qid": "q035",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r10"
+  },
+  {
+    "qid": "q036",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r22"
+  },
+  {
+    "qid": "q037",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r03"
+  },
+  {
+    "qid": "q038",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r32"
+  },
+  {
+    "qid": "q039",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r30"
+  },
+  {
+    "qid": "q040",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r18"
+  },
+  {
+    "qid": "q041",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r07"
+  },
+  {
+    "qid": "q042",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r23"
+  },
+  {
+    "qid": "q043",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r20"
+  },
+  {
+    "qid": "q044",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r11"
+  },
+  {
+    "qid": "q045",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r04"
+  },
+  {
+    "qid": "q046",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r01"
+  },
+  {
+    "qid": "q047",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r25"
+  },
+  {
+    "qid": "q048",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r29"
+  },
+  {
+    "qid": "q049",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r31"
+  },
+  {
+    "qid": "q050",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r16"
+  },
+  {
+    "qid": "q051",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r14"
+  },
+  {
+    "qid": "q052",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r26"
+  },
+  {
+    "qid": "q053",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r05"
+  },
+  {
+    "qid": "q054",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r06"
+  },
+  {
+    "qid": "q055",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r15"
+  },
+  {
+    "qid": "q056",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r28"
+  },
+  {
+    "qid": "q057",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r33"
+  },
+  {
+    "qid": "q058",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r27"
+  },
+  {
+    "qid": "q059",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r27"
+  },
+  {
+    "qid": "q060",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r17"
+  },
+  {
+    "qid": "q061",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r06"
+  },
+  {
+    "qid": "q062",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r11"
+  },
+  {
+    "qid": "q063",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r01"
+  },
+  {
+    "qid": "q064",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r19"
+  },
+  {
+    "qid": "q065",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r05"
+  },
+  {
+    "qid": "q066",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r21"
+  },
+  {
+    "qid": "q067",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r18"
+  },
+  {
+    "qid": "q068",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r13"
+  },
+  {
+    "qid": "q069",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r12"
+  },
+  {
+    "qid": "q070",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r33"
+  },
+  {
+    "qid": "q071",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r19"
+  },
+  {
+    "qid": "q072",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r02"
+  },
+  {
+    "qid": "q073",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r32"
+  },
+  {
+    "qid": "q074",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2",
+    "runId": "r29"
+  }
+]

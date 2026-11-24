@@ -1,0 +1,497 @@
+[
+  {
+    "qid": "q001",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r03"
+  },
+  {
+    "qid": "q002",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r03"
+  },
+  {
+    "qid": "q003",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r27"
+  },
+  {
+    "qid": "q004",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r02"
+  },
+  {
+    "qid": "q005",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r02"
+  },
+  {
+    "qid": "q006",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r10"
+  },
+  {
+    "qid": "q007",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r15"
+  },
+  {
+    "qid": "q008",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r12"
+  },
+  {
+    "qid": "q009",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r30"
+  },
+  {
+    "qid": "q010",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r28"
+  },
+  {
+    "qid": "q011",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r04"
+  },
+  {
+    "qid": "q012",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r24"
+  },
+  {
+    "qid": "q013",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r21"
+  },
+  {
+    "qid": "q014",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r32"
+  },
+  {
+    "qid": "q015",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r31"
+  },
+  {
+    "qid": "q016",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r25"
+  },
+  {
+    "qid": "q017",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r01"
+  },
+  {
+    "qid": "q018",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r30"
+  },
+  {
+    "qid": "q019",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r29"
+  },
+  {
+    "qid": "q020",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r08"
+  },
+  {
+    "qid": "q021",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r16"
+  },
+  {
+    "qid": "q022",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r26"
+  },
+  {
+    "qid": "q023",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r02"
+  },
+  {
+    "qid": "q024",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r31"
+  },
+  {
+    "qid": "q025",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r10"
+  },
+  {
+    "qid": "q026",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r16"
+  },
+  {
+    "qid": "q027",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r07"
+  },
+  {
+    "qid": "q028",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r11"
+  },
+  {
+    "qid": "q029",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r01"
+  },
+  {
+    "qid": "q030",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r28"
+  },
+  {
+    "qid": "q031",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r33"
+  },
+  {
+    "qid": "q032",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r19"
+  },
+  {
+    "qid": "q033",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r12"
+  },
+  {
+    "qid": "q034",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r17"
+  },
+  {
+    "qid": "q035",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r05"
+  },
+  {
+    "qid": "q036",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r14"
+  },
+  {
+    "qid": "q037",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r04"
+  },
+  {
+    "qid": "q038",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r09"
+  },
+  {
+    "qid": "q039",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r12"
+  },
+  {
+    "qid": "q040",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r14"
+  },
+  {
+    "qid": "q041",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r32"
+  },
+  {
+    "qid": "q042",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r32"
+  },
+  {
+    "qid": "q043",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r17"
+  },
+  {
+    "qid": "q044",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r20"
+  },
+  {
+    "qid": "q045",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r18"
+  },
+  {
+    "qid": "q046",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r10"
+  },
+  {
+    "qid": "q047",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r21"
+  },
+  {
+    "qid": "q048",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r20"
+  },
+  {
+    "qid": "q049",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r29"
+  },
+  {
+    "qid": "q050",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r13"
+  },
+  {
+    "qid": "q051",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r07"
+  },
+  {
+    "qid": "q052",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r15"
+  },
+  {
+    "qid": "q053",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r30"
+  },
+  {
+    "qid": "q054",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r17"
+  },
+  {
+    "qid": "q055",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r18"
+  },
+  {
+    "qid": "q056",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r22"
+  },
+  {
+    "qid": "q057",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r25"
+  },
+  {
+    "qid": "q058",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r23"
+  },
+  {
+    "qid": "q059",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r24"
+  },
+  {
+    "qid": "q060",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r26"
+  },
+  {
+    "qid": "q061",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r06"
+  },
+  {
+    "qid": "q062",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r22"
+  },
+  {
+    "qid": "q063",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r04"
+  },
+  {
+    "qid": "q064",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r03"
+  },
+  {
+    "qid": "q065",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r09"
+  },
+  {
+    "qid": "q066",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r11"
+  },
+  {
+    "qid": "q067",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r25"
+  },
+  {
+    "qid": "q068",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r16"
+  },
+  {
+    "qid": "q069",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r33"
+  },
+  {
+    "qid": "q070",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r27"
+  },
+  {
+    "qid": "q071",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r08"
+  },
+  {
+    "qid": "q072",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r08"
+  },
+  {
+    "qid": "q073",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r11"
+  },
+  {
+    "qid": "q074",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r22"
+  },
+  {
+    "qid": "q075",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r13"
+  },
+  {
+    "qid": "q076",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r28"
+  },
+  {
+    "qid": "q077",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r01"
+  },
+  {
+    "qid": "q078",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r06"
+  },
+  {
+    "qid": "q079",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r20"
+  },
+  {
+    "qid": "q080",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r29"
+  },
+  {
+    "qid": "q081",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r26"
+  },
+  {
+    "qid": "q082",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r23"
+  },
+  {
+    "qid": "q083",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r07"
+  },
+  {
+    "qid": "q084",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r05"
+  },
+  {
+    "qid": "q085",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r19"
+  },
+  {
+    "qid": "q086",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r18"
+  },
+  {
+    "qid": "q087",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r06"
+  },
+  {
+    "qid": "q088",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r31"
+  },
+  {
+    "qid": "q089",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r09"
+  },
+  {
+    "qid": "q090",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r23"
+  },
+  {
+    "qid": "q091",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r05"
+  },
+  {
+    "qid": "q092",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r27"
+  },
+  {
+    "qid": "q093",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r14"
+  },
+  {
+    "qid": "q094",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r13"
+  },
+  {
+    "qid": "q095",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r15"
+  },
+  {
+    "qid": "q096",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r33"
+  },
+  {
+    "qid": "q097",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r21"
+  },
+  {
+    "qid": "q098",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r19"
+  },
+  {
+    "qid": "q099",
+    "folder": "docs/measurements/code-access-2026-11-24-temp-clean",
+    "runId": "r24"
+  }
+]
