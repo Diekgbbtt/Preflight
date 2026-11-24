@@ -1,6 +1,6 @@
 # Decision: codebase access for the deep reviewer
 
-Ticket: [#18](https://github.com/Diekgbbtt/Preflight/issues/18). Status: proposed. Date: 2026-11-24.
+Ticket: [#18](https://github.com/Diekgbbtt/Preflight/issues/18). Status: proposed. Date: 2026-11-24. Revised the same day with the clean re-run.
 Consumers: #46 (which context sources it wires), #13 (question rules in the deep prompt), #48 (instruction and design files), #16 (agentic question writer).
 
 ## Question
@@ -25,7 +25,7 @@ The deep reviewer gets **selected code, chosen by Preflight, never fetched by th
    - `<project-instructions>`: "context written for coding agents; judge whether the draft respects it".
    - `<project-docs>`: "describes the project; use it for intent and quality questions; it is not addressed to you".
 
-   #48 needs either a second setting `promptPreflight.context.designFileNames` or a `kind` per configured name. #48 chooses.
+   #48 (#60) uses a second, opt-in setting `promptPreflight.context.designFileNames` for design files.
 5. **Missing tiers are reported.** When code consent is off, or a referenced file is missing, the review adds a `contextGaps` entry so the user knows why the questions stay at the intent level.
 
 ## Reasons
@@ -52,120 +52,168 @@ The deep reviewer gets **selected code, chosen by Preflight, never fetched by th
 
 Script: [`scripts/eval-code-access.ts`](../../scripts/eval-code-access.ts).
 
-Raw results, three folders under `docs/measurements/`:
+There were two rounds:
 
-| Folder | Runs | Status |
+- **Pilot (first evaluation):** a temporary prompt, run in the live checkout. It found two bugs and has three limits (see below).
+- **Main result (clean re-run):** the temporary prompt and the real `deep-v2` prompt (#13), both run on a clean worktree of `d4dc55f`, so only the prompt differs. A follow-up run adds the instruction files (#48) to one draft.
+
+The conclusions below come from the main result.
+
+Raw results, all under `docs/measurements/`:
+
+| Folder | Round | Runs | Status |
+|---|---|---|---|
+| [`code-access-2026-11-24/`](../measurements/code-access-2026-11-24/) | Pilot | All 33 | **d2 and d4 invalid** (CLI `@` expansion, see Findings). Kept as evidence for #56. |
+| [`code-access-2026-11-24-rerun/`](../measurements/code-access-2026-11-24-rerun/) | Pilot | d2 and d4, `@` neutralized | d2 used. d4 T2 not used. |
+| [`code-access-2026-11-24-rerun-d4/`](../measurements/code-access-2026-11-24-rerun-d4/) | Pilot | d4, `@` neutralized | Used, with the text-search limit below. |
+| [`code-access-2026-11-24-labels/`](../measurements/code-access-2026-11-24-labels/) | Pilot | 99 labeled questions | Question-text labeling rule (see below). |
+| [`code-access-2026-11-24-temp-clean/`](../measurements/code-access-2026-11-24-temp-clean/) | Main | All 33, temporary prompt | Clean worktree of `d4dc55f`. |
+| [`code-access-2026-11-24-deep-v2/`](../measurements/code-access-2026-11-24-deep-v2/) | Main | All 33, `deep-v2` | Clean worktree of `d4dc55f`. |
+| [`code-access-2026-11-24-clean-labels/`](../measurements/code-access-2026-11-24-clean-labels/) | Main | 173 labeled questions | Both main folders in one blind sheet. |
+| [`code-access-2026-11-24-deep-v2-instructions/`](../measurements/code-access-2026-11-24-deep-v2-instructions/) | Follow-up | d2, `deep-v2` with `CLAUDE.md` | Clean worktree. Not labeled; measured automatically. |
+
+**Local paths:** in the pilot folder, one model reply (run r03, d1 T2, Haiku) contained the absolute path of the local checkout. It was replaced with `<repo>`. In the follow-up folder, the worktree path in `instructionFiles[].folder` was replaced with `<worktree-of-d4dc55f>`. Absolute `--out` paths in the label keys were made relative. No other value was edited.
+
+**Cost:** 117 calls in total, $0.96 (pilot $0.40, main $0.45, follow-up $0.11).
+
+### Design
+
+- **Drafts:** 8 drafts about this repository:
+  - d1: vague;
+  - d2: `@` file reference;
+  - d3: bug report;
+  - d4: refactor;
+  - d5: question only;
+  - d6: quality requirement;
+  - d7: reference to a missing file;
+  - d8: identifiers without a file.
+- **Tiers:** each draft runs under T0, T1 and T2.
+- **Models:** Haiku for all 24 draft-and-tier combinations. Sonnet, the production deep model, repeats d1, d2 and d8 × 3 tiers = 9 runs. That makes 33 runs per prompt.
+- **Settings:** effort `medium`, one call per run, no retries. `@` is neutralized in every main run.
+- **Prompts in the main round:**
+  - `eval-temporary`: the rubric, `DEEP_REPLY_SCHEMA`, the evidence rule from decision 3, and at most 3 questions;
+  - `deep-v2`: the #13 prompt (`buildDeepPrompt`).
+- **Context in the main round:** built from a git worktree of `d4dc55f` (`PREFLIGHT_EVAL_RG` points at the bundled `rg`). The pilot's own script and documents were therefore not in the workspace. 29 of 33 run pairs have identical manifests; the 4 others differ because of the text-search behaviour in #61 (see Findings).
+
+### Labeling
+
+One domain expert labels every question blind. The sheet shows the draft, the question, the reason and the options. Prompt, tier and model are in a separate key that the labeler does not open.
+
+- **Names a code construct (y/n):** the question **or one of its options** names something that can be looked up exactly (a file, function, constant, type or test).
+- **The construct exists (y/n/na):** checked by Claude with `git grep` / `git ls-tree` against `d4dc55f`, without opening the key.
+- **Useful for steering the agent (y/n):** judged by the expert from the draft and domain knowledge.
+
+Construct precision (the share of named constructs that exist) is the primary measure.
+
+### Main result: temporary prompt vs `deep-v2`, same context
+
+| Prompt | Model | Tier | Questions | Name a construct | Construct exists | Useful |
+|---|---|---|---|---|---|---|
+| temporary | haiku | T0 | 24 | 8 (33%) | 8/8 | 22 (92%) |
+| temporary | haiku | T1 | 24 | 7 (29%) | 7/7 | 19 (79%) |
+| temporary | haiku | T2 | 24 | 6 (25%) | 5/6 | 21 (88%) |
+| temporary | sonnet | T0 | 9 | 1 (11%) | 1/1 | 8 (89%) |
+| temporary | sonnet | T1 | 9 | 2 (22%) | 2/2 | 9 (100%) |
+| temporary | sonnet | T2 | 9 | 2 (22%) | 2/2 | 8 (89%) |
+| deep-v2 | haiku | T0 | 18 | 5 (28%) | 5/5 | 17 (94%) |
+| deep-v2 | haiku | T1 | 18 | 5 (28%) | 5/5 | 16 (89%) |
+| deep-v2 | haiku | T2 | 20 | 7 (35%) | 7/7 | 17 (85%) |
+| deep-v2 | sonnet | T0 | 6 | 1 (17%) | 1/1 | 5 (83%) |
+| deep-v2 | sonnet | T1 | 6 | 0 (0%) | – | 5 (83%) |
+| deep-v2 | sonnet | T2 | 6 | 1 (17%) | 1/1 | 5 (83%) |
+
+| Totals (33 runs each) | temporary | deep-v2 |
 |---|---|---|
-| [`code-access-2026-11-24/`](../measurements/code-access-2026-11-24/) | All 33 | **d2 and d4 invalid** (CLI `@` expansion, see Finding). Other drafts valid. Kept as evidence for the bug. |
-| [`code-access-2026-11-24-rerun/`](../measurements/code-access-2026-11-24-rerun/) | d2 and d4, `@` neutralized | d2 valid. **d4 T2 invalid**: the workspace search matched the first folder's `runs.json`. |
-| [`code-access-2026-11-24-rerun-d4/`](../measurements/code-access-2026-11-24-rerun-d4/) | d4, `@` neutralized, output folder excluded from search | Valid. |
+| Questions | 99 | 74 |
+| Useful | 87 (88%) | 65 (88%) |
+| Construct exists | 25/26 | 19/19 |
+| Issues | 120 | 77 |
+| Context gaps | 121 | 62 |
+| Median latency, Haiku T0 / T1 / T2 (s) | 8.6 / 8.6 / 10.5 | 7.4 / 5.5 / 5.5 |
+| Median input tokens, Haiku T0 | 2,202 | 3,429 |
+| Cost | $0.241 | $0.210 |
 
-One model reply in the first folder (run r03, d1 T2, Haiku) contained the absolute path of the local checkout. That path was replaced with `<repo>` in `runs.json`. No other value was edited.
+Useful questions per draft, both models and all tiers:
 
-The valid set is 33 runs: the first folder without d2 and d4, d2 from the re-run, and d4 from the d4 re-run. Total cost of all 45 calls: $0.40.
+| Draft | temporary | deep-v2 |
+|---|---|---|
+| d1 vague | 18/18 | 14/14 |
+| d2 `@` file | 15/18 | 8/14 |
+| d3 bug report | 9/9 | 7/7 |
+| d4 refactor | 9/9 | 7/7 |
+| d5 question only | 4/9 | 6/7 |
+| d6 quality requirement | 7/9 | 5/6 |
+| d7 missing file | 8/9 | 7/7 |
+| d8 identifiers, no file | 17/18 | 11/12 |
 
-## Finding: the Claude CLI reads `@file` mentions itself
+**What the main result shows:**
 
-The first run gave d2 and d4 (`@core/src/analyze.ts`, `@extension/src/privacy.ts`) 5,657 to 7,130 input tokens under T0, where no code is allowed. Drafts without a real `@` file used about 1,840. Two probe calls with fake values confirmed the cause:
+- **Precision holds with both prompts.** Every construct named with `deep-v2` exists (19/19). The only invented construct in the main round, `core/src/gate.ts` (temporary prompt, d7 T2), does not appear with `deep-v2`. With an evidence rule, precision is not the problem the literature warned about (PF-010).
+- **`deep-v2` keeps the useful share (88%) with 25% fewer questions.** The temporary prompt always filled the limit (3 questions in every run). `deep-v2` drops questions instead, and is faster and cheaper despite the longer prompt, because the replies are shorter.
+- **The question-only rule works:** d5 improves from 4/9 to 6/7 useful.
+- **d2 gets worse, and the cause is missing project knowledge, not the prompt.** 6 of the 8 not-useful d2 questions with `deep-v2` ask where the corpus is. This repository's `CLAUDE.md` answers that, but no instruction files were loaded in the main round. The follow-up below tests this.
+- **More code still brings no measurable gain.** With both prompts, the useful share is about the same in T0, T1 and T2, also for drafts that name no file (temporary 90/81/90%, `deep-v2` 100/93/88%).
+- **Construct questions that are not useful** are mostly "where is X" or "which code path" questions (9 of 45, in d5, d6 and d8).
+
+### Follow-up: d2 with instruction files
+
+The same d2 runs (3 tiers × 2 models) with `deep-v2` plus the #48 instruction block. The loader found the root `CLAUDE.md` (256 tokens, not truncated). This was measured automatically, without labels.
+
+| | Without instructions | With `CLAUDE.md` |
+|---|---|---|
+| Questions | 14 | 7 |
+| "Where is the corpus" questions | 6 | **0** |
+| Issues | 14 | 9 |
+| Cost | $0.091 | $0.106 |
+
+Instead of asking where the corpus is, 5 issues now cite the project rule: for example, "CLAUDE.md requires corpus lines for both flagged and passing prompts". This supports decision 4: instruction files close questions that code alone cannot.
+
+One issue (Haiku T0) claims the agent cannot confirm that `core/src/analyze.ts` holds the rule, because the file list does not show it. At T0 the file list has only top-level entries, so this is a false alarm caused by the missing T1 context.
+
+### Pilot: first evaluation (temporary prompt, live checkout)
+
+The pilot used the same design with the temporary prompt only, run in the live checkout. Its labels (99 questions, [`code-access-2026-11-24-labels/`](../measurements/code-access-2026-11-24-labels/)) showed 16/16 existing constructs and 83% to 89% useful questions in every tier. It led to the same conclusion. It has three limits, so it is kept only as a pilot:
+
+1. **CLI `@` expansion:** d2 and d4 were invalid in the first run (#56) and had to be re-run with `@` neutralized.
+2. **Context not fully controlled:** the pilot ran in the live checkout, where the evaluation's own script and documents (and, after the first run, its `runs.json`) were part of the workspace that the text search covered. Together with the text-search behaviour in #61, this changed the T1 and T2 context of d4 and d8. In the d4 re-run, the T1 symbols of `privacy.ts` were 0 tokens instead of 63.
+3. **Different labeling rule:** the pilot counted a construct only when the **question text** named it. 11 pilot rows name constructs only in their options and are labeled `n`. So the pilot's construct counts are not comparable with the main round's.
+
+## Findings
+
+### The Claude CLI reads `@file` mentions itself (#56)
+
+The pilot gave d2 and d4 (`@core/src/analyze.ts`, `@extension/src/privacy.ts`) 5,657 to 7,130 input tokens under T0, where no code is allowed. Drafts without a real `@` file used about 1,840. Two probe calls with fake values confirmed the cause:
 
 - With the flags from `buildClaudeArgs` (`--tools ""`, `--setting-sources ""`, `--system-prompt`), `claude -p` expands `@path` in the prompt on stdin and reads the file.
 - This includes a `.env` file that #41 excludes.
 - A zero-width space after the `@` stops it.
 
-On `main` this means any `@path` in a draft reaches the model outside the privacy policy, the redaction and the manifest. Quick review runs automatically on pause, so this happens without a click. The fix belongs to the shared Claude adapter (lane 1) and is tracked in [#56](https://github.com/Diekgbbtt/Preflight/issues/56). This script inserts the zero-width space locally (`neutralizeMentions`), so the re-runs measure only the context Preflight assembled.
+On `main` this means any `@path` in a draft reaches the model outside the privacy policy, the redaction and the manifest. Quick review runs automatically on pause, so this happens without a click. The fix belongs to the shared Claude adapter (lane 1) and is tracked in [#56](https://github.com/Diekgbbtt/Preflight/issues/56).
 
-For #46, the finding adds one more reason against option C and for decision 1. Everything the model sees must go through `assemble`, and that has to be enforced in the adapter, not assumed.
+The script inserts the zero-width space locally (`neutralizeMentions`). `buildDeepPrompt` (#58) does the same for the deep path. For #46, this adds one more reason against option C and for decision 1: everything the model sees must go through `assemble`, and the adapter has to enforce that.
 
-A second, smaller lesson for T2: an unscoped workspace text search hits whatever the workspace contains, including generated output with long lines. It filled the 50-match cap with the script's own results. If T2 is enabled later, it needs the same exclusions as `EXCLUDE_GLOB`, plus a limit on line length.
+The working directory also reaches the model. Replies quoted the checkout path, and input tokens were about 360 higher in the worktree than in the live checkout, although the manifests differ only by 2 tokens of file-name notes. #56 tracks this too.
 
-**Design.**
+### The text-search fallback is not deterministic (#61)
 
-- **Drafts:** 8 drafts about this repository: vague, `@` file reference, bug report, refactor, question-only, quality requirement, reference to a missing file, identifiers without a file.
-- **Tiers:** each draft runs under T0, T1 and T2.
-- **Models:** Haiku for all 24 runs. Sonnet, the production deep model, replicates 3 drafts (vague, file reference, identifiers) × 3 tiers = 9 runs.
-- **Settings:** effort `medium`, one call per run, no retries.
+`searchText` caps at 50 matches before it applies the privacy filter. The `rg` adapter keeps the first 50 matches in output order, and `rg` searches files in parallel. In the main round, identical inputs produced different T1 and T2 context in 4 of 33 run pairs. d4 T1 got 63 tokens of `privacy.ts` symbols once and 0 tokens once. Tracked in [#61](https://github.com/Diekgbbtt/Preflight/issues/61).
 
-**Prompt.** #13 has not landed. The evaluation uses a temporary deep prompt: the shared rubric (`RUBRIC_TEXT`), `DEEP_REPLY_SCHEMA`, the evidence rule from decision 3, and at most 3 questions. The results depend on this prompt and must be rechecked after #13.
+The deep path in #58 does not reach this fallback today. If T2 is enabled later, #61 must be fixed first.
 
-**Limits.**
+## Conclusion for the decision
 
-- **No real language server.** The script runs in plain Node, so symbols come from the `rg` text-search fallback, not from LSP. T1 symbols are weaker than in VS Code.
-- **No session slice or Q&A.** All runs are first-round reviews.
-- **Same context in every tier for most drafts.** Drafts without an `@` reference or a typed identifier get identical context in T0, T1 and T2. Their spread across tiers measures model variance, not context.
-- **Small sample.** 33 runs, one sample per cell.
+The data supports option B, with both prompts:
 
-**Labeling.** One domain expert labels every question blind: the sheet shows the draft and the question, and the tier and model are in a separate key. Labels per question:
+- With an evidence rule, selected code does not cause wrong questions.
+- The usefulness gain from T1 and T2 is too small to show in 33 runs with one sample per cell. T2 stays off in v1.
+- Project instruction files (decision 4) close a class of questions that code alone cannot. In the follow-up, they removed all "where is the corpus" questions.
 
-- Names a code construct (y/n).
-- The construct exists in the repository (y/n/na).
-- Useful for steering the agent (y/n).
-
-Precision of construct-naming questions is the primary measure.
-
-The labels go in one merged sheet: [`code-access-2026-11-24-labels/label-sheet.csv`](../measurements/code-access-2026-11-24-labels/label-sheet.csv). It contains the 99 questions of the 33 valid runs, shuffled with a fixed seed. `label-key.json` maps each `qid` to its folder and run. The labeler does not open it.
-
-The domain expert labeled `names_construct` and `useful_for_steering` for all 99 rows. For the 16 rows that name a construct, `construct_exists` was filled by Claude without opening the key. Each name was checked with `git grep` / `git ls-tree` against `main` at `d4dc55f`, the code the evaluation ran on.
-
-The sheet is rebuilt with `node <bundle> --merge`, from `VALID_RUNS` in the script. The per-folder sheets are raw output only and are not labeled.
-
-**Results.** 33 valid runs, 99 labeled questions.
-
-| Tier | Model | Runs | Questions | Name a construct | Construct exists | Useful | Median latency (ms) | Median input tokens | Cost (USD) |
-|---|---|---|---|---|---|---|---|---|---|
-| T0 | haiku | 8 | 24 | 5 (21%) | 5/5 | 20 (83%) | 7580 | 1840 | 0.0083 |
-| T1 | haiku | 8 | 24 | 4 (17%) | 4/4 | 20 (83%) | 9970 | 1881 | 0.0118 |
-| T2 | haiku | 8 | 24 | 4 (17%) | 4/4 | 21 (88%) | 11638 | 1899 | 0.0161 |
-| T0 | sonnet | 3 | 9 | 1 (11%) | 1/1 | 8 (89%) | 10244 | 1828 | 0.0471 |
-| T1 | sonnet | 3 | 9 | 1 (11%) | 1/1 | 8 (89%) | 10901 | 1866 | 0.0632 |
-| T2 | sonnet | 3 | 9 | 1 (11%) | 1/1 | 8 (89%) | 10491 | 4458 | 0.0747 |
-
-The medians are dominated by the five drafts that get the same context in every tier. Per-draft token counts are in the `runs.json` files. The label analysis joins `label-sheet.csv` with `label-key.json` and the `runs.json` files.
-
-Useful questions per draft, both models, by tier:
-
-| Draft | T0 | T1 | T2 |
-|---|---|---|---|
-| d1 vague | 6/6 | 6/6 | 6/6 |
-| d2 `@` file | 4/6 | 4/6 | 4/6 |
-| d3 bug report | 3/3 | 3/3 | 3/3 |
-| d4 refactor | 3/3 | 3/3 | 3/3 |
-| d5 question-only | 1/3 | 1/3 | 1/3 |
-| d6 quality requirement | 3/3 | 3/3 | 3/3 |
-| d7 missing file | 3/3 | 3/3 | 3/3 |
-| d8 identifiers, no file | 5/6 | 5/6 | 6/6 |
-
-**What the labels show.**
-
-- **The evidence rule held.** All 16 questions that name a construct named one that exists (16/16, every tier and both models). No question invented a file, function or test. With this prompt, precision is not the problem the literature warned about (PF-010). The rule in decision 3 is worth keeping in #13.
-- **More code did not make questions more useful in this sample.** The useful share is 83% to 89% in every tier. The only tier difference is one question in d8: with T2, "which file defines estimateTokens" became a useful question about the existing test expectations.
-- **Construct questions that were not useful are all "where is X" questions** (4 of 16: d5 and d8, T0 and T1). The user knows where the code is; the agent can find it. T2 removed one of them by answering the location in the context. #13 should tell the reviewer not to ask where a named construct lives.
-- **Non-useful questions depend on the draft, not the tier.** d2 (4/6) and d5 (1/3) are weak in all three tiers. d5 is a question-only draft, and #13's edge case says not to answer it and to score it on its subject.
-- **T0 can already name real constructs** when the file-name notes contain them. In d1 at T0, a question named `core/src/claudeCli.ts` and its timeout test from the recently changed files.
-- **Cost of the tiers.**
-  - Haiku median latency rose by 2.4 s (T1) and 4.1 s (T2) over T0. This is partly noise, because most drafts get the same context in every tier.
-  - Sonnet T2 raised the median input tokens from 1,866 (T1) to 4,458.
-
-**Conclusion for the decision.** The data supports option B. With an evidence rule, selected code does not cause wrong questions. The usefulness gain from T1 and T2 is too small to show in 33 runs with one sample per cell. T2 stays off in v1. The rule for enabling it needs a larger sample of no-file drafts, with several samples per cell.
-
-**Earlier observations from reading the questions:**
-
-- **d2 (`@` file):**
-  - T0 asks about behaviour and the corpus format.
-  - T1 adds one location question ("where is the vague verb list defined", Sonnet).
-  - T2 (Haiku) names `P.VAGUE_VERBS`, which exists (`core/src/patterns.ts:57`).
-- **d8 (identifiers, no file):**
-  - T0 and T1 ask "which file defines estimateTokens".
-  - T2 asks whether the existing test expectations (empty is 0, four characters is 1, five is 2) may change. This holds for both models.
-- **d4 (refactor):** all tiers converge on the same three intent questions: where the code lives, what must stay unchanged, how to know it is done.
-- **d7 (missing `@core/src/gate.ts`):** no tier noticed that the file does not exist, although the manifest reported `missing=1`. #13 should turn a missing reference into an explicit question or context gap.
-
-**Rule for enabling T2 (proposed).** Turn T2 on by default only after a larger evaluation shows all of the following:
+**Rule for enabling T2.** Turn T2 on by default only after a larger evaluation shows all of the following:
 
 - The evaluation covers at least 20 drafts that name no file, with 3 samples per cell.
 - T2 raises the share of useful questions by at least 10 percentage points over T1.
 - Construct precision stays at 90% or more.
-
-This 33-run sample cannot test the rule: the difference was one question.
+- #61 is fixed, so the T2 context is deterministic.
 
 ## What #46 wires
 
