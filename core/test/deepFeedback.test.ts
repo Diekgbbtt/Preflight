@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   deepFeedback,
+  answerEvent,
   EMPTY_DRAFT_QUESTION,
+  openQuestions,
+  parseAnswersMessage,
+  SKIPPED_ANSWER,
   INSTRUCTIONS_NOT_SHARED_GAP,
   loadDeepSession,
   NO_INSTRUCTION_CONTROL_GAP,
@@ -141,6 +145,24 @@ describe("deepFeedback", () => {
     expect(requests[1].user).toContain("<qa>\nQ: Which login page?\nA: the admin login\n</qa>");
     expect(requests[1].user).not.toContain("What does broken mean?"); // unanswered questions are not Q&A
     expect(res.review.assumptions).toEqual(["admin login"]);
+  });
+
+  it("answers and skips from the webview message reach the next round (#15)", async () => {
+    const { deps, requests, questions } = setup({ replies: [VAGUE, reply({})] });
+    const first = await deepFeedback(input, deps);
+    if (!first.ok) throw new Error(first.error.code);
+    const open = openQuestions((await loadDeepSession("d1", deps)).questions);
+    const [page, broken] = open;
+    const parsed = parseAnswersMessage(
+      { type: "answers", draftId: "d1", answers: [{ id: page.id, option: 0 }, { id: broken.id, skip: true }] },
+      { draftId: "d1", open },
+    );
+    if (!parsed.ok) throw new Error(parsed.reason);
+    for (const a of parsed.answers) await questions.append(answerEvent(open.find((q) => q.id === a.id)!, a, "2026-11-26T10:05:00.000Z"));
+
+    expect(openQuestions((await loadDeepSession("d1", deps)).questions)).toEqual([]);
+    await deepFeedback(input, deps);
+    expect(requests[1].user).toContain(`<qa>\nQ: Which login page?\nA: admin\n\nQ: What does broken mean?\nA: ${SKIPPED_ANSWER}\n</qa>`);
   });
 
   it("stops before the model call when the bundle exceeds the budget", async () => {
