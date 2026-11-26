@@ -5,6 +5,7 @@ import { exceedsBudget, exceedsContext, mapError, type FeedbackError } from "./e
 import type { ModelProvider } from "./model";
 import type { Clock, Event, IdGenerator, Repository } from "./repository";
 import { extractJson, parseDeepReview, type DeepReview } from "./schema";
+import { SKIPPED_ANSWER } from "./questions";
 
 /** One project instruction file, as #48's loader reports it. */
 export interface InstructionFile {
@@ -67,6 +68,8 @@ export interface Question {
   options: string[];
   /** Set by a later event with the same id when the user answers. */
   answer?: { text: string; option?: number; answeredAt: string };
+  /** Set by a later event with the same id when the user skips the question (#15). */
+  skippedAt?: string;
 }
 
 export interface DeepFeedbackDeps {
@@ -116,9 +119,11 @@ export async function loadDeepSession(
   return { latest: reviews.at(-1) ?? null, questions: latestQuestions(questions) };
 }
 
-/** Answered questions as Q&A for the assembler, oldest first. Unanswered ones are not sent. */
+/** Answered and skipped questions as Q&A for the assembler, oldest first. Untouched ones are not sent. */
 export function qaFrom(questions: Array<Event<Question>>): Array<{ question: string; answer: string }> {
-  return questions.filter((q) => q.answer?.text.trim()).map((q) => ({ question: q.question, answer: q.answer!.text }));
+  return questions.flatMap((q) =>
+    q.answer?.text.trim() ? [{ question: q.question, answer: q.answer.text }] : q.skippedAt ? [{ question: q.question, answer: SKIPPED_ANSWER }] : [],
+  );
 }
 
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
