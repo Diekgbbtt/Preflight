@@ -28,7 +28,7 @@ Declining the warning turns `promptPreflight.debug` back off.
 
 ## Separation from the study log
 
-The study log remains `study-log.jsonl` under `context.globalStorageUri`.
+The study log uses `study-events-v2.jsonl` under `context.globalStorageUri`; legacy `study-log.jsonl` records migrate on read.
 It is opt-in through `promptPreflight.studyLog.enabled`.
 It records study outcomes and remains independent.
 `promptPreflight.clearHistory` does not delete the debug trace.
@@ -73,8 +73,9 @@ This avoids changing process-wide OpenTelemetry state in the VS Code extension h
 | `review.quick` | INTERNAL | session | `prompt_preflight.mode`, provider, model, effort, prompt hash, prompt chars, attempt |
 | `review.deep` | INTERNAL | session | same as quick |
 | `review.improve` | INTERNAL | session | prompt hash, model, effort, question count |
-| `health.check` | INTERNAL | review | CLI path, ok, error code, RTT |
 | `llm.call` | CLIENT | review | `gen_ai.*`, provider, mode, generation method, effort, timeout, RTT, exit code, signal, cost |
+
+The panel calls the CLI directly on Enhance; it does not run or emit a `health.check` span for each review. The health tracing API remains available for explicit diagnostics.
 
 `llm.call` carries span events for `request`, `process`, `stdin`, `stdout`, `stderr`, `response`, and `error`.
 The full request and response payloads are log records, not span attributes.
@@ -119,10 +120,10 @@ The severity follows OpenTelemetry:
 | `session.start` | INFO | session snapshot |
 | `session.end` | INFO | uptime |
 | `config.change` | INFO | key, old value, new value |
-| `ui.input` | DEBUG | chars, words, score, level, finding count, question count, prompt hash |
+| `ui.input` | DEBUG | chars, words, finding count, question count, prompt hash |
 | `ui.action` | INFO | action, mode |
-| `ui.send` | INFO | target, prompt hash, score, level, study-log enabled, full text |
-| `review.health` | INFO or ERROR | CLI path, ok, error code, RTT |
+| `ui.send` | INFO | target, prompt hash, prompt chars, study-log enabled, sent-anyway flag, full text |
+| `review.health` | INFO or ERROR | Explicit diagnostic health checks only: CLI path, ok, error code, RTT |
 | `llm.request` | INFO | system prompt, user prompt, model, effort, method, timeout, prompt hash |
 | `llm.process` | DEBUG | argv, cwd, pid, stdin chars |
 | `llm.stdout` | DEBUG | full stdout |

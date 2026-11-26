@@ -1,6 +1,6 @@
 // E2E launcher: builds the suite, mounts the built extension in the local
 // VS Code binary, and runs the extension-host tests.
-import { cp, mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { tmpdir, platform } from "node:os";
@@ -47,6 +47,8 @@ const workspace = join(temp, "workspace");
 const userData = join(temp, "user-data");
 const extensions = join(temp, "extensions");
 await cp(fixtureDir, workspace, { recursive: true });
+await mkdir(join(userData, "User"), { recursive: true });
+await writeFile(join(userData, "User", "settings.json"), JSON.stringify({ "update.mode": "none", "extensions.autoUpdate": false, "window.restoreWindows": "none", "terminal.integrated.confirmOnExit": "never" }));
 
 const args = [
   `--extensionDevelopmentPath=${extensionDir}`,
@@ -67,11 +69,14 @@ if (process.argv.includes("--dry-run")) {
   process.exit(0);
 }
 
+// Codex/VS Code terminals may inherit this flag; it makes Electron parse GUI flags as Node options.
+const launchEnv = { ...process.env };
+delete launchEnv.ELECTRON_RUN_AS_NODE;
 const child = spawn(vscodeBin, args, {
   cwd: workspace,
   stdio: "inherit",
   env: {
-    ...process.env,
+    ...launchEnv,
     PREFLIGHT_E2E: "1",
     PREFLIGHT_E2E_REPO: repoRoot,
     PREFLIGHT_E2E_WORKSPACE: workspace,

@@ -1,12 +1,10 @@
 import * as path from "node:path";
-import { execFile } from "node:child_process";
 import * as vscode from "vscode";
-import type { Config, SendRecord } from "@prompt-preflight/core";
-import { checkHealth, createProvider, mapError, resolveProfile } from "@prompt-preflight/core";
+import type { SendRecord } from "@prompt-preflight/core";
 import { CONSENT_VERSION, consentKey, consentMessage, parseConsent, type IncludeCode } from "./privacy";
+import { AgentUsageRecovery, terminalSessionId } from "./agentUsageRecovery";
 import { DebugController } from "./debug/controller";
-import { PromptPanel, showFeedbackError } from "./panel";
-import { readModelConfig } from "./modelSettings";
+import { PromptPanel } from "./panel";
 import { JsonlRepository } from "./repository";
 import { StudyLog } from "./studyLog";
 import { WorkspaceIndex } from "./workspace";
@@ -16,24 +14,32 @@ let debugController: DebugController | undefined;
 export async function activate(context: vscode.ExtensionContext): Promise<{ debug: { acceptNotice(): Promise<void> } }> {
   const workspace = new WorkspaceIndex();
   const log = new StudyLog(context.globalStorageUri);
+  const usageRecovery = new AgentUsageRecovery({ storagePath: context.globalStorageUri.fsPath, log });
+  const recoverUsage = () => { void usageRecovery.recover().catch(() => console.error("Preflight agent usage recovery will retry")); };
+  recoverUsage();
+  const usageTimer = setInterval(recoverUsage, 30_000);
+  usageTimer.unref();
   const debug = new DebugController(context);
   await debug.start();
   debugController = debug;
-  const panel = new PromptPanel(context.extensionUri, workspace, log, debug);
 
   const storage = context.globalStorageUri.fsPath;
   const drafts = new JsonlRepository<Record<string, unknown>>(path.join(storage, "drafts.jsonl"));
   const questions = new JsonlRepository<Record<string, unknown>>(path.join(storage, "questions.jsonl"));
   const reviews = new JsonlRepository<Record<string, unknown>>(path.join(storage, "reviews.jsonl"));
   const sends = new JsonlRepository<SendRecord>(path.join(storage, "sends.jsonl"));
+  const panel = new PromptPanel(context.extensionUri, workspace, log, sends, debug, usageRecovery);
 
   // Fire and forget: activation never waits on the answer.
   void ensureConsent(context);
-  const config = readModelConfig();
-  probeEffortSupport(config);
-  void checkActivationHealth(config);
 
   context.subscriptions.push(
+    { dispose: () => clearInterval(usageTimer) },
+    vscode.window.onDidCloseTerminal(terminal => {
+      const options = terminal.creationOptions;
+      const sessionId = terminalSessionId("shellArgs" in options || "env" in options ? options : {});
+      if (sessionId) void usageRecovery.closeSession(sessionId).catch(() => console.error("Preflight terminal usage will be recovered later"));
+    }),
     { dispose: () => void debug.shutdown() },
     workspace,
     vscode.window.registerWebviewViewProvider(PromptPanel.viewId, panel, {
@@ -83,39 +89,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<{ debu
 export async function deactivate(): Promise<void> {
   await debugController?.shutdown();
   debugController = undefined;
-}
-
-/**
- * Activation health check for the quick profile: profile validation plus a
- * cheap CLI presence probe. Non-blocking and non-modal: it runs after
- * activation completes and reports through showFeedbackError, never a modal.
- * A first-call auth problem is not detectable here; the review path maps it.
- */
-async function checkActivationHealth(config: Config): Promise<void> {
-  try {
-    const profile = resolveProfile(config, "quick");
-    const provider = createProvider(profile, config);
-    const result = await checkHealth(provider, profile, config.claudePath);
-    if (!result.ok) showFeedbackError(result.error, () => void checkActivationHealth(readModelConfig()));
-  } catch (e) {
-    showFeedbackError(mapError(e), () => void checkActivationHealth(readModelConfig()));
-  }
-}
-
-/**
- * Read-only probe that confirms the installed CLI still exposes --effort.
- * Runs once at activation for Claude profiles only and never sends a model
- * call. A failed probe is silent here; missing-CLI health belongs to the
- * activation health check.
- */
-function probeEffortSupport(config: Config): void {
-  if (config.provider !== "claude") return;
-  execFile(config.claudePath, ["--help"], { timeout: 2000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
-    if (err || stdout.includes("--effort") || stderr.includes("--effort")) return;
-    void vscode.window.showWarningMessage(
-      "The Claude Code CLI does not support --effort, so promptPreflight.thinkingEffort will be ignored.",
-    );
-  });
 }
 
 /**

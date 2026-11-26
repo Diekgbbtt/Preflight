@@ -5,8 +5,11 @@ import type { ModelResponse, ReviewIssue } from "./review";
 /** Version of the shared review rubric. Bump when the anchors change. */
 export const RUBRIC_VERSION = "v1";
 
-/** Version of the quick and deep review prompt prose. Bump when the prose changes. */
+/** Version of the existing deep review prompt prose. */
 export const PROMPT_VERSION = "v1";
+
+/** Quick reviewer guardrails/examples, independent of the unchanged numeric rubric. */
+export const QUICK_PROMPT_VERSION = "v2";
 
 /** Version of the separate improved-prompt prose. Bump when that prose changes. */
 export const IMPROVE_PROMPT_VERSION = "v1";

@@ -52,10 +52,12 @@
           "default": "medium",
           "description": "Provider-native thinking effort passed to the inference request. Claude Code accepts low, medium, high, xhigh, or max."
         },
-        "promptPreflight.quickModel": { "type": "string", "default": "haiku", "description": "Model for the quick check when you pause typing. Empty falls back to promptPreflight.model, then haiku." },
+        "promptPreflight.quickModel": { "type": "string", "default": "haiku", "description": "Model for explicit quick-scoring experiments; typing never calls it. Empty falls back to promptPreflight.model, then haiku." },
         "promptPreflight.deepModel": { "type": "string", "default": "sonnet", "description": "Model for detailed feedback. Empty falls back to promptPreflight.model, then sonnet." },
-        "promptPreflight.quickReviewOnPause": { "type": "boolean", "default": true, "description": "Run the quick model check when you stop typing. Uses your Claude account." },
-        "promptPreflight.pauseMs": { "type": "number", "default": 1500, "minimum": 500, "description": "Milliseconds without typing before the quick check runs." },
+        "promptPreflight.quickReviewOnPause": { "type": "boolean", "default": false, "deprecationMessage": "Automatic model reviews have been removed. Use Enhance to request model assistance.", "description": "Legacy setting; ignored. Typing uses local rules only." },
+        "promptPreflight.feedbackPauseMs": { "type": "number", "default": 300, "minimum": 100, "description": "Milliseconds without typing before local notes and questions update. No model call." },
+        "promptPreflight.gateSending": { "type": "boolean", "default": false, "description": "Ask for confirmation when local checks find warnings. Sending never calls a model." },
+        "promptPreflight.scoreThreshold": { "type": "number", "default": 65, "minimum": 0, "maximum": 100, "description": "Confirm below this specification score when gateSending is enabled." },
         "promptPreflight.sendTo": {
           "type": "string", "enum": ["terminal", "clipboard"], "default": "terminal",
           "enumDescriptions": ["Start Claude Code in a new terminal with the prompt.", "Copy the prompt, e.g. to paste into the Claude Code chat panel."]

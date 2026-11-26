@@ -1,5 +1,5 @@
 export * from "./types";
-export { analyze, findPathRefs } from "./analyze";
+export { analyze, analyzeRules, findPathRefs } from "./analyze";
 export * from "./review";
 export * from "./schema";
 export * from "./model";
@@ -9,4 +9,8 @@ export { SECRETS } from "./patterns";
 export * from "./repository";
 export * from "./context";
 export * from "./promptFiles";
+
+export * from "./gate";
+export * from "./feedback";
+export * from "./quick";
 export * from "./observability";

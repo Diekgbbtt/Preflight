@@ -40,10 +40,10 @@ function findIdentifiers(text: string): Match[] {
 /**
  * Rule-based check of a coding-agent prompt. Pure and fast enough to run on every keystroke.
  */
-export function analyze(prompt: string, ctx: WorkspaceContext = {}): Analysis {
+export function analyze(prompt: string, ctx: WorkspaceContext = {}, legacyModes = true): Analysis {
   const text = prompt;
   const findings: Finding[] = [];
-  const skipped = P.SKIP_MARKER.test(text);
+  const skipped = legacyModes && P.SKIP_MARKER.test(text);
 
   // Privacy runs first and is never skipped.
   for (const re of P.SECRETS) {
@@ -63,7 +63,7 @@ export function analyze(prompt: string, ctx: WorkspaceContext = {}): Analysis {
     return result("vague", { target: 0, action: 0, scope: 0, done: 0 }, [], [], false, skipped);
   }
 
-  if (P.TRIVIAL.test(text)) {
+  if (legacyModes && P.TRIVIAL.test(text)) {
     return result("trivial", { target: 25, action: 25, scope: 25, done: 25 }, findings, [], hasSecret, skipped);
   }
 
@@ -188,7 +188,7 @@ export function analyze(prompt: string, ctx: WorkspaceContext = {}): Analysis {
   }
 
   for (const ph of findAll(text, P.PLACEHOLDER)) {
-    if (/^preflight:skip$/i.test(ph.text)) continue;
+    if (legacyModes && /^preflight:skip$/i.test(ph.text)) continue;
     const range = { start: ph.start - 1, end: ph.end + 1 };
     findings.push({
       rule: "placeholder",
@@ -290,4 +290,11 @@ function buildQuestions(
   else if (o.broad && d.scope < 25) q.push("Can you narrow this to one area, or list the places that should change?");
   if (o.risky) q.push("Should the agent show a plan before changing anything? What must not change?");
   return q.slice(0, 3);
+}
+
+/** Extension rules have no semantic score or skip/trivial bypass. Legacy analyze remains hook-only. */
+export function analyzeRules(prompt: string, ctx: WorkspaceContext = {}): import("./types").RuleReport {
+  const report = analyze(prompt, ctx, false);
+  return { findings: report.findings.map(f => ({ ...f, severity: f.rule === "secret" ? "warning" : f.severity })),
+    questions: report.questions, skipped: false, hardBlock: false };
 }

@@ -5,6 +5,13 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { AgentUsageRecovery, terminalSessionId } from "../../extension/src/agentUsageRecovery";
+import { DebugController } from "../../extension/src/debug/controller";
+import { NOOP_DEBUG_TRACE } from "../../extension/src/debug/types";
+import { JsonlRepository } from "../../extension/src/repository";
+import { PromptPanel } from "../../extension/src/panel";
+import { StudyLog } from "../../extension/src/studyLog";
+import type { WorkspaceIndex } from "../../extension/src/workspace";
 import { checkHealth, createClaudeProvider, hashPrompt, mapError } from "@prompt-preflight/core";
 import {
   assembleContext,
@@ -253,21 +260,101 @@ test("E11: real Codex custom tool calls produce one apply_patch and two changed 
   assert.equal(slice.changedFiles.join(","), "src/app.ts,src/helper.ts");
 });
 
-test("E12: debug tracing writes OTel spans and full LLM packets for a real panel review", async () => {
-  const extension = vscode.extensions.getExtension("prompt-preflight.prompt-preflight");
-  assert.ok(extension, "the extension is not mounted");
-  if (!extension.isActive) await extension.activate();
-  const api = extension.exports as { debug?: { acceptNotice(): Promise<void> } } | undefined;
-  assert.ok(api?.debug, "debug acceptNotice API missing");
-  await api.debug.acceptNotice();
+test("E12: real terminal exit attaches agent counters to an opt-in study send", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-e2e-usage-"));
+  const config = vscode.workspace.getConfiguration("promptPreflight");
+  const changes: Record<string, unknown> = { "studyLog.enabled": true, sendTo: "terminal", gateSending: false, quickReviewOnPause: false };
+  const previous = Object.fromEntries(Object.keys(changes).map(key => [key, config.inspect(key)?.globalValue]));
+  const oldCli = config.inspect("claudePath")?.globalValue;
+  try {
+    for (const [key, value] of Object.entries(changes)) await config.update(key, value, vscode.ConfigurationTarget.Global);
+    const home = path.join(dir, "home");
+    const cwd = workspaceRoot();
+    const project = cwd.replace(/[^A-Za-z0-9_-]/g, "-");
+    const transcriptDir = path.join(home, ".claude", "projects", project);
+    const cli = path.join(dir, "fake-agent");
+    await fs.mkdir(transcriptDir, { recursive: true });
+    const program = `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const sessionId = args[args.indexOf('--session-id') + 1];
+fs.writeFileSync(path.join(${JSON.stringify(transcriptDir)}, sessionId + '.jsonl'), JSON.stringify({type:'assistant',sessionId,cwd:${JSON.stringify(cwd)},message:{id:'msg-1',role:'assistant',content:[],usage:{input_tokens:21,output_tokens:8,cache_read_input_tokens:100,cache_creation_input_tokens:40}}}) + '\\n');
+`;
+    await fs.writeFile(cli, program); await fs.chmod(cli, 0o755);
+    await config.update("claudePath", cli, vscode.ConfigurationTarget.Global);
+    let receive!: (m: unknown) => Promise<void>;
+    const storage = vscode.Uri.file(dir);
+    const log = new StudyLog(storage);
+    const panel = new PromptPanel(storage, { root: cwd, context: () => ({}), notes: () => "" } as unknown as WorkspaceIndex, log, new JsonlRepository(path.join(dir, "sends.jsonl")), NOOP_DEBUG_TRACE, new AgentUsageRecovery({ storagePath: dir, log, homeDir: home }));
+    panel.resolveWebviewView({ webview: { options: {}, cspSource: "", asWebviewUri: () => "", postMessage: () => Promise.resolve(true), onDidReceiveMessage: (fn: typeof receive) => { receive = fn; } }, onDidChangeVisibility: () => {} } as unknown as vscode.WebviewView);
+    const text = "Explain greet in src/greet.ts in one sentence";
+    panel.setText(text);
+    await receive({ type: "send" });
+    let rows: Array<Record<string, any>> = [];
+    for (let i = 0; i < 100; i++) {
+      rows = (await fs.readFile(log.uri.fsPath, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+      if (rows.some(row => row.event === "agent-usage")) break;
+      await sleep(100);
+    }
+    const send = rows.find(row => row.event === "send");
+    const usage = rows.find(row => row.event === "agent-usage");
+    assert.ok(send); assert.ok(usage, "terminal exit did not produce agent usage");
+    assert.equal(usage.sendId, send.sendId); assert.equal(usage.sessionId, send.sessionId);
+    assert.equal(send.preflightInputTokens, 0); assert.equal(usage.agentInputTokens, 21, JSON.stringify(usage));
+    assert.equal(usage.agentOutputTokens, 8); assert.equal(usage.agentCacheReadTokens, 100); assert.equal(usage.agentCacheCreationTokens, 40);
+    const sent = JSON.parse((await fs.readFile(path.join(dir, "sends.jsonl"), "utf8")).trim());
+    assert.equal(sent.text, text); assert.equal(sent.sessionId, send.sessionId);
+    panel.setText("");
+  } finally {
+    for (const [key, value] of Object.entries(previous)) await config.update(key, value, vscode.ConfigurationTarget.Global);
+    await config.update("claudePath", oldCli, vscode.ConfigurationTarget.Global);
+    if (process.env.PREFLIGHT_E2E_KEEP !== "1") await fs.rm(dir, { recursive: true, force: true });
+  }
+});
 
+test("E13: usage recovery survives recreated services without duplicated counters", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-e2e-recovery-"));
+  const config = vscode.workspace.getConfiguration("promptPreflight");
+  const oldEnabled = config.inspect("studyLog.enabled")?.globalValue;
+  try {
+    await config.update("studyLog.enabled", true, vscode.ConfigurationTarget.Global);
+    const home = path.join(dir, "home");
+    const storage = vscode.Uri.file(dir);
+    const links = { draftId: "restart-draft", sendId: "restart-send", sessionId: "restart-session" };
+    const options = { storagePath: dir, homeDir: home };
+    const original = new AgentUsageRecovery({ ...options, log: new StudyLog(storage) });
+    await original.track(links, folderUri());
+    const project = workspaceRoot().replace(/[^A-Za-z0-9_-]/g, "-");
+    const transcriptDir = path.join(home, ".claude", "projects", project);
+    await fs.mkdir(transcriptDir, { recursive: true });
+    await fs.writeFile(path.join(transcriptDir, "restart-session.jsonl"), JSON.stringify({ type: "assistant", message: { id: "message", usage: { input_tokens: 30, output_tokens: 9, cache_read_input_tokens: 200, cache_creation_input_tokens: 50 } } }) + "\n");
+    // New log and collector instances must reconstruct all state from disk.
+    const afterRestart = new AgentUsageRecovery({ ...options, log: new StudyLog(storage) });
+    await afterRestart.recover(); await afterRestart.recover();
+    let rows = await new StudyLog(storage).getEvents();
+    assert.equal(rows.length, 1); assert.equal(rows[0].complete, false);
+    assert.equal(rows[0].agentInputTokens, 30); assert.equal(rows[0].agentOutputTokens, 9);
+    const restoredId = terminalSessionId({ env: { PREFLIGHT_AGENT_SESSION_ID: links.sessionId } });
+    assert.equal(restoredId, links.sessionId);
+    await afterRestart.closeSession(restoredId!);
+    await new AgentUsageRecovery({ ...options, log: new StudyLog(storage) }).recover();
+    rows = await new StudyLog(storage).getEvents();
+    assert.equal(rows.length, 2); assert.equal(rows[1].complete, true);
+    assert.equal(rows[1].sendId, links.sendId); assert.equal(rows[1].agentCacheReadTokens, 200);
+  } finally {
+    await config.update("studyLog.enabled", oldEnabled, vscode.ConfigurationTarget.Global);
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("E14: debug tracing writes OTel spans and full LLM packets for a real panel review", async () => {
   const config = vscode.workspace.getConfiguration("promptPreflight");
   const before = {
     debug: config.get<boolean>("debug", false),
     debugLogDir: config.get<string>("debugLogDir", ""),
     claudePath: config.get<string>("claudePath", "claude"),
-    pauseMs: config.get<number>("pauseMs", 1500),
-    quickModel: config.get<string>("quickModel", "haiku"),
+    deepModel: config.get<string>("deepModel", "haiku"),
     provider: config.get<string>("provider", "claude"),
     thinkingEffort: config.get<string>("thinkingEffort", "medium"),
     quickReviewOnPause: config.get<boolean>("quickReviewOnPause", true),
@@ -276,22 +363,30 @@ test("E12: debug tracing writes OTel spans and full LLM packets for a real panel
   const cli = await createFakeCli();
   try {
     await config.update("provider", "claude", vscode.ConfigurationTarget.Global);
-    await config.update("quickModel", "haiku", vscode.ConfigurationTarget.Global);
+    await config.update("deepModel", "haiku", vscode.ConfigurationTarget.Global);
     await config.update("thinkingEffort", "medium", vscode.ConfigurationTarget.Global);
     await config.update("quickReviewOnPause", true, vscode.ConfigurationTarget.Global);
-    await config.update("pauseMs", 500, vscode.ConfigurationTarget.Global);
     await config.update("claudePath", cli, vscode.ConfigurationTarget.Global);
     await config.update("debugLogDir", dir, vscode.ConfigurationTarget.Global);
     await config.update("debug", true, vscode.ConfigurationTarget.Global);
     await sleep(300);
-    await vscode.commands.executeCommand("promptPreflight.focus");
-    await sleep(800);
-
-    const doc = await vscode.workspace.openTextDocument(path.join(workspaceRoot(), "src/greet.ts"));
-    const editor = await vscode.window.showTextDocument(doc);
-    editor.selection = new vscode.Selection(new vscode.Position(0, 0), doc.positionAt(doc.getText().length));
-    await vscode.commands.executeCommand("promptPreflight.checkSelection");
-    await sleep(1800);
+    const storage = vscode.Uri.file(dir);
+    const debug = new DebugController({
+      globalStorageUri: storage,
+      globalState: { get: () => true },
+      extension: { id: "prompt-preflight.prompt-preflight", packageJSON: { version: "0.1.0" } },
+    } as unknown as vscode.ExtensionContext);
+    await debug.start();
+    try {
+      const log = new StudyLog(storage);
+      const panel = new PromptPanel(storage, { root: workspaceRoot(), context: () => ({}), notes: () => "" } as unknown as WorkspaceIndex,
+        log, new JsonlRepository(path.join(dir, "sends.jsonl")), debug, new AgentUsageRecovery({ storagePath: dir, log }));
+      let receive!: (message: unknown) => Promise<void>;
+      panel.resolveWebviewView({ webview: { options: {}, cspSource: "", asWebviewUri: () => "", postMessage: () => Promise.resolve(true), onDidReceiveMessage: (fn: typeof receive) => { receive = fn; } }, onDidChangeVisibility: () => {} } as unknown as vscode.WebviewView);
+      panel.setText("Explain greet in src/greet.ts in one sentence");
+      await receive({ type: "enhance" });
+      panel.setText("");
+    } finally { await debug.shutdown(); }
 
     const traceFile = path.join(dir, "llm-trace.jsonl");
     const text = await fs.readFile(traceFile, "utf8");
@@ -321,17 +416,21 @@ test("E12: debug tracing writes OTel spans and full LLM packets for a real panel
     assert.equal(responseAttributes["gen_ai.usage.output_tokens"], 5);
     assert.equal(typeof responseAttributes["llm.response.text"], "string");
     const llmSpan = records.find((record) => record.recordType === "span" && record.name === "llm.call");
+    const reviewSpan = records.find((record) => record.recordType === "span" && record.name === "review.deep");
+    assert.ok(reviewSpan, "review.deep span missing");
     assert.ok(llmSpan, "llm.call span missing");
+    assert.equal(llmSpan.parentSpanId, reviewSpan.spanId);
+    assert.equal((reviewSpan.status as { code?: string }).code, "OK");
+    assert.ok(!records.some(record => record.recordType === "span" && record.name === "health.check"));
     assert.equal(llmSpan.kind, "CLIENT");
     assert.equal((llmSpan.status as { code?: string }).code, "OK");
     assert.equal(llmSpan.traceId, request.traceId);
     assert.equal(llmSpan.spanId, request.spanId);
   } finally {
-    await config.update("debug", false, vscode.ConfigurationTarget.Global);
+    await config.update("debug", before.debug, vscode.ConfigurationTarget.Global);
     await config.update("debugLogDir", before.debugLogDir, vscode.ConfigurationTarget.Global);
     await config.update("claudePath", before.claudePath, vscode.ConfigurationTarget.Global);
-    await config.update("pauseMs", before.pauseMs, vscode.ConfigurationTarget.Global);
-    await config.update("quickModel", before.quickModel, vscode.ConfigurationTarget.Global);
+    await config.update("deepModel", before.deepModel, vscode.ConfigurationTarget.Global);
     await config.update("provider", before.provider, vscode.ConfigurationTarget.Global);
     await config.update("thinkingEffort", before.thinkingEffort, vscode.ConfigurationTarget.Global);
     await config.update("quickReviewOnPause", before.quickReviewOnPause, vscode.ConfigurationTarget.Global);
