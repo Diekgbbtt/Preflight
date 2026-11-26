@@ -33,6 +33,8 @@ describe("openQuestions", () => {
   it("keeps only questions that are neither answered nor skipped", () => {
     const all = [q("a"), q("b", { answer: { text: "x", answeredAt: "t" } }), q("c", { skippedAt: "t" })];
     expect(openQuestions(all).map((x) => x.id)).toEqual(["a"]);
+    // A blank answer is not sent as Q&A (qaFrom), so the question stays open too.
+    expect(openQuestions([q("d", { answer: { text: "  ", answeredAt: "t" } })]).map((x) => x.id)).toEqual(["d"]);
   });
 });
 

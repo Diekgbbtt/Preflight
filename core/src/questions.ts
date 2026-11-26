@@ -12,9 +12,9 @@ export type AnswerInput = { id: string; text: string; option?: number } | { id: 
 
 export type ParsedAnswers = { ok: true; answers: AnswerInput[] } | { ok: false; reason: string };
 
-/** Neither answered nor skipped. In v1 an answered or skipped question stays closed. */
+/** Neither answered nor skipped. In v1 an answered or skipped question stays closed. A blank answer counts as none, as in qaFrom. */
 export function isOpen(question: Question): boolean {
-  return !question.answer && !question.skippedAt;
+  return !question.answer?.text.trim() && !question.skippedAt;
 }
 
 export function openQuestions<T extends Question>(questions: T[]): T[] {
