@@ -10,3 +10,5 @@ export * from "./repository";
 export * from "./context";
 export * from "./promptFiles";
 export * from "./observability";
+export * from "./deepPrompt";
+export * from "./deepFeedback";

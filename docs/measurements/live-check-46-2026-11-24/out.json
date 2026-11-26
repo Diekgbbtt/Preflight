@@ -1,0 +1,299 @@
+[
+  {
+    "draft": "fix the review, it is broken sometimes",
+    "rawAtInUser": false,
+    "envInUser": false,
+    "userChars": 139,
+    "res": {
+      "ok": true,
+      "reviewId": "vague-1",
+      "review": {
+        "issues": [
+          {
+            "quote": "fix the review",
+            "range": {
+              "start": 0,
+              "end": 14
+            },
+            "problem": "\"The review\" does not name a file, function, component, or feature. The agent cannot tell whether this means a UI screen, a command, an automated check, or something else, so it would have to guess where to work.",
+            "suggestion": "Name the feature and where it lives, for example the screen, command, or module, and the file or function if known. Example: \"Fix the review screen in <path>, which shows the results of <action>.\""
+          },
+          {
+            "quote": "it is broken sometimes",
+            "range": {
+              "start": 16,
+              "end": 38
+            },
+            "problem": "The failure is described only as intermittent. There are no steps to reproduce it, no error message, no input that triggers it, and no indication of how often it happens. Without these the agent cannot confirm the cause or know when it is fixed.",
+            "suggestion": "Add reproduction steps or the input that triggers the failure, the exact error or wrong output, and roughly how often it occurs. Paste logs if available."
+          },
+          {
+            "quote": "fix the review",
+            "range": {
+              "start": 0,
+              "end": 14
+            },
+            "problem": "No expected behaviour is stated. The prompt says what is wrong but not what correct behaviour looks like for the main case.",
+            "suggestion": "State the expected result for the normal case, for example \"After submitting, the review shows X and never Y.\""
+          },
+          {
+            "quote": "fix the review, it is broken sometimes",
+            "range": {
+              "start": 0,
+              "end": 38
+            },
+            "problem": "No boundary is set. The agent does not know whether to change only the failing path, refactor surrounding code, or change any user-visible behaviour, and nothing says what must not change.",
+            "suggestion": "Limit the change to the failing path and state what must stay the same, such as existing output format, public interfaces, or other features."
+          },
+          {
+            "quote": "it is broken sometimes",
+            "range": {
+              "start": 16,
+              "end": 38
+            },
+            "problem": "There is no way to prove the fix works. An intermittent bug needs a check that reproduces it before the change and passes after.",
+            "suggestion": "Ask for a regression test that reproduces the failure and passes after the fix, or a specific command to run and the result it should produce."
+          }
+        ],
+        "questions": [
+          {
+            "question": "What does \"the review\" refer to in this project?",
+            "why": "The draft names no file, function, or feature, and the manifest lists no prompt files, so the agent cannot locate the code to change.",
+            "options": [
+              "A review screen or UI flow in the app",
+              "A code review or automated check command",
+              "Something else (please describe it)"
+            ]
+          },
+          {
+            "question": "What does \"broken sometimes\" look like when it happens?",
+            "why": "An intermittent failure needs a concrete symptom to diagnose. Crashes, wrong output, and a hang point to very different causes.",
+            "options": [
+              "It crashes or throws an error",
+              "It shows wrong or stale results",
+              "It hangs, freezes, or never finishes"
+            ]
+          },
+          {
+            "question": "How should we know the fix is done?",
+            "why": "Without a success check the agent cannot verify its change, especially for a bug that only appears sometimes.",
+            "options": [
+              "A failing test should now pass",
+              "A specific reproduction case should behave correctly",
+              "A specific command should run without error"
+            ]
+          }
+        ],
+        "assumptions": [
+          "\"The review\" is a feature inside the Preflight repository at the primary working directory.",
+          "The failure is an intermittent bug in code, not a provider or network outage.",
+          "The fix should change only the code path responsible for the failure and leave other behaviour unchanged.",
+          "No existing test or reproduction is available to confirm the bug."
+        ],
+        "contextGaps": [
+          "The prompt-files manifest entry is empty, so no referenced file or project instructions were provided.",
+          "The qa section is empty, so no earlier clarifications exist.",
+          "No reproduction steps, error messages, or logs were provided.",
+          "No file paths, function names, or test names for the review feature appear in the material.",
+          "It is unknown whether a test suite exists or how the review feature is run."
+        ],
+        "usage": {
+          "inputTokens": 1881,
+          "outputTokens": 2060,
+          "costUsd": 0.0015378000000000002
+        },
+        "latency": 11902,
+        "promptVersion": "deep-v1",
+        "draftId": "vague",
+        "contextManifest": {
+          "sources": [
+            {
+              "source": "draft",
+              "chars": 38,
+              "tokens": 10,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "qa",
+              "chars": 0,
+              "tokens": 0,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "prompt-files",
+              "chars": 0,
+              "tokens": 0,
+              "included": false,
+              "truncated": false,
+              "omittedReason": "empty",
+              "redactions": 0,
+              "details": {
+                "files": 0,
+                "dropped": 0,
+                "missing": 0,
+                "ambiguous": 0,
+                "excluded": 0,
+                "duplicate": 0,
+                "unreadable": 0
+              }
+            }
+          ],
+          "totalTokens": 10,
+          "budget": 200000
+        }
+      }
+    }
+  },
+  {
+    "draft": "In @core/src/analyze.ts make the vague-verb rule also catch \"handle\" and \"deal with\". Add corpus lines. Also check @.env and @core/src/gate.ts.",
+    "rawAtInUser": false,
+    "envInUser": false,
+    "userChars": 11530,
+    "res": {
+      "ok": true,
+      "reviewId": "file-1",
+      "review": {
+        "issues": [
+          {
+            "quote": "Add corpus lines.",
+            "range": {
+              "start": 86,
+              "end": 103
+            },
+            "problem": "The draft does not say which corpus file to change, what lines to add, or what each line should produce. The agent would have to guess the fixture location and expected findings.",
+            "suggestion": "Name the corpus file or folder, then state each new line and the expected result, for example a line containing \"handle the login flow\" should produce a vague-verb finding."
+          },
+          {
+            "quote": "\"handle\" and \"deal with\"",
+            "range": {
+              "start": 60,
+              "end": 84
+            },
+            "problem": "The draft does not say how the new phrases should match. \"deal with\" is multi-word, and inflections such as \"handles\", \"handling\" and \"dealt with\" are unaddressed. It also does not say whether the new matches should use the same severity as existing vague verbs.",
+            "suggestion": "Specify the exact forms to match (base form only, or inflections too), and whether they should be warning or info under the same conditions as existing vague verbs."
+          },
+          {
+            "quote": "make the vague-verb rule also catch",
+            "range": {
+              "start": 24,
+              "end": 59
+            },
+            "problem": "The vague-verb word list appears to live in the patterns module (VAGUE_VERBS), not in analyze.ts. The draft names only analyze.ts, so the agent may edit the wrong place or not know where the list is.",
+            "suggestion": "Name the constant to extend (VAGUE_VERBS) and the file that defines it, or confirm the change belongs in analyze.ts."
+          },
+          {
+            "quote": "Also check",
+            "range": {
+              "start": 104,
+              "end": 114
+            },
+            "problem": "\"check\" is undefined. The draft does not say what to look for in @.env or gate.ts. .env is a secrets-bearing file, so an unscoped check could expose values in the session output.",
+            "suggestion": "State the purpose, for example confirming no secret-like values are committed in .env or describing what gate.ts does. Also require that no values from .env are printed or repeated."
+          },
+          {
+            "quote": "Add corpus lines.",
+            "range": {
+              "start": 86,
+              "end": 103
+            },
+            "problem": "There is no success criterion. Nothing says what passing looks like, such as a test run, a specific analyze result, or a score change.",
+            "suggestion": "Add the expected outcome, for example: analyze() returns a vague-verb finding for each new phrase, and the existing corpus still passes."
+          }
+        ],
+        "questions": [
+          {
+            "question": "Which corpus should receive the new lines, and what result should each line produce?",
+            "why": "The corpus location and expected findings are not in the draft, so the agent cannot add correct test cases without guessing.",
+            "options": [
+              "Existing corpus file (give its path)",
+              "New corpus file (give its name and location)",
+              "Not sure, find the existing corpus and propose lines for approval"
+            ]
+          },
+          {
+            "question": "What should the check of .env and gate.ts accomplish?",
+            "why": "The draft asks for a check without a goal, and .env may contain secrets that must not be printed.",
+            "options": [
+              "Confirm no secret-like values are present in .env, without printing any values",
+              "Explain what gate.ts does and how it relates to analyze.ts",
+              "Both, with no values from .env shown in the output"
+            ]
+          },
+          {
+            "question": "Should the newly matched phrases be flagged as warning, like other vague verbs, or as info?",
+            "why": "The severity rule in analyze.ts depends on whether target and action are already concrete, and the draft does not say which applies.",
+            "options": [
+              "Same as existing vague verbs (warning unless target and action are concrete)",
+              "Always info",
+              "Always warning"
+            ]
+          }
+        ],
+        "assumptions": [
+          "\"handle\" and \"deal with\" are not already in the vague-verb list.",
+          "The vague-verb list is the VAGUE_VERBS constant that analyze.ts uses via the patterns module.",
+          "The corpus is an existing set of test or fixture lines for analyze().",
+          "The check of .env is meant to be non-disclosing, so no secret values should appear in output."
+        ],
+        "contextGaps": [
+          "The manifest reports two referenced files as missing. The workspace contains only core/src/analyze.ts, so gate.ts and .env are not available to inspect.",
+          "The contents of the patterns module (including VAGUE_VERBS) were not supplied.",
+          "The corpus location and format are not in the workspace or draft.",
+          "No test command or test name is given, so the verification method is unknown.",
+          "2 referenced files were not found in the workspace"
+        ],
+        "usage": {
+          "inputTokens": 6529,
+          "outputTokens": 3042,
+          "costUsd": 0.0032415400000000002
+        },
+        "latency": 16650,
+        "promptVersion": "deep-v1",
+        "draftId": "file",
+        "contextManifest": {
+          "sources": [
+            {
+              "source": "draft",
+              "chars": 143,
+              "tokens": 36,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "qa",
+              "chars": 0,
+              "tokens": 0,
+              "included": true,
+              "truncated": false,
+              "redactions": 0
+            },
+            {
+              "source": "prompt-files",
+              "chars": 11203,
+              "tokens": 2801,
+              "included": true,
+              "truncated": false,
+              "redactions": 0,
+              "details": {
+                "files": 1,
+                "dropped": 0,
+                "missing": 2,
+                "ambiguous": 0,
+                "excluded": 0,
+                "duplicate": 0,
+                "unreadable": 0
+              }
+            }
+          ],
+          "totalTokens": 2837,
+          "budget": 200000
+        }
+      }
+    }
+  }
+]
