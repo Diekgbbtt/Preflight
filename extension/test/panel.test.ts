@@ -2,8 +2,10 @@ import { mkdtemp, writeFile, chmod, rm, readFile, mkdir } from "node:fs/promises
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
-import { hashPrompt } from "@prompt-preflight/core";
-import type { AgentUsageRecovery } from "../src/agentUsageRecovery";
+import { hashPrompt, type SendRecord } from "@prompt-preflight/core";
+import { JsonlRepository } from "../src/repository";
+import { NOOP_DEBUG_TRACE, NOOP_REVIEW_TRACE } from "../src/debug/types";
+import { AgentUsageRecovery } from "../src/agentUsageRecovery";
 import { PromptPanel } from "../src/panel";
 import type { WorkspaceIndex } from "../src/workspace";
 import { StudyLog } from "../src/studyLog";
@@ -30,6 +32,9 @@ let receive: (message: unknown) => Promise<void>;
 let panel: PromptPanel;
 let messages: any[];
 let events: any[];
+let sends: JsonlRepository<SendRecord>;
+let debug: typeof NOOP_DEBUG_TRACE;
+let traces: Array<typeof NOOP_REVIEW_TRACE>;
 type TestPanel = { runReview(mode: "quick" | "deep"): Promise<unknown>; captureAgentUsage(links: { draftId: string; sendId: string; sessionId: string }): Promise<void> };
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "preflight-panel-"));
@@ -45,7 +50,14 @@ beforeEach(async () => {
   events = []; messages = [];
   const log = { enabled: true, participant: "", getEvents: async () => events, writeOnce: async (event: string, links: unknown, data: unknown, id: string) => { if (!events.some(e => e.id === id)) events.push({ event, ...links as object, ...data as object, id }); return true; }, write: async (event: string, links: unknown, data: unknown) => { events.push({ event, ...links as object, ...data as object }); } } as unknown as StudyLog;
   const uri = platform.Uri.file(dir) as vscode.Uri;
-  panel = new PromptPanel(uri, { root: dir, context: () => ({}), notes: () => "" } as unknown as WorkspaceIndex, log, uri, path.join(dir, "home"));
+  sends = new JsonlRepository(path.join(dir, "sends.jsonl"));
+  traces = [];
+  debug = { ...NOOP_DEBUG_TRACE, event: vi.fn(), startReview: vi.fn(() => {
+    const trace = { ...NOOP_REVIEW_TRACE, llm: vi.fn(NOOP_REVIEW_TRACE.llm), parsed: vi.fn(), end: vi.fn(), error: vi.fn(), health: vi.fn() };
+    traces.push(trace);
+    return trace;
+  }) };
+  panel = new PromptPanel(uri, { root: dir, context: () => ({}), notes: () => "" } as unknown as WorkspaceIndex, log, sends, debug, new AgentUsageRecovery({ storagePath: dir, log, homeDir: path.join(dir, "home") }));
   panel.resolveWebviewView({ webview: { options: {}, cspSource: "", asWebviewUri: () => "", postMessage: (m: unknown) => messages.push(m), onDidReceiveMessage: (fn: typeof receive) => { receive = fn; } }, onDidChangeVisibility: () => {} } as unknown as vscode.WebviewView);
 });
 afterEach(async () => {
@@ -230,4 +242,34 @@ it("serializes concurrent duplicate usage writes and deduplicates them after res
   await new StudyLog(storage).writeOnce("agent-usage", links, { agentInputTokens: 5 }, "stable-usage", "new-label");
   const rows = await new StudyLog(storage).getEvents();
   expect(rows).toHaveLength(1); expect(rows[0].participant).toBe("original");
+});
+
+it("shares send history state across clear and subsequent sends", async () => {
+  panel.setText("First send");
+  await receive({ type: "send" });
+  expect((await sends.list()).events.map(event => event.seq)).toEqual([1]);
+  expect(await sends.clear()).toEqual({ deleted: 1 });
+  panel.setText("After clear");
+  await receive({ type: "send" });
+  panel.setText("Next send");
+  await receive({ type: "send" });
+  const stored = (await sends.list()).events;
+  expect(stored.map(event => [event.seq, event.text])).toEqual([[1, "After clear"], [2, "Next send"]]);
+  const disk = (await readFile(path.join(dir, "sends.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
+  expect(disk).toEqual(stored);
+});
+it("traces explicit quick, Enhance and rewrite calls without health probes", async () => {
+  panel.setText("Add greet to an appropriate module");
+  await (panel as unknown as TestPanel).runReview("quick");
+  await receive({ type: "enhance" });
+  expect(debug.startReview).toHaveBeenCalledTimes(3);
+  for (const [index, mode] of ["quick", "deep", "improve"].entries()) {
+    expect(debug.startReview).toHaveBeenNthCalledWith(index + 1, expect.objectContaining({ mode }));
+    expect(traces[index].llm).toHaveBeenCalledWith({ mode, generationMethod: "cli", timeoutMs: 120000 });
+    expect(traces[index].parsed).toHaveBeenCalledOnce();
+    expect(traces[index].end).toHaveBeenCalledWith("ok");
+    expect(traces[index].health).not.toHaveBeenCalled();
+  }
+  expect(debug.event).toHaveBeenCalledWith("ui.input", expect.any(Object), "debug");
+  expect(debug.event).toHaveBeenCalledWith("ui.action", { "prompt_preflight.action": "enhance" }, "info");
 });

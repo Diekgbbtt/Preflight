@@ -21,6 +21,9 @@
       { "command": "promptPreflight.focus", "title": "Open", "category": "Prompt Preflight" },
       { "command": "promptPreflight.checkSelection", "title": "Check Selected Text", "category": "Prompt Preflight" },
       { "command": "promptPreflight.openStudyLog", "title": "Open Study Log", "category": "Prompt Preflight" },
+      { "command": "promptPreflight.openDebugLog", "title": "Open Debug Log", "category": "Prompt Preflight" },
+      { "command": "promptPreflight.openDebugLogFile", "title": "Open Debug Log File", "category": "Prompt Preflight" },
+      { "command": "promptPreflight.clearDebugLog", "title": "Clear Debug Log", "category": "Prompt Preflight" },
       { "command": "promptPreflight.clearHistory", "title": "Clear History", "category": "Prompt Preflight" }
     ],
     "menus": {
@@ -61,6 +64,8 @@
         },
         "promptPreflight.studyLog.enabled": { "type": "boolean", "default": false, "description": "Log prompts, scores, timings and Preflight token use to a local file for the user study." },
         "promptPreflight.studyLog.participantId": { "type": "string", "default": "", "description": "Participant ID written to the study log." },
+        "promptPreflight.debug": { "type": "boolean", "default": false, "description": "Enable the local debug trace. Stores full prompts and model responses in a JSONL file. Off by default." },
+        "promptPreflight.debugLogDir": { "type": "string", "default": "", "scope": "machine", "description": "Directory for the debug trace. Empty uses the extension global storage debug directory. A relative path resolves under it; an absolute path is used as is." },
         "promptPreflight.context.includeCode": {
           "type": "string",
           "enum": ["off", "prompt-files", "workspace"],
@@ -78,7 +83,7 @@
   "scripts": {
     "build": "esbuild src/extension.ts --bundle --platform=node --target=node18 --format=cjs --external:vscode --outfile=dist/extension.js && node scripts/copy-rg.mjs",
     "watch": "npm run build -- --watch",
-    "package": "npm run build && vsce package --no-dependencies"
+    "package": "npm run build && vsce package --no-dependencies --readme-path ../README.md"
   },
   "devDependencies": {
     "@prompt-preflight/core": "*",
@@ -87,6 +92,14 @@
     "@vscode/vsce": "^3.2.0"
   },
   "dependencies": {
+    "@opentelemetry/api": "1.9.0",
+    "@opentelemetry/api-logs": "0.57.0",
+    "@opentelemetry/core": "1.30.0",
+    "@opentelemetry/resources": "1.30.0",
+    "@opentelemetry/sdk-logs": "0.57.0",
+    "@opentelemetry/sdk-trace-base": "1.30.0",
+    "@opentelemetry/semantic-conventions": "1.28.0",
+    "rotating-file-stream": "3.2.6",
     "vscode-jsonrpc": "^10.0.0",
     "vscode-languageserver-protocol": "^3.18.5",
     "vscode-languageserver-types": "^3.18.5"

@@ -18,6 +18,7 @@ import {
   type SendRecord,
   type RuleReport,
   claudeCliRunner,
+  CLAUDE_TIMEOUT_MS,
   createProvider,
   extractJson,
   feedbackLogMessage,
@@ -28,9 +29,9 @@ import {
   type FeedbackError,
   type ReviewMode,
 } from "@prompt-preflight/core";
-import * as path from "node:path";
-import { JsonlRepository } from "./repository";
-import { AgentUsageRecovery } from "./agentUsageRecovery";
+import type { JsonlRepository } from "./repository";
+import type { AgentUsageRecovery } from "./agentUsageRecovery";
+import type { DebugTrace, ReviewTrace } from "./debug/types";
 import type { StudyLinks } from "./studyEvents";
 import { readModelConfig } from "./modelSettings";
 import { sendPrompt } from "./send";
@@ -77,8 +78,6 @@ export class PromptPanel implements vscode.WebviewViewProvider {
   private revision = 0;
   private quickPending?: { text: string; promise: Promise<ScoreReport | null> };
   private readonly feedback = new FeedbackService({ now: Date.now });
-  private readonly sends: JsonlRepository<SendRecord>;
-  private readonly usageRecovery: AgentUsageRecovery;
   private improved?: string;
   private deep?: { text: string; review: DeepReview };
   private draft = newDraft();
@@ -89,13 +88,10 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     private readonly extensionUri: vscode.Uri,
     private readonly workspace: WorkspaceIndex,
     private readonly log: StudyLog,
-    storage: vscode.Uri,
-    homeDir?: string,
-    usageRecovery?: AgentUsageRecovery,
-  ) {
-    this.sends = new JsonlRepository(path.join(storage.fsPath, "sends.jsonl"));
-    this.usageRecovery = usageRecovery ?? new AgentUsageRecovery({ storagePath: storage.fsPath, log, homeDir });
-  }
+    private readonly sends: JsonlRepository<SendRecord>,
+    private readonly debug: DebugTrace,
+    private readonly usageRecovery: AgentUsageRecovery,
+  ) {}
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
@@ -139,6 +135,9 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     if (typeof candidate.type !== "string" || !["ready", "input", "enhance", "deepReview", "useImproved", "improve", "send", "copy"].includes(candidate.type)) return;
     if (candidate.type === "input" && typeof candidate.text !== "string") return;
     const m = candidate as FromWebview;
+    if (m.type !== "input" && m.type !== "ready") {
+      this.debug.event("ui.action", { "prompt_preflight.action": m.type }, "info");
+    }
     switch (m.type) {
       case "ready":
         this.postSendTarget();
@@ -188,6 +187,13 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     }
     if (text.trim() && this.draft.startedAt === undefined) this.draft.startedAt = Date.now();
     this.analysis = analyzeRules(text, this.workspace.context());
+    this.debug.event("ui.input", {
+      "prompt_preflight.prompt_chars": text.length,
+      "prompt_preflight.words": text.trim().split(/\s+/).filter(Boolean).length,
+      "prompt_preflight.findings": this.analysis.findings.length,
+      "prompt_preflight.questions": this.analysis.questions.length,
+      "prompt_preflight.prompt_hash": hashPrompt(text),
+    }, "debug");
     if (!isFreshScore(this.score, text)) this.post({ type: "score", text, state: this.score ? "stale" : "idle", score: null });
     else this.post({ type: "score", text, state: "scored", score: this.score });
     // Keep highlights instant; visible advice waits for a pause.
@@ -213,6 +219,7 @@ export class PromptPanel implements vscode.WebviewViewProvider {
   private links(draft = this.draft): StudyLinks { return { draftId: draft.id, sendId: draft.sendId, sessionId: null }; }
 
   private async record(event: "send" | "score" | "review" | "agent-usage", links: StudyLinks, data: Record<string, unknown>): Promise<void> {
+    this.debug.storage("studyLog", { "prompt_preflight.study_log_enabled": this.log.enabled, "prompt_preflight.study_log_event": event });
     try { await this.log.write(event, links, data); }
     catch { console.error("Preflight study log write failed"); }
   }
@@ -258,13 +265,16 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     if (mode === "deep") this.deep = undefined;
     this.post({ type: "reviewing", mode, text });
     if (mode === "quick") this.post({ type: "score", text, state: "scoring", score: null });
+    let trace: ReviewTrace | undefined;
     try {
       const config = readModelConfig();
       const profile = resolveProfile(config, mode);
+      trace = this.debug.startReview({ mode, attempt, prompt: text, profile });
       const provider = createProvider(profile, config);
       const validation = provider.validateProfile(profile);
       if (!validation.ok) throw new Error(validation.message);
-      const run = claudeCliRunner(config.claudePath, this.workspace.root, profile.thinkingEffort);
+      const run = claudeCliRunner(config.claudePath, this.workspace.root, profile.thinkingEffort,
+        trace.llm({ mode, generationMethod: "cli", timeoutMs: CLAUDE_TIMEOUT_MS }));
       const context = { analysis: this.analysis, projectNotes: this.workspace.notes() };
       const quick = mode === "quick" ? await this.feedback.quick(text, run, profile, context, ctrl.signal) : null;
       const response = quick ? null : await run(buildReviewRequest(text, mode, profile.model, context), ctrl.signal);
@@ -285,6 +295,7 @@ export class PromptPanel implements vscode.WebviewViewProvider {
       const links = { ...this.links(draft), reviewId };
       const metadata = { ...profile, latencyMs, contextManifestHash: null, tokens: usage, cost: usage.costUsd, promptHash: hashPrompt(text) };
       if (mode === "quick") {
+        trace.parsed(quick);
         this.quick = quick!;
         this.quickText = text;
         this.score = this.quick.score;
@@ -296,18 +307,22 @@ export class PromptPanel implements vscode.WebviewViewProvider {
         await this.record("score", links, { ...metadata, scoreSource: "quick", promptVersion: QUICK_PROMPT_VERSION, scoreAvailable: !!quick!.score, score: quick!.score });
       } else {
         const deep = parseDeepReview(response!.text, text, { usage, latency: latencyMs });
+        trace.parsed(deep);
         this.deep = { text, review: deep };
         this.post({ type: "review", mode, text, review: { ...deep, questions: deep.questions.map(q => q.question) } });
       }
       await this.record("review", links, { ...metadata, mode, issueCount: quick?.issues.length });
       return quick?.score ?? null;
     } catch (e) {
-      if (ctrl.signal.aborted || text !== this.text || draft !== this.draft) return null;
       const error = mapError(e);
+      trace?.error(e, { code: error.code, action: error.action, retryable: error.retryable });
+      trace?.end("error");
+      if (ctrl.signal.aborted || text !== this.text || draft !== this.draft) return null;
       if (isRetryable(error) && attempt === 0 && !signal) return this.performReview(mode, 1);
       this.reportError(mode, text, error);
       return null;
     } finally {
+      trace?.end(ctrl.signal.aborted || text !== this.text || draft !== this.draft ? "error" : "ok");
       signal?.removeEventListener("abort", abort);
       if (this.running[mode] === ctrl) {
         delete this.running[mode];
@@ -326,24 +341,33 @@ export class PromptPanel implements vscode.WebviewViewProvider {
     const ctrl = new AbortController();
     this.running.deep = ctrl;
     this.post({ type: "rewriting", text: deep.text });
+    let trace: ReviewTrace | undefined;
     try {
       const config = readModelConfig();
       const profile = resolveProfile(config, "deep");
-      const run = claudeCliRunner(config.claudePath, this.workspace.root, profile.thinkingEffort);
+      trace = this.debug.startReview({ mode: "improve", attempt: 0, prompt: deep.text, profile });
+      const run = claudeCliRunner(config.claudePath, this.workspace.root, profile.thinkingEffort,
+        trace.llm({ mode: "improve", generationMethod: "cli", timeoutMs: CLAUDE_TIMEOUT_MS }));
       const improved = await improvePrompt(deep.text, deep.review, [], run, profile.model, { now: Date.now }, ctrl.signal);
       if (ctrl.signal.aborted || deep.text !== this.text || draft !== this.draft) return;
       if (!improved) throw new SyntaxError("Invalid rewrite JSON");
+      trace.parsed(improved);
       this.improved = improved.text;
       draft.inputTokens += improved.usage.inputTokens; draft.outputTokens += improved.usage.outputTokens; draft.costUsd += improved.usage.costUsd;
       this.post({ type: "improved", text: deep.text, improved: improved.text });
       await this.record("review", { ...this.links(draft), reviewId: randomUUID() }, { ...profile, mode: "improve", latencyMs: improved.latency, tokens: improved.usage, cost: improved.usage.costUsd, promptVersion: improved.promptVersion, promptHash: hashPrompt(deep.text) });
     } catch (e) {
+      const error = mapError(e);
+      trace?.error(e, { code: error.code, action: error.action, retryable: error.retryable });
+      trace?.end("error");
       if (!ctrl.signal.aborted) {
-        const error = mapError(e);
         this.post({ type: "rewriteError", text: deep.text, error: feedbackMessage(error).message });
       }
     }
-    finally { if (this.running.deep === ctrl) delete this.running.deep; }
+    finally {
+      trace?.end(ctrl.signal.aborted || deep.text !== this.text || draft !== this.draft ? "error" : "ok");
+      if (this.running.deep === ctrl) delete this.running.deep;
+    }
   }
 
   /**
@@ -400,6 +424,14 @@ export class PromptPanel implements vscode.WebviewViewProvider {
         if (tracking) await this.usageRecovery.cancel(links.sendId).catch(() => {});
         throw error;
       });
+      this.debug.event("ui.send", {
+        "prompt_preflight.send_target": target,
+        "prompt_preflight.prompt_hash": hashPrompt(text),
+        "prompt_preflight.prompt_chars": text.length,
+        "prompt_preflight.study_log_enabled": this.log.enabled,
+        "prompt_preflight.sent_anyway": decision.action === "confirm",
+        "ui.send.text": text,
+      }, "info");
       this.running.quick?.abort(); this.running.deep?.abort();
       this.draft = newDraft();
       this.score = null; this.quick = undefined; this.quickText = ""; this.improved = undefined; this.deep = undefined;

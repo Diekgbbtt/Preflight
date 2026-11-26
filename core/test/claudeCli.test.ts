@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { buildClaudeArgs, claudeCliRunner, createClaudeProvider, parseCliOutput } from "../src/claudeCli";
 import type { ModelProfile } from "../src/model";
+import type { LlmTrace } from "../src/observability";
 
 const request = { system: "You review prompts.", user: "<prompt>\nhi\n</prompt>", model: "sonnet" };
 
@@ -80,6 +81,30 @@ async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
     if ((err as Error).message === "expected the promise to reject") throw err;
     return err;
   }
+}
+
+interface RecordedTrace {
+  name: string;
+  args: unknown[];
+}
+
+function recordingTrace(): { trace: LlmTrace; events: RecordedTrace[] } {
+  const events: RecordedTrace[] = [];
+  const record = (name: string) => (...args: unknown[]) => {
+    events.push({ name, args });
+  };
+  return {
+    events,
+    trace: {
+      request: record("request"),
+      process: record("process"),
+      stdin: record("stdin"),
+      stdout: record("stdout"),
+      stderr: record("stderr"),
+      response: record("response"),
+      error: record("error"),
+    },
+  };
 }
 
 describe("claude provider complete", () => {
@@ -285,6 +310,72 @@ process.stdout.write(${JSON.stringify(OK_JSON)});`);
       removeCli(cliPath);
       fs.rmSync(marker, { force: true });
     }
+  });
+
+  it("records request, process, stdin, stdout and response on success", async () => {
+    const cliPath = makeCli(`const fs = require("fs");
+fs.readFileSync(0, "utf8");
+process.stdout.write(${JSON.stringify(OK_JSON)});`);
+    const { trace, events } = recordingTrace();
+    try {
+      await claudeCliRunner(cliPath, undefined, "medium", trace)(request);
+      expect(events.map((event) => event.name)).toEqual(["request", "process", "stdin", "stdout", "response"]);
+      expect(events[0].args[0]).toEqual(request);
+      expect(events[0].args[1]).toMatchObject({ provider: "claude", model: "sonnet", thinkingEffort: "medium" });
+      const args = events[1].args[0] as string[];
+      expect(args).toContain("--effort");
+      expect(args[args.indexOf("--effort") + 1]).toBe("medium");
+      expect(events[1].args[1]).toBeUndefined();
+      expect(typeof events[1].args[2]).toBe("number");
+      expect(events[2].args[0]).toBe(request.user);
+      expect(events[3].args[0]).toBe(OK_JSON);
+      expect(events[4].args[0]).toEqual({ text: '{"verdict":"ready"}', inputTokens: 8, outputTokens: 2, costUsd: 0.01 });
+      expect(events[4].args[1]).toBeGreaterThanOrEqual(0);
+    } finally {
+      removeCli(cliPath);
+    }
+  });
+
+  it("records stderr and error facts on a nonzero exit", async () => {
+    const cliPath = makeCli(`process.stderr.write("boom\\n");
+process.exit(1);`);
+    const { trace, events } = recordingTrace();
+    try {
+      await expect(claudeCliRunner(cliPath, undefined, "medium", trace)(request)).rejects.toMatchObject({
+        message: "boom",
+      });
+      expect(events.map((event) => event.name)).toContain("stderr");
+      const errorEvent = events.find((event) => event.name === "error");
+      expect(errorEvent).toBeDefined();
+      expect(errorEvent!.args[0]).toMatchObject({ message: "boom" });
+      expect(errorEvent!.args[2]).toMatchObject({ exitCode: 1 });
+    } finally {
+      removeCli(cliPath);
+    }
+  });
+
+  it("records a missing CLI error", async () => {
+    const { trace, events } = recordingTrace();
+    await expect(claudeCliRunner("/no/such/claude", undefined, "medium", trace)(request)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    const errorEvent = events.find((event) => event.name === "error");
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent!.args[2]).toMatchObject({ exitCode: "ENOENT" });
+  });
+
+  it("records an already-aborted call", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const { trace, events } = recordingTrace();
+    await expect(
+      claudeCliRunner("claude", undefined, "medium", trace)(request, controller.signal),
+    ).rejects.toMatchObject({ code: "cancelled" });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      name: "error",
+      args: [expect.objectContaining({ code: "cancelled" }), 0, { aborted: true }],
+    });
   });
 });
 

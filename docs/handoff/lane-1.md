@@ -18,10 +18,12 @@ Every entry has a contract version and a change log.
 | #38 | merged | ticket/38-session-slice | e366d25df10a700bae886d3af3d342afe959455d | `npm run typecheck && npm test && npm run build` -> 518 passed | PASS |
 | Review fixes | merged | lane-1/control-plane | review-fixes tip | `npm run typecheck && npm test && npm run build` -> 524 passed three times; `npm run e2e` -> 9/9 passed | PASS |
 | Codex custom tool fix | merged | lane-1/control-plane | 4c7f3d3 | `npm run typecheck && npm test && npm run build` -> 527 passed three times; `npm run e2e` -> 11/11 passed | PASS |
+| Debug observability | branch | feat/debug-observability | tip | `npm run typecheck && npm test && npm run build` -> 551 passed; `npm run e2e` -> 12/12 passed | PASS |
 
 The review fixes are merged into `lane-1/control-plane` locally.
-The e2e gate is green: 9/9 passed on 2026-11-17.
-The Codex custom tool fix is merged into `lane-1/control-plane`; its e2e gate is 11/11.
+The current e2e gate is 12/12 on 2026-11-18; the earlier review gate was 9/9 and the Codex fix gate was 11/11.
+The Codex custom tool fix is merged into `lane-1/control-plane`.
+The debug observability work is on `feat/debug-observability`; see `docs/observability.md`.
 
 Source branch: `lane-1/control-plane`.
 Setup commit: `098e887` (`chore: set up lane 1 worktrees and extension tests`).
@@ -152,6 +154,32 @@ When this document conflicts with a per-ticket section, this section wins.
 - The parser was audited against 73 local Codex sessions (0.48 to 0.135): 359 `custom_tool_call` events, 108 matching `FileChange` events, 359 parsed `apply_patch` calls, and no duplicate `FileChange` calls.
 - The fake `session-exec-events.jsonl` fixture is deleted.
 - The live Windows run is a manual step in `docs/windows.md`.
+
+## Debug observability
+
+The optional debug trace is a separate local evaluation stream. It is off by default.
+It is enabled by `promptPreflight.debug`; `promptPreflight.debugLogDir` selects the directory. Empty resolves to `<context.globalStorageUri>/debug`.
+The file is `llm-trace.jsonl`; rotation uses 10 MB and 5 files. The directory is mode `0700`; files are mode `0600` on POSIX.
+
+The implementation uses OpenTelemetry primitives:
+- `@opentelemetry/api` and `@opentelemetry/api-logs`.
+- `@opentelemetry/sdk-trace-base` with `BasicTracerProvider`, `SimpleSpanProcessor`, a custom JSONL span exporter, and a channel span processor.
+- `@opentelemetry/sdk-logs` with `LoggerProvider`, `SimpleLogRecordProcessor`, a custom JSONL log exporter, and a channel log processor.
+- `@opentelemetry/resources` for the shared resource and `@opentelemetry/semantic-conventions` for standard names.
+- `rotating-file-stream` for size rotation.
+
+Spans are `session`, `review.quick`, `review.deep`, `health.check`, and `llm.call`.
+`llm.call` is a `CLIENT` span with `gen_ai.*` and `prompt_preflight.*` attributes.
+Logs cover request, process, stdin, stdout, stderr, response, error, review parsing, UI, and storage.
+The JSONL record schema and the full taxonomy are in `docs/observability.md`.
+
+The colored surface is the `Prompt Preflight Debug` output channel.
+Commands are `promptPreflight.openDebugLog`, `promptPreflight.openDebugLogFile`, and `promptPreflight.clearDebugLog`.
+The first-enable warning is stored under `promptPreflight.debugNotice.v1`.
+`clearHistory` keeps the debug trace; `clearDebugLog` removes only the trace files and rotation history.
+The trace is not the study log and does not replace the four review/send/draft/question JSONL files.
+The current panel writes the debug trace for its review, LLM, UI, and send paths. The four repository files remain unappended until #43, #46, and #47.
+Tests are C36-C39 and E12; the suite has 551 unit tests and 12 e2e tests passing.
 
 ## Panel integration seams
 
@@ -522,7 +550,7 @@ const matches = await tools.searchText({ query: "greet", maxResults: 50 });
   - Codex (OpenAI privacy policy): `https://openai.com/policies/privacy-policy/`.
   - Codex is not implemented yet. #10 owns the adapter.
 - Privacy:
-  - The notice and `extension/README.md` disclose that drafts, Q&A, reviews, session slices inside review records, and send records are stored unencrypted under `context.globalStorageUri`.
+  - The notice and `README.md` disclose that drafts, Q&A, reviews, session slices inside review records, and send records are stored unencrypted under `context.globalStorageUri`.
   - Those records leave the machine only inside a model request.
   - `promptPreflight.clearHistory` deletes them. The command lands in #35.
   - The study log is opt-in, separate, and is not deleted by `clearHistory`.
@@ -1468,6 +1496,7 @@ The fixture workspace is copied to a temp directory; the seeded session homes ar
 - The first e2e run passed 8 of 9 tests. E8 failed because rg read stdin instead of the workspace; the adapter now passes an explicit `.` search path.
 - The E8 rerun passed 9 of 9 on 2026-11-17.
 - The Codex custom tool fix passed 11 of 11 on 2026-11-17, including E11.
+- The debug trace passed 12 of 12 on 2026-11-18, including E12. The test uses the built extension, the panel check-selection path, a fake Claude CLI, and a temp debug directory.
 
 ## Change log for the review fixes
 

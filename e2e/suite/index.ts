@@ -6,6 +6,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { AgentUsageRecovery, terminalSessionId } from "../../extension/src/agentUsageRecovery";
+import { DebugController } from "../../extension/src/debug/controller";
+import { NOOP_DEBUG_TRACE } from "../../extension/src/debug/types";
+import { JsonlRepository } from "../../extension/src/repository";
 import { PromptPanel } from "../../extension/src/panel";
 import { StudyLog } from "../../extension/src/studyLog";
 import type { WorkspaceIndex } from "../../extension/src/workspace";
@@ -46,8 +49,11 @@ test("mounts the built extension and declares its commands", async () => {
   const commands = (extension.packageJSON.contributes?.commands ?? []).map((command: { command: string }) => command.command);
   assert.deepEqual(commands.sort(), [
     "promptPreflight.checkSelection",
+    "promptPreflight.clearDebugLog",
     "promptPreflight.clearHistory",
     "promptPreflight.focus",
+    "promptPreflight.openDebugLog",
+    "promptPreflight.openDebugLogFile",
     "promptPreflight.openStudyLog",
   ]);
 });
@@ -280,7 +286,7 @@ fs.writeFileSync(path.join(${JSON.stringify(transcriptDir)}, sessionId + '.jsonl
     let receive!: (m: unknown) => Promise<void>;
     const storage = vscode.Uri.file(dir);
     const log = new StudyLog(storage);
-    const panel = new PromptPanel(storage, { root: cwd, context: () => ({}), notes: () => "" } as unknown as WorkspaceIndex, log, storage, home);
+    const panel = new PromptPanel(storage, { root: cwd, context: () => ({}), notes: () => "" } as unknown as WorkspaceIndex, log, new JsonlRepository(path.join(dir, "sends.jsonl")), NOOP_DEBUG_TRACE, new AgentUsageRecovery({ storagePath: dir, log, homeDir: home }));
     panel.resolveWebviewView({ webview: { options: {}, cspSource: "", asWebviewUri: () => "", postMessage: () => Promise.resolve(true), onDidReceiveMessage: (fn: typeof receive) => { receive = fn; } }, onDidChangeVisibility: () => {} } as unknown as vscode.WebviewView);
     const text = "Explain greet in src/greet.ts in one sentence";
     panel.setText(text);
@@ -339,6 +345,98 @@ test("E13: usage recovery survives recreated services without duplicated counter
   } finally {
     await config.update("studyLog.enabled", oldEnabled, vscode.ConfigurationTarget.Global);
     await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("E14: debug tracing writes OTel spans and full LLM packets for a real panel review", async () => {
+  const config = vscode.workspace.getConfiguration("promptPreflight");
+  const before = {
+    debug: config.get<boolean>("debug", false),
+    debugLogDir: config.get<string>("debugLogDir", ""),
+    claudePath: config.get<string>("claudePath", "claude"),
+    deepModel: config.get<string>("deepModel", "haiku"),
+    provider: config.get<string>("provider", "claude"),
+    thinkingEffort: config.get<string>("thinkingEffort", "medium"),
+    quickReviewOnPause: config.get<boolean>("quickReviewOnPause", true),
+  };
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-e2e-debug-"));
+  const cli = await createFakeCli();
+  try {
+    await config.update("provider", "claude", vscode.ConfigurationTarget.Global);
+    await config.update("deepModel", "haiku", vscode.ConfigurationTarget.Global);
+    await config.update("thinkingEffort", "medium", vscode.ConfigurationTarget.Global);
+    await config.update("quickReviewOnPause", true, vscode.ConfigurationTarget.Global);
+    await config.update("claudePath", cli, vscode.ConfigurationTarget.Global);
+    await config.update("debugLogDir", dir, vscode.ConfigurationTarget.Global);
+    await config.update("debug", true, vscode.ConfigurationTarget.Global);
+    await sleep(300);
+    const storage = vscode.Uri.file(dir);
+    const debug = new DebugController({
+      globalStorageUri: storage,
+      globalState: { get: () => true },
+      extension: { id: "prompt-preflight.prompt-preflight", packageJSON: { version: "0.1.0" } },
+    } as unknown as vscode.ExtensionContext);
+    await debug.start();
+    try {
+      const log = new StudyLog(storage);
+      const panel = new PromptPanel(storage, { root: workspaceRoot(), context: () => ({}), notes: () => "" } as unknown as WorkspaceIndex,
+        log, new JsonlRepository(path.join(dir, "sends.jsonl")), debug, new AgentUsageRecovery({ storagePath: dir, log }));
+      let receive!: (message: unknown) => Promise<void>;
+      panel.resolveWebviewView({ webview: { options: {}, cspSource: "", asWebviewUri: () => "", postMessage: () => Promise.resolve(true), onDidReceiveMessage: (fn: typeof receive) => { receive = fn; } }, onDidChangeVisibility: () => {} } as unknown as vscode.WebviewView);
+      panel.setText("Explain greet in src/greet.ts in one sentence");
+      await receive({ type: "enhance" });
+      panel.setText("");
+    } finally { await debug.shutdown(); }
+
+    const traceFile = path.join(dir, "llm-trace.jsonl");
+    const text = await fs.readFile(traceFile, "utf8");
+    const records = text
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const logs = records.filter((record) => record.recordType === "log");
+    const request = logs.find(
+      (record) => (record.attributes as Record<string, unknown>)["event.name"] === "llm.request",
+    );
+    const response = logs.find(
+      (record) => (record.attributes as Record<string, unknown>)["event.name"] === "llm.response",
+    );
+    assert.ok(request, "llm.request log missing");
+    assert.ok(response, "llm.response log missing");
+    const requestAttributes = request.attributes as Record<string, unknown>;
+    const responseAttributes = response.attributes as Record<string, unknown>;
+    assert.equal(requestAttributes["gen_ai.request.model"], "haiku");
+    assert.equal(requestAttributes["prompt_preflight.thinking_effort"], "medium");
+    assert.equal(requestAttributes["prompt_preflight.generation_method"], "cli");
+    assert.equal(requestAttributes["prompt_preflight.timeout_ms"], 120000);
+    assert.equal(typeof requestAttributes["llm.request.user"], "string");
+    assert.ok(request.traceId, "llm.request traceId missing");
+    assert.ok(request.spanId, "llm.request spanId missing");
+    assert.equal(responseAttributes["gen_ai.usage.input_tokens"], 10);
+    assert.equal(responseAttributes["gen_ai.usage.output_tokens"], 5);
+    assert.equal(typeof responseAttributes["llm.response.text"], "string");
+    const llmSpan = records.find((record) => record.recordType === "span" && record.name === "llm.call");
+    const reviewSpan = records.find((record) => record.recordType === "span" && record.name === "review.deep");
+    assert.ok(reviewSpan, "review.deep span missing");
+    assert.ok(llmSpan, "llm.call span missing");
+    assert.equal(llmSpan.parentSpanId, reviewSpan.spanId);
+    assert.equal((reviewSpan.status as { code?: string }).code, "OK");
+    assert.ok(!records.some(record => record.recordType === "span" && record.name === "health.check"));
+    assert.equal(llmSpan.kind, "CLIENT");
+    assert.equal((llmSpan.status as { code?: string }).code, "OK");
+    assert.equal(llmSpan.traceId, request.traceId);
+    assert.equal(llmSpan.spanId, request.spanId);
+  } finally {
+    await config.update("debug", before.debug, vscode.ConfigurationTarget.Global);
+    await config.update("debugLogDir", before.debugLogDir, vscode.ConfigurationTarget.Global);
+    await config.update("claudePath", before.claudePath, vscode.ConfigurationTarget.Global);
+    await config.update("deepModel", before.deepModel, vscode.ConfigurationTarget.Global);
+    await config.update("provider", before.provider, vscode.ConfigurationTarget.Global);
+    await config.update("thinkingEffort", before.thinkingEffort, vscode.ConfigurationTarget.Global);
+    await config.update("quickReviewOnPause", before.quickReviewOnPause, vscode.ConfigurationTarget.Global);
+    await sleep(200);
+    await fs.rm(dir, { recursive: true, force: true });
+    await fs.rm(path.dirname(cli), { recursive: true, force: true });
   }
 });
 

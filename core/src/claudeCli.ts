@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
 import type { ModelRequest, ModelResponse, ModelRunner } from "./review";
 import type { ModelCapabilities, ModelProfile, ModelProvider, ProfileValidation, ThinkingEffort } from "./model";
+import type { LlmErrorMeta, LlmTrace } from "./observability";
 
-const DEFAULT_TIMEOUT_MS = 120_000;
+export const CLAUDE_TIMEOUT_MS = 120_000;
 
 /**
  * Pure argument builder: the result is a string[] passed straight to execFile,
@@ -47,7 +48,7 @@ function claudeModelCost(model: string): ModelCapabilities["cost"] {
   return { inputPerMTok: 0, outputPerMTok: 0 };
 }
 
-export function createClaudeProvider(profile: ModelProfile, config: { claudePath: string }): ModelProvider {
+export function createClaudeProvider(profile: ModelProfile, config: { claudePath: string; trace?: LlmTrace }): ModelProvider {
   return {
     capabilities: {
       // The CLI exposes --json-schema; #40 does not export a JSON Schema yet,
@@ -61,7 +62,7 @@ export function createClaudeProvider(profile: ModelProfile, config: { claudePath
       supportsInstructionFiles: true,
     },
     validateProfile: validateClaudeProfile,
-    complete: (request, signal) => execClaude({ claudePath: config.claudePath }, request, profile, signal),
+    complete: (request, signal) => execClaude({ claudePath: config.claudePath, trace: config.trace }, request, profile, signal),
   };
 }
 
@@ -75,26 +76,40 @@ function cancelledError(): Error {
  * a flag and has no length limit. No retries; #42 owns retry.
  */
 function execClaude(
-  opts: { claudePath: string; cwd?: string },
+  opts: { claudePath: string; cwd?: string; trace?: LlmTrace },
   request: ModelRequest,
   profile: ModelProfile,
   signal?: AbortSignal,
 ): Promise<ModelResponse> {
   if (request.model !== profile.model) {
-    return Promise.reject(
-      new Error(`Model mismatch: request model "${request.model}" does not match the profile model "${profile.model}".`),
+    const mismatch = new Error(
+      `Model mismatch: request model "${request.model}" does not match the profile model "${profile.model}".`,
     );
+    opts.trace?.error(mismatch, 0);
+    return Promise.reject(mismatch);
   }
-  if (signal?.aborted) return Promise.reject(cancelledError());
+  if (signal?.aborted) {
+    const cancelled = cancelledError();
+    opts.trace?.error(cancelled, 0, { aborted: true });
+    return Promise.reject(cancelled);
+  }
   return new Promise<ModelResponse>((resolve, reject) => {
+    const startedAt = performance.now();
+    const args = buildClaudeArgs(request, profile);
+    opts.trace?.request(request, profile);
     const child = execFile(
       opts.claudePath,
-      buildClaudeArgs(request, profile),
-      { cwd: opts.cwd, signal, timeout: DEFAULT_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
+      args,
+      { cwd: opts.cwd, signal, timeout: CLAUDE_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
       (err, stdout, stderr) => {
+        const rttMs = performance.now() - startedAt;
+        opts.trace?.stdout(stdout);
+        if (stderr) opts.trace?.stderr(stderr);
         if (err) {
           if (signal?.aborted || err.name === "AbortError" || (err as NodeJS.ErrnoException).code === "ABORT_ERR") {
-            return reject(cancelledError());
+            const cancelled = cancelledError();
+            opts.trace?.error(cancelled, rttMs, { aborted: true });
+            return reject(cancelled);
           }
           const code = (err as NodeJS.ErrnoException).code;
           if (code === "ENOENT") {
@@ -102,6 +117,7 @@ function execClaude(
               `Claude Code CLI not found at "${opts.claudePath}". Install it or set promptPreflight.claudePath.`,
             );
             missing.code = code;
+            opts.trace?.error(missing, rttMs, { exitCode: code, signal: err.signal, killed: err.killed });
             return reject(missing);
           }
           const failure: Error & { code?: string | number; killed?: boolean; signal?: string | null } =
@@ -110,15 +126,26 @@ function execClaude(
           failure.killed = err.killed;
           failure.signal = err.signal;
           if (code !== undefined) failure.code = code;
+          opts.trace?.error(failure, rttMs, {
+            exitCode: code,
+            signal: err.signal,
+            killed: err.killed,
+            timedOut: Boolean(err.killed && !signal?.aborted),
+          });
           return reject(failure);
         }
         try {
-          resolve(parseCliOutput(stdout));
+          const response = parseCliOutput(stdout);
+          opts.trace?.response(response, rttMs);
+          resolve(response);
         } catch (e) {
+          opts.trace?.error(e, rttMs, { parseError: true });
           reject(e);
         }
       },
     );
+    opts.trace?.process(args, opts.cwd, child.pid);
+    opts.trace?.stdin(request.user);
     child.stdin?.end(request.user);
   });
 }
@@ -154,9 +181,10 @@ export function claudeCliRunner(
   claudePath = "claude",
   cwd?: string,
   thinkingEffort: ThinkingEffort = "medium",
+  trace?: LlmTrace,
 ): ModelRunner {
   return (req: ModelRequest, signal?: AbortSignal) => {
     const profile: ModelProfile = { provider: "claude", model: req.model, thinkingEffort };
-    return execClaude({ claudePath, cwd }, req, profile, signal);
+    return execClaude({ claudePath, cwd, trace }, req, profile, signal);
   };
 }
