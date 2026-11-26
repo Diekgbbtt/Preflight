@@ -4,7 +4,7 @@ import { buildDeepPrompt, DEEP_PROMPT_VERSION, restoreMentions } from "./deepPro
 import { exceedsBudget, exceedsContext, mapError, type FeedbackError } from "./errors";
 import type { ModelProvider } from "./model";
 import type { Clock, Event, IdGenerator, Repository } from "./repository";
-import { extractJson, parseDeepReview, type DeepReview } from "./schema";
+import { extractJson, hashPrompt, parseDeepReview, type DeepReview } from "./schema";
 import { SKIPPED_ANSWER } from "./questions";
 
 /** One project instruction file, as #48's loader reports it. */
@@ -52,6 +52,8 @@ export interface StoredSessionSlice {
 /** reviews.jsonl payload. Envelope id = reviewId. */
 export interface DeepReviewRecord extends DeepReview {
   draftId: string;
+  /** hashPrompt() of the draft text this review was made for; a different current hash means stale. */
+  promptHash: string;
   /** Agent session id, as in SendRecord; not a feedback-session id. */
   sessionId?: string;
   contextManifest: ContextManifest;
@@ -130,6 +132,7 @@ const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 
 /** User-facing names for source ids; unknown ids (e.g. "instructions:AGENTS.md") show their last part. */
 const SOURCE_NAMES: Record<string, string> = {
+  draft: "your draft",
   "prompt-files": "the referenced files",
   "git-diff": "the uncommitted changes",
   symbols: "the code outline",
@@ -139,7 +142,27 @@ const SOURCE_NAMES: Record<string, string> = {
   "test-command": "the test command",
   qa: "earlier answers",
 };
-const sourceName = (id: string) => SOURCE_NAMES[id] ?? id.split(":").at(-1)!;
+/** Plain name of a manifest source id; unknown ids (e.g. "instructions:AGENTS.md") show their last part. */
+export const sourceName = (id: string) => SOURCE_NAMES[id] ?? id.split(":").at(-1)!;
+
+/** Plain reason for an omitted source; shared by the context gaps and the manifest view (#47). */
+export const OMIT_REASONS: Record<"budget" | "excluded" | "unsupported" | "error" | "empty", string> = {
+  budget: "the context budget was full",
+  excluded: "the privacy settings exclude code",
+  unsupported: "not available here",
+  error: "could not be read",
+  empty: "nothing to include",
+};
+
+/** Why referenced files are missing from the bundle, from the prompt-files manifest details. */
+export function promptFileFacts(details: Record<string, string | number | boolean>): string[] {
+  const n = (k: string) => (typeof details[k] === "number" ? (details[k] as number) : 0);
+  const facts: string[] = [];
+  if (n("missing")) facts.push(`${n("missing")} referenced ${plural(n("missing"), "file was", "files were")} not found in the workspace`);
+  if (n("ambiguous")) facts.push(`${n("ambiguous")} referenced ${plural(n("ambiguous"), "file matches", "files match")} more than one workspace folder`);
+  if (n("excluded")) facts.push(`${n("excluded")} referenced ${plural(n("excluded"), "file was", "files were")} left out by the privacy settings`);
+  return facts;
+}
 
 /**
  * Gaps the code can state with certainty, in plain words for the user.
@@ -150,18 +173,12 @@ export function manifestGaps(manifest: ContextManifest, supportsInstructionFiles
   if (!supportsInstructionFiles) gaps.push(NO_INSTRUCTION_CONTROL_GAP);
   for (const s of manifest.sources) {
     const d = s.details ?? {};
-    if (s.source === "prompt-files") {
-      const n = (k: string) => (typeof d[k] === "number" ? (d[k] as number) : 0);
-      if (n("missing")) gaps.push(`${n("missing")} referenced ${plural(n("missing"), "file was", "files were")} not found in the workspace`);
-      if (n("ambiguous")) gaps.push(`${n("ambiguous")} referenced ${plural(n("ambiguous"), "file matches", "files match")} more than one workspace folder`);
-      if (n("excluded")) gaps.push(`${n("excluded")} referenced ${plural(n("excluded"), "file was", "files were")} left out by the privacy settings`);
-    }
+    if (s.source === "prompt-files") gaps.push(...promptFileFacts(d));
     if (s.included && s.truncated) gaps.push(`Cut to fit the context budget: ${sourceName(s.source)}`);
     // The per-file counts above already explain an excluded prompt-files source.
     const explained = s.source === "prompt-files" && s.omittedReason === "excluded";
     if (!s.included && s.omittedReason && s.omittedReason !== "empty" && !explained) {
-      const why = { budget: "the context budget was full", excluded: "the privacy settings exclude code", unsupported: "not available here", error: "could not be read" }[s.omittedReason];
-      gaps.push(`Left out: ${sourceName(s.source)} (${why})`);
+      gaps.push(`Left out: ${sourceName(s.source)} (${OMIT_REASONS[s.omittedReason]})`);
     }
   }
   return gaps;
@@ -212,6 +229,7 @@ function emptyDraftReview(input: DeepFeedbackInput, budget: number): DeepReviewR
     latency: 0,
     promptVersion: DEEP_PROMPT_VERSION,
     draftId: input.draftId,
+    promptHash: hashPrompt(input.draft),
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     contextManifest: { sources: [], totalTokens: 0, budget },
   };
@@ -271,6 +289,7 @@ export async function deepFeedback(input: DeepFeedbackInput, deps: DeepFeedbackD
         ]),
       ],
       draftId: input.draftId,
+      promptHash: hashPrompt(input.draft),
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       contextManifest: bundle.manifest,
       ...(slice ? { sessionSlice: { content: slice.content, tokens: slice.tokens, truncated: slice.provenance.truncated } } : {}),

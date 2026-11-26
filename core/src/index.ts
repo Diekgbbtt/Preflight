@@ -13,3 +13,4 @@ export * from "./observability";
 export * from "./deepPrompt";
 export * from "./deepFeedback";
 export * from "./questions";
+export * from "./deepView";
