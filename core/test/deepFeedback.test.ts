@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   deepFeedback,
   answerEvent,
+  deepReviewView,
+  hashPrompt,
   EMPTY_DRAFT_QUESTION,
   openQuestions,
   parseAnswersMessage,
@@ -163,6 +165,15 @@ describe("deepFeedback", () => {
     expect(openQuestions((await loadDeepSession("d1", deps)).questions)).toEqual([]);
     await deepFeedback(input, deps);
     expect(requests[1].user).toContain(`<qa>\nQ: Which login page?\nA: admin\n\nQ: What does broken mean?\nA: ${SKIPPED_ANSWER}\n</qa>`);
+  });
+
+  it("stores the prompt hash, so the view is ready for this draft and stale after an edit (#47)", async () => {
+    const { deps } = setup({ replies: [VAGUE] });
+    await deepFeedback(input, deps);
+    const { latest, questions } = await loadDeepSession("d1", deps);
+    expect(latest?.promptHash).toBe(hashPrompt(input.draft));
+    expect(deepReviewView({ review: latest, questions, draft: input.draft })).toMatchObject({ state: "ready", actionable: true });
+    expect(deepReviewView({ review: latest, questions, draft: `${input.draft} on the admin page` }).state).toBe("stale");
   });
 
   it("stops before the model call when the bundle exceeds the budget", async () => {
