@@ -276,6 +276,22 @@ describe("searchText privacy and determinism (#61)", () => {
     expect(second.items).toEqual(expected);
   });
 
+  it("omits excluded without searching when the policy allows no path", async () => {
+    const search = vi.fn(async () => []);
+    const tool = tools({ textSearch: { search }, policy: { includeCode: "off" } });
+    const off = await tool.searchText({ query: "x" });
+    expect(off.omittedReason).toBe("excluded");
+    expect(search).not.toHaveBeenCalled();
+
+    const emptyPolicy = tools({
+      textSearch: { search },
+      policy: { includeCode: "prompt-files", promptFiles: [] },
+    });
+    const none = await emptyPolicy.searchText({ query: "x" });
+    expect(none.omittedReason).toBe("excluded");
+    expect(search).not.toHaveBeenCalled();
+  });
+
   it("yields a promptFile match even when disallowed files fill the first cap window", async () => {
     // Faithful port contract: the search scope filters first, then the caller cap truncates in arrival order.
     const search = vi.fn(async (_query: string, options: { cwd?: string; maxResults: number; paths?: string[] }) => {

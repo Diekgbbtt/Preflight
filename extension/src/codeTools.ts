@@ -322,10 +322,13 @@ export function createCodeTools(options: CodeToolsOptions): CodebaseTools {
   const searchText = async (input: TextSearchInput, signal?: AbortSignal): Promise<ToolResult<TextSearchMatch>> => {
     if (input.query.trim() === "") return emptyResult("empty");
     const limit = Math.min(input.maxResults ?? caps.textSearch, caps.textSearch);
+    const paths = allowedPaths();
+    // An empty allowed set means the policy lets the search open nothing.
+    if (paths !== undefined && paths.length === 0) return emptyResult("excluded");
     let matches: TextSearchMatch[];
     try {
       matches = await withTimeout(
-        () => textSearch.search(input.query, { cwd, maxResults: limit, paths: allowedPaths() }),
+        () => textSearch.search(input.query, { cwd, maxResults: limit, paths }),
         timeoutMs,
         signal,
       );
