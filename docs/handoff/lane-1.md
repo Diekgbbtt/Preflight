@@ -58,6 +58,16 @@ Lane base for ticket #38: `d34bd22`.
 These sections supersede the matching fields in the per-ticket contracts below.
 When this document conflicts with a per-ticket section, this section wins.
 
+### #56 Claude CLI privacy boundary - stdin neutralization and temp spawn cwd
+
+- `execClaude` (`core/src/claudeCli.ts`) inserts a zero-width space (U+200B) after every `@` in the stdin payload, so the CLI mention parser reads no file: not relative, not absolute, not `~` paths (`docs/adr/0001`).
+- The child cwd is a fresh empty temporary directory, not the workspace root; the model learns the temp dir and never the workspace path. The directory is removed when the call settles (`docs/adr/0002`).
+- A relative `claudePath` containing a path separator resolves against the caller-provided cwd before the spawn; bare names keep PATH lookup.
+- `ModelRequest`, the UI draft, the stored draft, and the prompt hash are unchanged; only the stdin bytes differ. The trace `stdin` event records the neutralized payload; `llm.request` records the original draft.
+- `createClaudeProvider(...).complete` and the legacy `claudeCliRunner` share `execClaude`, so both paths are covered; #46's provider path inherits the fix.
+- Guard: unit tests in `core/test/claudeCli.test.ts` (adapter side) and the manual live check `npm run live:privacy` (`e2e/live-privacy-check.mjs`, catalogue in `docs/assertions/ticket-56.md`) after a Claude CLI update or before a release.
+- The Codex adapter (#10) must give the same guarantee when implemented.
+
 ### #40 Review schema - v2
 
 - `ScoreReport` fields: `dimensions`, `score`, `level`, `provider`, `model`, `thinkingEffort: string`, `rubricVersion`, `promptHash`, `scoredAt`, `confidence?`.

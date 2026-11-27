@@ -55,3 +55,4 @@ Run them in a Windows checkout and record the result in the table.
 | Claude discovery | not run | |
 | Codex discovery | not run | |
 | Send record URI | not run | |
+| Review spawn cwd is a temp directory | not run | `execClaude` spawns the CLI in an empty temp dir (ADR 0002); Windows cleanup is best-effort |

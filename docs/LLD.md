@@ -4,7 +4,7 @@ Current prototype versus target design. Prose is short. The diagrams carry the c
 
 ## Architecture
 
-Current is a stateless pipeline. Post adds application services, domain objects, and ports. Settings enter as a plain `Config` object at activation. There is no `SettingsService`.
+Current is a stateless pipeline. Post adds application services, domain objects, and ports. Settings enter as a plain `Config` object at activation. There is no `SettingsService`. The Claude adapter neutralizes `@` mentions in the stdin payload and spawns the CLI in an empty temporary directory (`docs/adr/0001`, `docs/adr/0002`), so the CLI reads no file on its own and learns no workspace path.
 
 ```mermaid
 flowchart TB
