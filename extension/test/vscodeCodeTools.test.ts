@@ -1,8 +1,15 @@
 // Ticket #37: the thin VS Code adapter. This is the only test allowed to
 // mock the vscode platform module.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { ExecResult } from "../src/exec";
 import { createVscodeCodeTools } from "../src/vscodeCodeTools";
+import { rgExcludeIglobs } from "../src/privacy";
+
+/** The --iglob exclusion pair the adapter passes with every rg run. */
+const excludeArgs = rgExcludeIglobs().flatMap((glob) => ["--iglob", glob]);
 
 type FakeUri = { scheme: string; fsPath: string; toString: () => string };
 const fileUri = (fsPath: string): FakeUri => ({ scheme: "file", fsPath, toString: () => `file://${fsPath}` });
@@ -151,6 +158,44 @@ describe("createVscodeCodeTools diagnostics and files", () => {
 describe("createVscodeCodeTools text search", () => {
   const jsonLine = (data: object): string => `${JSON.stringify({ type: "match", data })}\n`;
 
+  it("scopes rg to the existing paths and returns the complete match list", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-rg-"));
+    await fs.mkdir(path.join(dir, "src"), { recursive: true });
+    await fs.writeFile(path.join(dir, "src/a.ts"), "needle a\n");
+    await fs.writeFile(path.join(dir, "src/b.ts"), "needle b\n");
+    const matchesIn = (file: string, count: number): string =>
+      Array.from({ length: count }, (_, i) =>
+        jsonLine({ path: { text: file }, line_number: i + 1, submatches: [{ start: 0, end: 6 }], lines: { text: "needle" } }),
+      ).join("");
+    // 30 matches in src/a.ts and 21 in src/b.ts: 51 in total, one path stale.
+    const stdout = matchesIn("src/a.ts", 30) + matchesIn("src/b.ts", 21);
+    const rg = vi.fn(async (): Promise<ExecResult> => ({ ok: true, stdout }));
+    const api = createVscodeCodeTools({ cwd: dir, rgPath: "/rg", runRipgrep: rg });
+    const matches = await api.search("needle", { paths: ["src/a.ts", "src/gone.ts", "src/b.ts"] });
+    expect(rg).toHaveBeenCalledWith("/rg", ["--json", "--max-count", "50", ...excludeArgs, "--", "needle", "src/a.ts", "src/b.ts"], dir);
+    expect(matches).toHaveLength(51);
+  });
+
+  it("scopes rg --files to the existing paths", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-rgf-"));
+    await fs.mkdir(path.join(dir, "src"), { recursive: true });
+    await fs.writeFile(path.join(dir, "src/a.ts"), "a\n");
+    const rg = vi.fn(async (): Promise<ExecResult> => ({ ok: true, stdout: "src/a.ts\n" }));
+    const api = createVscodeCodeTools({ cwd: dir, rgPath: "/rg", runRipgrep: rg });
+    if (!api.listFiles) throw new Error("listFiles missing");
+    await expect(api.listFiles({ paths: ["src/a.ts", "src/gone.ts"] })).resolves.toEqual(["src/a.ts"]);
+    expect(rg).toHaveBeenCalledWith("/rg", ["--files", ...excludeArgs, "src/a.ts"], dir);
+  });
+
+  it("returns no matches for an empty scope without invoking rg", async () => {
+    const rg = vi.fn(async (): Promise<ExecResult> => ({ ok: true, stdout: "" }));
+    const api = createVscodeCodeTools({ cwd: "/w", rgPath: "/w/dist/rg", runRipgrep: rg });
+    await expect(api.search("x", { paths: [] })).resolves.toEqual([]);
+    if (!api.listFiles) throw new Error("listFiles missing");
+    await expect(api.listFiles({ paths: [] })).resolves.toEqual([]);
+    expect(rg).not.toHaveBeenCalled();
+  });
+
   it("runs the bundled binary with --json and parses matches", async () => {
     const rg = vi.fn(async (): Promise<ExecResult> => ({
       ok: true,
@@ -159,8 +204,8 @@ describe("createVscodeCodeTools text search", () => {
         jsonLine({ path: { text: "src/b.ts" }, line_number: 1, submatches: [{ start: 0, end: 9 }], lines: { text: "makeThing()" } }),
     }));
     const api = createVscodeCodeTools({ cwd: "/w", rgPath: "/w/dist/rg", runRipgrep: rg });
-    const matches = await api.search("makeThing", { maxResults: 50 });
-    expect(rg).toHaveBeenCalledWith("/w/dist/rg", ["--json", "--max-count", "50", "--", "makeThing", "."], "/w");
+    const matches = await api.search("makeThing", {});
+    expect(rg).toHaveBeenCalledWith("/w/dist/rg", ["--json", "--max-count", "50", ...excludeArgs, "--", "makeThing", "."], "/w");
     expect(matches).toEqual([
       { uri: "file:///w/src/a.ts", path: "src/a.ts", range: { start: { line: 4, character: 2 }, end: { line: 4, character: 10 } }, preview: "  const x = makeThing();\n" },
       { uri: "file:///w/src/b.ts", path: "src/b.ts", range: { start: { line: 0, character: 0 }, end: { line: 0, character: 9 } }, preview: "makeThing()" },
@@ -170,14 +215,14 @@ describe("createVscodeCodeTools text search", () => {
   it("maps a missing binary to ENOENT", async () => {
     const rg = vi.fn(async (): Promise<ExecResult> => ({ ok: false, code: "ENOENT", stderr: "spawn rg ENOENT" }));
     const api = createVscodeCodeTools({ cwd: "/w", rgPath: "/w/dist/rg", runRipgrep: rg });
-    await expect(api.search("x", { maxResults: 50 })).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(api.search("x", {})).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("lists files through rg --files", async () => {
     const rg = vi.fn(async (): Promise<ExecResult> => ({ ok: true, stdout: "src/a.ts\nsrc/b.ts\n" }));
     const api = createVscodeCodeTools({ cwd: "/w", rgPath: "/w/dist/rg", runRipgrep: rg });
     if (!api.listFiles) throw new Error("listFiles missing");
-    await expect(api.listFiles({ maxResults: 50 })).resolves.toEqual(["src/a.ts", "src/b.ts"]);
-    expect(rg).toHaveBeenCalledWith("/w/dist/rg", ["--files"], "/w");
+    await expect(api.listFiles({})).resolves.toEqual(["src/a.ts", "src/b.ts"]);
+    expect(rg).toHaveBeenCalledWith("/w/dist/rg", ["--files", ...excludeArgs], "/w");
   });
 });

@@ -2,6 +2,7 @@
 // (ticket #37). This is the only file in this layer that imports vscode.
 // It converts editor values to LSP types and delegates policy to the tools.
 import * as nodePath from "node:path";
+import { existsSync } from "node:fs";
 import * as vscode from "vscode";
 import {
   DiagnosticSeverity,
@@ -18,8 +19,15 @@ import {
 } from "vscode-languageserver-protocol";
 import type { CancellationToken } from "vscode-jsonrpc";
 import type { LanguageProtocol, TextSearchMatch, TextSearchPort } from "./codeTools";
-import { EXCLUDE_GLOB, isOutsideWorkspace } from "./privacy";
+import { EXCLUDE_GLOB, isOutsideWorkspace, rgExcludeIglobs } from "./privacy";
 import { parseRipgrepFiles, parseRipgrepJson, runRipgrep } from "./ripgrep";
+
+/**
+ * Volume bound for matches per file inside one rg run. It equals the default
+ * text-search cap; a tool cap override above it trades completeness for
+ * output volume. The tool owns the total cap and the result set.
+ */
+const RG_MAX_MATCHES_PER_FILE = 50;
 
 export interface VscodeCodeToolsOptions {
   /** Workspace root for uriOf and rg. Defaults to the first workspace folder. */
@@ -141,6 +149,21 @@ export function createVscodeCodeTools(options: VscodeCodeToolsOptions = {}): Lan
     return rgPath;
   };
 
+  /**
+   * Resolves the search scope against the search cwd. A path that does not
+   * exist cannot contain matches, so it shrinks the scope instead of failing
+   * the whole rg run (a missing path argument makes rg exit 2 with stderr set).
+   * undefined keeps the whole-tree scope; an empty list means nothing to search.
+   */
+  const resolveScope = (paths: string[] | undefined, cwd: string): string[] | undefined => {
+    if (paths === undefined) return undefined;
+    const out: string[] = [];
+    for (const relative of paths) {
+      if (existsSync(nodePath.join(cwd, relative))) out.push(relative);
+    }
+    return out;
+  };
+
   return {
     uriOf,
     pathOf,
@@ -205,25 +228,43 @@ export function createVscodeCodeTools(options: VscodeCodeToolsOptions = {}): Lan
       return files;
     },
 
-    async search(query: string, textOptions: { cwd?: string; maxResults: number }): Promise<TextSearchMatch[]> {
+    async search(query: string, textOptions: { cwd?: string; paths?: string[] }): Promise<TextSearchMatch[]> {
       const cwd = textOptions.cwd ?? rootPath() ?? process.cwd();
-      const max = textOptions.maxResults;
-      const result = await rg(requireRg(), ["--json", "--max-count", String(max), "--", query, "."], cwd);
+      const scope = resolveScope(textOptions.paths, cwd);
+      // Defensive invariant at the lowest layer: the tool seam already refuses
+      // an empty allowed set, so a direct port caller with an empty scope must
+      // not make rg open the tree either.
+      if (scope !== undefined && scope.length === 0) return [];
+      // --max-count bounds the per-file output volume; the tool owns the total cap.
+      const args = [
+        "--json",
+        "--max-count",
+        String(RG_MAX_MATCHES_PER_FILE),
+        ...rgExcludeIglobs().map((glob) => ["--iglob", glob]).flat(),
+        "--",
+        query,
+        ...(scope ?? ["."]),
+      ];
+      const result = await rg(requireRg(), args, cwd);
       if (!result.ok) {
         if (result.code === "ENOENT") throw Object.assign(new Error("rg is not available"), { code: "ENOENT" });
         throw Object.assign(new Error(result.stderr || "rg failed"), { code: result.code });
       }
-      return parseRipgrepJson(result.stdout, cwd, max);
+      return parseRipgrepJson(result.stdout, cwd);
     },
 
-    async listFiles(fileOptions: { cwd?: string; maxResults: number }): Promise<string[]> {
+    async listFiles(fileOptions: { cwd?: string; paths?: string[] }): Promise<string[]> {
       const cwd = fileOptions.cwd ?? rootPath() ?? process.cwd();
-      const result = await rg(requireRg(), ["--files"], cwd);
+      const scope = resolveScope(fileOptions.paths, cwd);
+      // Same defensive invariant as search: an empty scope opens nothing.
+      if (scope !== undefined && scope.length === 0) return [];
+      const args = ["--files", ...rgExcludeIglobs().map((glob) => ["--iglob", glob]).flat(), ...(scope ?? [])];
+      const result = await rg(requireRg(), args, cwd);
       if (!result.ok) {
         if (result.code === "ENOENT") throw Object.assign(new Error("rg is not available"), { code: "ENOENT" });
         throw Object.assign(new Error(result.stderr || "rg failed"), { code: result.code });
       }
-      return parseRipgrepFiles(result.stdout, fileOptions.maxResults);
+      return parseRipgrepFiles(result.stdout);
     },
   };
 }

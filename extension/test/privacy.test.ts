@@ -9,6 +9,7 @@ import {
   consentMessage,
   consentedIncludeCode,
   EXCLUDE_GLOB,
+  rgExcludeIglobs,
   type ConsentRecord,
   type IncludeKind,
   type IncludePolicy,
@@ -300,6 +301,15 @@ describe("EXCLUDE_GLOB", () => {
     for (const dir of ["dist", "out", "build", ".venv", "venv", "__pycache__", ".next", "target"]) {
       expect(EXCLUDE_GLOB).toContain(dir);
     }
+  });
+});
+
+describe("rgExcludeIglobs (#61)", () => {
+  it("derives the rg exclusions from the same sets the policy checks", () => {
+    expect(rgExcludeIglobs()).toEqual([
+      "!**/{node_modules,.git,dist,out,build,.venv,venv,__pycache__,.next,target}",
+      "!**/{credentials.json,id_rsa,id_ed25519,.env,.env.*,*.pem,*.key}",
+    ]);
   });
 });
 

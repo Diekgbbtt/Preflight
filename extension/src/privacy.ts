@@ -118,7 +118,7 @@ export function isOutsideWorkspace(path: string): boolean {
 }
 
 /** Normalizes a workspace-relative path for policy comparison. */
-function normalizePolicyPath(path: string): string {
+export function normalizePolicyPath(path: string): string {
   return path.replace(/\\/g, "/").replace(/^\.\//, "");
 }
 
@@ -180,6 +180,19 @@ export function consentedIncludeCode(setting: IncludeCode, consent: ConsentRecor
 
 /** Single glob for vscode.workspace.findFiles that skips dependency, git and build directories. */
 export const EXCLUDE_GLOB = "**/{node_modules,.git,dist,out,build,.venv,venv,__pycache__,.next,target}/**";
+
+/**
+ * ripgrep --iglob exclusion patterns derived from the same sets the policy
+ * checks, so the search never opens a file `shouldInclude` rejects in any
+ * include mode. This is a derived representation of the sets above, not a
+ * third hand-written copy of the exclusion knowledge. `--iglob` matches the
+ * policy's case-insensitive comparison.
+ */
+export function rgExcludeIglobs(): string[] {
+  const dirs = [...EXCLUDED_DIR_SEGMENTS].join(",");
+  const names = [...EXCLUDED_BASENAMES, ".env", ".env.*", "*.pem", "*.key"].join(",");
+  return [`!**/{${dirs}}`, `!**/{${names}}`];
+}
 
 /**
  * Required privacy fields for one context source entry in the #36 manifest.

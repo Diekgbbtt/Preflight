@@ -247,6 +247,131 @@ describe("searchText and listFiles tools", () => {
   });
 });
 
+describe("searchText privacy and determinism (#61)", () => {
+  /** The repro data from the ticket: 50 matches in docs/a.md, then matches in src/x.ts. */
+  const reproMatches = () => [
+    ...Array.from({ length: 50 }, (_, i) => ({ uri: uri("docs/a.md"), path: "docs/a.md", range: at(i), preview: `docs ${i}` })),
+    { uri: uri("src/x.ts"), path: "src/x.ts", range: at(7), preview: "the match in the referenced file" },
+  ];
+
+  it("returns the same items in canonical path and line order on repeated calls", async () => {
+    // The port returns the complete bounded list; arrival order is rg's, not canonical.
+    const arrival = [
+      { uri: uri("src/b.ts"), path: "src/b.ts", range: at(1), preview: "b1" },
+      { uri: uri("docs/a.md"), path: "docs/a.md", range: at(0), preview: "a0" },
+      { uri: uri("src/a.ts"), path: "src/a.ts", range: at(3), preview: "a3" },
+      { uri: uri("src/a.ts"), path: "src/a.ts", range: at(1), preview: "a1" },
+    ];
+    const search = vi.fn(async () => arrival);
+    const tool = tools({ textSearch: { search } });
+    const first = await tool.searchText({ query: "x" });
+    const second = await tool.searchText({ query: "x" });
+    const expected = [
+      { uri: uri("docs/a.md"), path: "docs/a.md", range: at(0), preview: "a0" },
+      { uri: uri("src/a.ts"), path: "src/a.ts", range: at(1), preview: "a1" },
+      { uri: uri("src/a.ts"), path: "src/a.ts", range: at(3), preview: "a3" },
+      { uri: uri("src/b.ts"), path: "src/b.ts", range: at(1), preview: "b1" },
+    ];
+    expect(first.items).toEqual(expected);
+    expect(second.items).toEqual(expected);
+  });
+
+  it("omits excluded without searching when the policy allows no path", async () => {
+    const search = vi.fn(async () => []);
+    const tool = tools({ textSearch: { search }, policy: { includeCode: "off" } });
+    const off = await tool.searchText({ query: "x" });
+    expect(off.omittedReason).toBe("excluded");
+    expect(search).not.toHaveBeenCalled();
+
+    const emptyPolicy = tools({
+      textSearch: { search },
+      policy: { includeCode: "prompt-files", promptFiles: [] },
+    });
+    const none = await emptyPolicy.searchText({ query: "x" });
+    expect(none.omittedReason).toBe("excluded");
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it("falls back to scoped text search from documentSymbols under prompt-files", async () => {
+    // Every LSP fallback site routes through the shared fallback path; this
+    // locks the representative site: the port must receive the allowed path
+    // set at the site, not only from a direct searchText call.
+    const search = vi.fn(async (_query: string, options: { cwd?: string; paths?: string[] }) =>
+      options.paths ? reproMatches().filter((m) => options.paths?.includes(m.path)) : reproMatches(),
+    );
+    const result = await tools({
+      protocol: { documentSymbols: async () => [] },
+      textSearch: { search },
+      policy: { includeCode: "prompt-files", promptFiles: ["src/x.ts"] },
+    }).documentSymbols({ path: "src/x.ts", query: "the match in the referenced file" });
+    expect(result.fallback).toBe("text-search");
+    expect(result.items.map((m) => m.path)).toEqual(["src/x.ts"]);
+    expect(result.omittedReason).toBeUndefined();
+    expect(search).toHaveBeenCalledWith("the match in the referenced file", expect.objectContaining({ paths: ["src/x.ts"] }));
+  });
+
+  it("yields a promptFile match under prompt-files when other files hold more matches", async () => {
+    // The port scopes to the allowed paths, so the 50 disallowed matches in
+    // docs/a.md are never opened and can never crowd the referenced file out.
+    const search = vi.fn(async (_query: string, options: { cwd?: string; paths?: string[] }) =>
+      options.paths ? reproMatches().filter((m) => options.paths?.includes(m.path)) : reproMatches(),
+    );
+    const result = await tools({
+      textSearch: { search },
+      policy: { includeCode: "prompt-files", promptFiles: ["src/x.ts"] },
+    }).searchText({ query: "the match in the referenced file" });
+    expect(result.omittedReason).toBeUndefined();
+    expect(result.items.some((m) => m.path === "src/x.ts")).toBe(true);
+    expect(result.items.every((m) => m.path === "src/x.ts")).toBe(true);
+  });
+
+  it("drops an excluded promptFile from the search scope", async () => {
+    const search = vi.fn(async () => [{ uri: uri("src/x.ts"), path: "src/x.ts", range: at(7), preview: "x" }]);
+    const result = await tools({
+      textSearch: { search },
+      policy: { includeCode: "prompt-files", promptFiles: ["credentials.json", "src/x.ts"] },
+    }).searchText({ query: "x" });
+    expect(result.omittedReason).toBeUndefined();
+    expect(result.items.map((m) => m.path)).toEqual(["src/x.ts"]);
+    expect(search).toHaveBeenCalledWith("x", expect.objectContaining({ paths: ["src/x.ts"] }));
+  });
+
+  it("lists an allowed promptFile among many rejected paths", async () => {
+    // 200 files the policy rejects, then the one allowed path: the rg --files
+    // fallback must not crowd the allowed path out.
+    const all = [...Array.from({ length: 200 }, (_, i) => `docs/f${200 - i}.md`), "src/x.ts"];
+    const listFiles = vi.fn(async (options: { cwd?: string; paths?: string[] }) =>
+      options.paths ? all.filter((f) => options.paths?.includes(f)) : all,
+    );
+    const result = await tools({
+      protocol: { workspaceFiles: undefined },
+      textSearch: { listFiles },
+      policy: { includeCode: "prompt-files", promptFiles: ["src/x.ts"] },
+    }).listFiles({});
+    expect(result.omittedReason).toBeUndefined();
+    expect(result.items).toEqual(["src/x.ts"]);
+  });
+
+  it("sorts the fallback file list alphabetically", async () => {
+    const listFiles = vi.fn(async () => ["src/b.ts", "docs/a.md", "src/a.ts"]);
+    const result = await tools({
+      protocol: { workspaceFiles: undefined },
+      textSearch: { listFiles },
+    }).listFiles({});
+    expect(result.items).toEqual(["docs/a.md", "src/a.ts", "src/b.ts"]);
+    expect(result.fallback).toBe("text-search");
+  });
+
+  it("caps the fallback list at 200 and counts every policy-rejected file", async () => {
+    const all = [...Array.from({ length: 200 }, (_, i) => `src/f${i}.ts`), "credentials.json", "src/z.ts"];
+    const listFiles = vi.fn(async () => all);
+    const result = await tools({ protocol: { workspaceFiles: undefined }, textSearch: { listFiles } }).listFiles({});
+    expect(result.items).toHaveLength(200);
+    expect(result.truncated).toBe(true);
+    expect(result.dropped).toBe(1);
+  });
+});
+
 describe("tool failure and cancellation", () => {
   it("returns error when the protocol throws", async () => {
     const result = await tools({

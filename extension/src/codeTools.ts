@@ -14,7 +14,7 @@ import {
   type SymbolInformation,
   type WorkspaceSymbolParams,
 } from "vscode-languageserver-protocol";
-import { shouldInclude, type IncludePolicy } from "./privacy";
+import { shouldInclude, normalizePolicyPath, type IncludePolicy } from "./privacy";
 
 /** One symbol item after LSP conversion. */
 export interface ToolSymbol {
@@ -114,10 +114,14 @@ export interface LanguageProtocol {
   workspaceFiles?(token: CancellationToken): Promise<string[]>;
 }
 
-/** The text-search port. The adapter binds the bundled rg binary. */
+/**
+ * The text-search port. The adapter binds the bundled rg binary.
+ * The port returns the complete result list, bounded only by the per-file
+ * rg cap and the exec buffer; the tool owns policy, order, and the cap.
+ */
 export interface TextSearchPort {
-  search(query: string, options: { cwd?: string; maxResults: number }): Promise<TextSearchMatch[]>;
-  listFiles?(options: { cwd?: string; maxResults: number }): Promise<string[]>;
+  search(query: string, options: { cwd?: string; paths?: string[] }): Promise<TextSearchMatch[]>;
+  listFiles?(options: { cwd?: string; paths?: string[] }): Promise<string[]>;
 }
 
 export interface CodeToolsOptions {
@@ -238,6 +242,18 @@ function isAllowed(path: string | undefined, policy: IncludePolicy, kind: "promp
   return path !== undefined && path !== "" && shouldInclude(path, kind, policy);
 }
 
+/** Canonical result order: path, then start line, then start character. */
+function byCanonicalOrder(
+  a: { path?: string; range: Range },
+  b: { path?: string; range: Range },
+): number {
+  const pa = a.path ?? "";
+  const pb = b.path ?? "";
+  if (pa !== pb) return pa < pb ? -1 : 1;
+  if (a.range.start.line !== b.range.start.line) return a.range.start.line - b.range.start.line;
+  return a.range.start.character - b.range.start.character;
+}
+
 function convertSymbol(symbol: SymbolInformation, protocol: LanguageProtocol): ToolSymbol {
   const path = protocol.pathOf(symbol.location.uri);
   return {
@@ -284,16 +300,41 @@ export function createCodeTools(options: CodeToolsOptions): CodebaseTools {
   const caps = { ...CODE_TOOL_CAPS, ...options.caps };
   const cwd = options.cwd;
 
+  /**
+   * The workspace-relative paths the policy allows the search to open, deduped
+   * on the policy-normalized form. An empty list means nothing may be searched;
+   * undefined means the whole tree under the workspace mode. The port receives
+   * a plain scope, never the policy.
+   */
+  const allowedPaths = (): string[] | undefined => {
+    if (policy.includeCode === "off") return [];
+    if (policy.includeCode === "prompt-files") {
+      const seen = new Set<string>();
+      const paths: string[] = [];
+      for (const path of policy.promptFiles ?? []) {
+        const normalized = normalizePolicyPath(path);
+        if (seen.has(normalized) || !isAllowed(normalized, policy, "prompt-file")) continue;
+        seen.add(normalized);
+        paths.push(normalized);
+      }
+      return paths;
+    }
+    return undefined;
+  };
+
   const call = <T>(run: (token: CancellationToken) => Promise<T>, signal?: AbortSignal): Promise<T> =>
     withTimeout(run, timeoutMs, signal);
 
   const searchText = async (input: TextSearchInput, signal?: AbortSignal): Promise<ToolResult<TextSearchMatch>> => {
     if (input.query.trim() === "") return emptyResult("empty");
     const limit = Math.min(input.maxResults ?? caps.textSearch, caps.textSearch);
+    const paths = allowedPaths();
+    // An empty allowed set means the policy lets the search open nothing.
+    if (paths !== undefined && paths.length === 0) return emptyResult("excluded");
     let matches: TextSearchMatch[];
     try {
       matches = await withTimeout(
-        () => textSearch.search(input.query, { cwd, maxResults: limit }),
+        () => textSearch.search(input.query, { cwd, paths }),
         timeoutMs,
         signal,
       );
@@ -304,7 +345,10 @@ export function createCodeTools(options: CodeToolsOptions): CodebaseTools {
     }
     const filtered = matches.filter((match) => isAllowed(match.path, policy));
     const dropped = matches.length - filtered.length;
-    const capped = cap(filtered, limit);
+    // Determinism is a property of the result, not of rg arrival order: the
+    // canonical order makes repeated searches return the same set and order.
+    const sorted = [...filtered].sort(byCanonicalOrder);
+    const capped = cap(sorted, limit);
     if (capped.items.length === 0) return emptyResult("empty", dropped);
     return { items: capped.items, truncated: capped.truncated, dropped };
   };
@@ -450,18 +494,23 @@ export function createCodeTools(options: CodeToolsOptions): CodebaseTools {
       if (files.length > 0) return emptyResult("empty", dropped);
     }
     if (!textSearch.listFiles) return emptyResult("unsupported");
+    const paths = allowedPaths();
+    if (paths !== undefined && paths.length === 0) return emptyResult("excluded");
     let files: string[];
     try {
-      files = await withTimeout(() => textSearch.listFiles!({ cwd, maxResults: limit }), timeoutMs, signal);
+      files = await withTimeout(() => textSearch.listFiles!({ cwd, paths }), timeoutMs, signal);
     } catch (error) {
       if (signal?.aborted) throw cancelledError();
       if ((error as { code?: unknown } | null)?.code === "ENOENT") return emptyResult("unsupported");
       return emptyResult("error");
     }
     const filtered = files.filter((path) => isAllowed(path, policy));
-    const capped = cap(filtered, limit);
-    if (capped.items.length === 0) return emptyResult("empty", files.length - filtered.length);
-    return { items: capped.items, truncated: capped.truncated, dropped: files.length - filtered.length, fallback: "text-search" };
+    const dropped = files.length - filtered.length;
+    // Alphabetical order is the canonical order for a plain path list.
+    const sorted = [...filtered].sort();
+    const capped = cap(sorted, limit);
+    if (capped.items.length === 0) return emptyResult("empty", dropped);
+    return { items: capped.items, truncated: capped.truncated, dropped, fallback: "text-search" };
   };
 
   return { documentSymbols, workspaceSymbols, definitions, references, diagnostics, searchText, listFiles };

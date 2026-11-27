@@ -34,7 +34,7 @@ export function runRipgrep(
 }
 
 /** Parses rg --json match lines into workspace-relative matches. */
-export function parseRipgrepJson(stdout: string, cwd: string, maxResults = Number.POSITIVE_INFINITY): TextSearchMatch[] {
+export function parseRipgrepJson(stdout: string, cwd: string): TextSearchMatch[] {
   const matches: TextSearchMatch[] = [];
   for (const line of stdout.split("\n")) {
     if (line.trim() === "") continue;
@@ -61,13 +61,12 @@ export function parseRipgrepJson(stdout: string, cwd: string, maxResults = Numbe
       range: { start: { line: lineNumber, character: start }, end: { line: lineNumber, character: end } },
       ...(typeof preview === "string" ? { preview } : {}),
     });
-    if (matches.length >= maxResults) break;
   }
   return matches;
 }
 
 /** Parses rg --files lines into unique workspace-relative paths. */
-export function parseRipgrepFiles(stdout: string, maxResults = Number.POSITIVE_INFINITY): string[] {
+export function parseRipgrepFiles(stdout: string): string[] {
   const files: string[] = [];
   const seen = new Set<string>();
   for (const line of stdout.split("\n")) {
@@ -77,7 +76,6 @@ export function parseRipgrepFiles(stdout: string, maxResults = Number.POSITIVE_I
     if (isOutsideWorkspace(normalized) || seen.has(normalized)) continue;
     seen.add(normalized);
     files.push(normalized);
-    if (files.length >= maxResults) break;
   }
   return files;
 }
