@@ -305,6 +305,41 @@ describe("searchText privacy and determinism (#61)", () => {
     expect(result.omittedReason).toBeUndefined();
     expect(result.items.some((m) => m.path === "src/x.ts")).toBe(true);
   });
+  it("lists promptFiles beyond the fallback window and sorts them", async () => {
+    // 200 files the policy rejects, then the one allowed path: the rg --files
+    // fallback must not crowd the allowed path out.
+    const all = [...Array.from({ length: 200 }, (_, i) => `docs/f${200 - i}.md`), "src/x.ts"];
+    const listFiles = vi.fn(async (options: { cwd?: string; maxResults?: number; paths?: string[] }) => {
+      const scoped = options.paths ? all.filter((f) => options.paths?.includes(f)) : all;
+      return scoped.slice(0, options.maxResults ?? scoped.length);
+    });
+    const result = await tools({
+      protocol: { workspaceFiles: undefined },
+      textSearch: { listFiles },
+      policy: { includeCode: "prompt-files", promptFiles: ["src/x.ts"] },
+    }).listFiles({});
+    expect(result.omittedReason).toBeUndefined();
+    expect(result.items).toEqual(["src/x.ts"]);
+  });
+
+  it("sorts the fallback file list canonically", async () => {
+    const listFiles = vi.fn(async () => ["src/b.ts", "docs/a.md", "src/a.ts"]);
+    const result = await tools({
+      protocol: { workspaceFiles: undefined },
+      textSearch: { listFiles },
+    }).listFiles({});
+    expect(result.items).toEqual(["docs/a.md", "src/a.ts", "src/b.ts"]);
+    expect(result.fallback).toBe("text-search");
+  });
+
+  it("caps the fallback list at 200 and counts every policy-rejected file", async () => {
+    const all = [...Array.from({ length: 200 }, (_, i) => `src/f${i}.ts`), "credentials.json", "src/z.ts"];
+    const listFiles = vi.fn(async () => all);
+    const result = await tools({ protocol: { workspaceFiles: undefined }, textSearch: { listFiles } }).listFiles({});
+    expect(result.items).toHaveLength(200);
+    expect(result.truncated).toBe(true);
+    expect(result.dropped).toBe(1);
+  });
 });
 
 describe("tool failure and cancellation", () => {
