@@ -11,6 +11,7 @@
     "test": "vitest run",
     "build": "npm run build -w extension && npm run build -w hook",
     "e2e": "npm run build && node e2e/run.mjs",
+ "live:privacy": "node e2e/live-privacy-check.mjs",
     "package": "npm run package -w extension"
   },
   "devDependencies": {
