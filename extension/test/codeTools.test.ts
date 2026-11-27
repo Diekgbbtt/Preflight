@@ -292,6 +292,23 @@ describe("searchText privacy and determinism (#61)", () => {
     expect(search).not.toHaveBeenCalled();
   });
 
+  it("falls back to scoped text search from documentSymbols under prompt-files", async () => {
+    // Every LSP fallback site routes through the shared fallback path; this
+    // locks the representative site: documentSymbols with a query under
+    // prompt-files yields the referenced file's match, scoped and ordered.
+    const search = vi.fn(async (_query: string, options: { cwd?: string; paths?: string[] }) =>
+      options.paths ? reproMatches().filter((m) => options.paths?.includes(m.path)) : reproMatches(),
+    );
+    const result = await tools({
+      protocol: { documentSymbols: async () => [] },
+      textSearch: { search },
+      policy: { includeCode: "prompt-files", promptFiles: ["src/x.ts"] },
+    }).documentSymbols({ path: "src/x.ts", query: "the match in the referenced file" });
+    expect(result.fallback).toBe("text-search");
+    expect(result.items.map((m) => m.path)).toEqual(["src/x.ts"]);
+    expect(result.omittedReason).toBeUndefined();
+  });
+
   it("yields a promptFile match even when disallowed files fill the first cap window", async () => {
     // Faithful port contract: the search scope filters first, then the caller cap truncates in arrival order.
     const search = vi.fn(async (_query: string, options: { cwd?: string; maxResults: number; paths?: string[] }) => {
