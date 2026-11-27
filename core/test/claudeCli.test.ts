@@ -2,7 +2,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildClaudeArgs, claudeCliRunner, createClaudeProvider, parseCliOutput } from "../src/claudeCli";
+import { buildClaudeArgs, claudeCliRunner, createClaudeProvider, neutralizeMentions, parseCliOutput } from "../src/claudeCli";
 import type { ModelProfile } from "../src/model";
 import type { LlmTrace } from "../src/observability";
 
@@ -32,6 +32,23 @@ describe("buildClaudeArgs", () => {
   it("never adds --json-schema", () => {
     const profile: ModelProfile = { provider: "claude", model: "opus", thinkingEffort: "high" };
     expect(buildClaudeArgs(request, profile)).not.toContain("--json-schema");
+  });
+});
+
+describe("neutralizeMentions", () => {
+  it("leaves text without @ unchanged", () => {
+    expect(neutralizeMentions("plain draft, no mentions")).toBe("plain draft, no mentions");
+  });
+
+  it("inserts exactly one zero-width space after every @", () => {
+    expect(neutralizeMentions("a@b@c")).toBe("a@\u200bb@\u200bc");
+  });
+
+  it("neutralizes emails, a trailing @, tilde paths, and absolute paths", () => {
+    expect(neutralizeMentions("user@example.com")).toBe("user@\u200bexample.com");
+    expect(neutralizeMentions("ends with @")).toBe("ends with @\u200b");
+    expect(neutralizeMentions("@~/.ssh/config")).toBe("@\u200b~/.ssh/config");
+    expect(neutralizeMentions("@/etc/hosts")).toBe("@\u200b/etc/hosts");
   });
 });
 
@@ -110,7 +127,7 @@ function recordingTrace(): { trace: LlmTrace; events: RecordedTrace[] } {
 describe("claude provider complete", () => {
   const profile: ModelProfile = { provider: "claude", model: "sonnet", thinkingEffort: "medium" };
 
-  it("resolves the parsed ModelResponse and sends the user prompt on stdin", async () => {
+  it("resolves the parsed ModelResponse and leaves a draft without @ byte-identical on stdin", async () => {
     const marker = path.join(FAKE_DIR, "marker-success");
     fs.rmSync(marker, { force: true });
     const cliPath = makeCli(ECHO_STDIN_OK);
@@ -126,6 +143,36 @@ describe("claude provider complete", () => {
     }
   });
 
+  it("writes a stdin payload whose @ mentions are neutralized and leaves the request untouched", async () => {
+    const marker = path.join(FAKE_DIR, "marker-neutralized");
+    fs.rmSync(marker, { force: true });
+    const cliPath = makeCli(ECHO_STDIN_OK);
+    process.env.MARKER = marker;
+    const mentionRequest = {
+      system: "You review prompts.",
+      user: "Check @probe.ts and @.env before @/etc/hosts and @~/.ssh/config.",
+      model: "sonnet",
+    };
+    const snapshot = { ...mentionRequest };
+    try {
+      await createClaudeProvider(profile, { claudePath: cliPath }).complete(mentionRequest);
+      const stdin = fs.readFileSync(marker, "utf8");
+      // No unneutralized @ may reach the CLI: every @ is followed by U+200B,
+      // so the CLI mention parser finds no mention (issue #56, ADR 0001).
+      expect(stdin).not.toMatch(/@(?!\u200b)/);
+      expect(stdin).toBe(
+        "Check @\u200bprobe.ts and @\u200b.env before @\u200b/etc/hosts and @\u200b~/.ssh/config.",
+      );
+      // The caller's request object is unchanged: the UI draft, the stored
+      // draft, and the prompt hash keep the original text.
+      expect(mentionRequest).toEqual(snapshot);
+    } finally {
+      delete process.env.MARKER;
+      removeCli(cliPath);
+      fs.rmSync(marker, { force: true });
+    }
+  });
+
   it("succeeds when the CLI exits 0 with a stderr warning", async () => {
     const cliPath = makeCli(`process.stderr.write("deprecation warning\\n");
 process.stdout.write(${JSON.stringify(OK_JSON)});`);
@@ -134,6 +181,30 @@ process.stdout.write(${JSON.stringify(OK_JSON)});`);
       expect(res.text).toBe('{"verdict":"ready"}');
     } finally {
       removeCli(cliPath);
+    }
+  });
+
+  it("spawns the CLI in a fresh empty temporary directory", async () => {
+    const marker = path.join(FAKE_DIR, "marker-spawn-cwd");
+    fs.rmSync(marker, { force: true });
+    const cliPath = makeCli(`const fs = require("fs");
+fs.writeFileSync(process.env.MARKER, JSON.stringify({ cwd: process.cwd(), entries: fs.readdirSync(".") }));
+fs.readFileSync(0, "utf8");
+process.stdout.write(${JSON.stringify(OK_JSON)});`);
+    process.env.MARKER = marker;
+    try {
+      // FAKE_DIR holds the fake CLI scripts, so the child must not see it.
+      await claudeCliRunner(cliPath, FAKE_DIR)(request);
+      const rec = JSON.parse(fs.readFileSync(marker, "utf8")) as { cwd: string; entries: string[] };
+      expect(rec.cwd).not.toBe(FAKE_DIR);
+      expect(rec.cwd).not.toBe(process.cwd());
+      // The child resolves symlinks, so compare against the real tmp path.
+      expect(rec.cwd.startsWith(fs.realpathSync(os.tmpdir()))).toBe(true);
+      expect(rec.entries).toEqual([]);
+    } finally {
+      delete process.env.MARKER;
+      removeCli(cliPath);
+      fs.rmSync(marker, { force: true });
     }
   });
 
@@ -312,6 +383,21 @@ process.stdout.write(${JSON.stringify(OK_JSON)});`);
     }
   });
 
+  it("resolves a relative claudePath against the caller cwd", async () => {
+    const cliPath = makeCli(`const fs = require("fs");
+fs.readFileSync(0, "utf8");
+process.stdout.write(${JSON.stringify(OK_JSON)});`);
+    try {
+      // Node used to resolve a relative claudePath against opts.cwd; the
+      // spawn cwd is now a temp dir, so the adapter must resolve it itself
+      // against the caller cwd (issue #56, ADR 0002).
+      const res = await claudeCliRunner("./" + path.basename(cliPath), FAKE_DIR)(request);
+      expect(res.text).toBe('{"verdict":"ready"}');
+    } finally {
+      removeCli(cliPath);
+    }
+  });
+
   it("records request, process, stdin, stdout and response on success", async () => {
     const cliPath = makeCli(`const fs = require("fs");
 fs.readFileSync(0, "utf8");
@@ -325,12 +411,50 @@ process.stdout.write(${JSON.stringify(OK_JSON)});`);
       const args = events[1].args[0] as string[];
       expect(args).toContain("--effort");
       expect(args[args.indexOf("--effort") + 1]).toBe("medium");
-      expect(events[1].args[1]).toBeUndefined();
+      // The spawn cwd is a fresh empty temp directory, never the workspace.
+      expect(typeof events[1].args[1]).toBe("string");
+      expect(events[1].args[1] as string).not.toBe(process.cwd());
       expect(typeof events[1].args[2]).toBe("number");
       expect(events[2].args[0]).toBe(request.user);
       expect(events[3].args[0]).toBe(OK_JSON);
       expect(events[4].args[0]).toEqual({ text: '{"verdict":"ready"}', inputTokens: 8, outputTokens: 2, costUsd: 0.01 });
       expect(events[4].args[1]).toBeGreaterThanOrEqual(0);
+    } finally {
+      removeCli(cliPath);
+    }
+  });
+
+  it("removes the temporary spawn directory after the call settles", async () => {
+    const cliPath = makeCli(`process.stdout.write(${JSON.stringify(OK_JSON)});`);
+    const failingCli = makeCli(`process.stderr.write("boom\\n"); process.exit(1);`);
+    const { trace, events } = recordingTrace();
+    try {
+      await claudeCliRunner(cliPath, undefined, "medium", trace)(request);
+      const okCwd = events.find((e) => e.name === "process")!.args[1] as string;
+      expect(fs.existsSync(okCwd)).toBe(false);
+      await expect(claudeCliRunner(failingCli, undefined, "medium", trace)(request)).rejects.toMatchObject({
+        message: "boom",
+      });
+      const failCwd = events.filter((e) => e.name === "process")[1].args[1] as string;
+      expect(fs.existsSync(failCwd)).toBe(false);
+    } finally {
+      removeCli(cliPath);
+      removeCli(failingCli);
+    }
+  });
+
+  it("records the neutralized payload on the stdin trace event and the original on request", async () => {
+    const cliPath = makeCli(`const fs = require("fs");
+fs.readFileSync(0, "utf8");
+process.stdout.write(${JSON.stringify(OK_JSON)});`);
+    const { trace, events } = recordingTrace();
+    const mentionRequest = { system: "You review prompts.", user: "Check @.env.", model: "sonnet" };
+    try {
+      await claudeCliRunner(cliPath, undefined, "medium", trace)(mentionRequest);
+      // The stdin event is what the CLI receives; the request event is what
+      // the user wrote.
+      expect(events[0].args[0]).toEqual(mentionRequest);
+      expect(events.find((e) => e.name === "stdin")!.args[0]).toBe("Check @\u200b.env.");
     } finally {
       removeCli(cliPath);
     }

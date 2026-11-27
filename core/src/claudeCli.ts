@@ -1,9 +1,24 @@
 import { execFile } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { ModelRequest, ModelResponse, ModelRunner } from "./review";
 import type { ModelCapabilities, ModelProfile, ModelProvider, ProfileValidation, ThinkingEffort } from "./model";
 import type { LlmErrorMeta, LlmTrace } from "./observability";
 
 export const CLAUDE_TIMEOUT_MS = 120_000;
+
+/** Zero-width space: disables the CLI @-mention parser (issue #56, ADR 0001). */
+const ZERO_WIDTH_SPACE = "\u200B";
+
+/**
+ * Neutralizes @ mentions so the CLI cannot read files on its own: every @ gets
+ * a zero-width space after it. Only the stdin payload is neutralized; the
+ * request object, the UI draft, and the prompt hash keep the original text.
+ */
+export function neutralizeMentions(text: string): string {
+  return text.replace(/@/g, `@${ZERO_WIDTH_SPACE}`);
+}
 
 /**
  * Pure argument builder: the result is a string[] passed straight to execFile,
@@ -66,6 +81,39 @@ export function createClaudeProvider(profile: ModelProfile, config: { claudePath
   };
 }
 
+/**
+ * Spawn directory for one model call: a fresh empty directory instead of the
+ * workspace root. Relative @ mentions resolve to nothing and the model never
+ * learns the workspace path (issue #56, ADR 0002).
+ */
+function createSpawnDir(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "prompt-preflight-claude-"));
+}
+
+/**
+ * A relative claudePath containing a path separator used to resolve against
+ * the child cwd (the workspace root); the spawn cwd is now a temp dir, so the
+ * adapter resolves it against the caller-provided cwd itself. Bare names keep
+ * PATH lookup and absolute paths pass through (ADR 0002).
+ */
+function resolveClaudePath(claudePath: string, callerCwd: string | undefined): string {
+  const hasSeparator = claudePath.includes("/") || claudePath.includes("\\");
+  if (!hasSeparator || path.isAbsolute(claudePath)) return claudePath;
+  return path.resolve(callerCwd ?? process.cwd(), claudePath);
+}
+
+function removeSpawnDir(spawnDir: string | undefined): void {
+  if (!spawnDir) return;
+  try {
+    // Best effort: on Windows the child may still hold the directory for a
+    // moment, so retry and drop a lingering empty temp dir rather than fail
+    // the review (ADR 0002).
+    fs.rmSync(spawnDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  } catch {
+    // ignore
+  }
+}
+
 function cancelledError(): Error {
   return Object.assign(new Error("cancelled"), { code: "cancelled" });
 }
@@ -96,12 +144,15 @@ function execClaude(
   return new Promise<ModelResponse>((resolve, reject) => {
     const startedAt = performance.now();
     const args = buildClaudeArgs(request, profile);
+    const spawnDir = createSpawnDir();
+    const claudePath = resolveClaudePath(opts.claudePath, opts.cwd);
     opts.trace?.request(request, profile);
     const child = execFile(
-      opts.claudePath,
+      claudePath,
       args,
-      { cwd: opts.cwd, signal, timeout: CLAUDE_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
+      { cwd: spawnDir, signal, timeout: CLAUDE_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
       (err, stdout, stderr) => {
+        removeSpawnDir(spawnDir);
         const rttMs = performance.now() - startedAt;
         opts.trace?.stdout(stdout);
         if (stderr) opts.trace?.stderr(stderr);
@@ -144,9 +195,12 @@ function execClaude(
         }
       },
     );
-    opts.trace?.process(args, opts.cwd, child.pid);
-    opts.trace?.stdin(request.user);
-    child.stdin?.end(request.user);
+    opts.trace?.process(args, spawnDir, child.pid);
+    // The stdin event records what the CLI receives; the request event above
+    // records the user's original draft (issue #56, ADR 0001).
+    const stdinPayload = neutralizeMentions(request.user);
+    opts.trace?.stdin(stdinPayload);
+    child.stdin?.end(stdinPayload);
   });
 }
 
