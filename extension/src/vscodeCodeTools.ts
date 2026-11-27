@@ -18,7 +18,7 @@ import {
   type WorkspaceSymbolParams,
 } from "vscode-languageserver-protocol";
 import type { CancellationToken } from "vscode-jsonrpc";
-import type { LanguageProtocol, TextSearchMatch, TextSearchPort } from "./codeTools";
+import { CODE_TOOL_CAPS, type LanguageProtocol, type TextSearchMatch, type TextSearchPort } from "./codeTools";
 import { EXCLUDE_GLOB, isOutsideWorkspace } from "./privacy";
 import { parseRipgrepFiles, parseRipgrepJson, runRipgrep } from "./ripgrep";
 
@@ -225,29 +225,32 @@ export function createVscodeCodeTools(options: VscodeCodeToolsOptions = {}): Lan
       return files;
     },
 
-    async search(query: string, textOptions: { cwd?: string; maxResults: number; paths?: string[] }): Promise<TextSearchMatch[]> {
+    async search(query: string, textOptions: { cwd?: string; paths?: string[] }): Promise<TextSearchMatch[]> {
       const cwd = textOptions.cwd ?? rootPath() ?? process.cwd();
-      const max = textOptions.maxResults;
       const scope = resolveScope(textOptions.paths, cwd);
       // An empty scope means the policy allows nothing to be opened; searching
       // the tree here would violate the never-open rule, so there are no matches.
       if (scope !== undefined && scope.length === 0) return [];
-      const result = await rg(requireRg(), ["--json", "--max-count", String(max), "--", query, ...(scope ?? ["."])], cwd);
+      // --max-count bounds the per-file output volume; the tool owns the total cap.
+      const args = ["--json", "--max-count", String(CODE_TOOL_CAPS.textSearch), "--", query, ...(scope ?? ["."])];
+      const result = await rg(requireRg(), args, cwd);
       if (!result.ok) {
         if (result.code === "ENOENT") throw Object.assign(new Error("rg is not available"), { code: "ENOENT" });
         throw Object.assign(new Error(result.stderr || "rg failed"), { code: result.code });
       }
-      return parseRipgrepJson(result.stdout, cwd, max);
+      return parseRipgrepJson(result.stdout, cwd);
     },
 
-    async listFiles(fileOptions: { cwd?: string; maxResults: number }): Promise<string[]> {
+    async listFiles(fileOptions: { cwd?: string; paths?: string[] }): Promise<string[]> {
       const cwd = fileOptions.cwd ?? rootPath() ?? process.cwd();
-      const result = await rg(requireRg(), ["--files"], cwd);
+      const scope = resolveScope(fileOptions.paths, cwd);
+      if (scope !== undefined && scope.length === 0) return [];
+      const result = await rg(requireRg(), ["--files", ...(scope ?? [])], cwd);
       if (!result.ok) {
         if (result.code === "ENOENT") throw Object.assign(new Error("rg is not available"), { code: "ENOENT" });
         throw Object.assign(new Error(result.stderr || "rg failed"), { code: result.code });
       }
-      return parseRipgrepFiles(result.stdout, fileOptions.maxResults);
+      return parseRipgrepFiles(result.stdout);
     },
   };
 }

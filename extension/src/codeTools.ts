@@ -114,10 +114,14 @@ export interface LanguageProtocol {
   workspaceFiles?(token: CancellationToken): Promise<string[]>;
 }
 
-/** The text-search port. The adapter binds the bundled rg binary. */
+/**
+ * The text-search port. The adapter binds the bundled rg binary.
+ * The port returns the complete result list, bounded only by the per-file
+ * rg cap and the exec buffer; the tool owns policy, order, and the cap.
+ */
 export interface TextSearchPort {
-  search(query: string, options: { cwd?: string; maxResults: number; paths?: string[] }): Promise<TextSearchMatch[]>;
-  listFiles?(options: { cwd?: string; maxResults: number }): Promise<string[]>;
+  search(query: string, options: { cwd?: string; paths?: string[] }): Promise<TextSearchMatch[]>;
+  listFiles?(options: { cwd?: string; paths?: string[] }): Promise<string[]>;
 }
 
 export interface CodeToolsOptions {
@@ -328,7 +332,7 @@ export function createCodeTools(options: CodeToolsOptions): CodebaseTools {
     let matches: TextSearchMatch[];
     try {
       matches = await withTimeout(
-        () => textSearch.search(input.query, { cwd, maxResults: limit, paths }),
+        () => textSearch.search(input.query, { cwd, paths }),
         timeoutMs,
         signal,
       );
@@ -488,18 +492,22 @@ export function createCodeTools(options: CodeToolsOptions): CodebaseTools {
       if (files.length > 0) return emptyResult("empty", dropped);
     }
     if (!textSearch.listFiles) return emptyResult("unsupported");
+    const paths = allowedPaths();
+    if (paths !== undefined && paths.length === 0) return emptyResult("excluded");
     let files: string[];
     try {
-      files = await withTimeout(() => textSearch.listFiles!({ cwd, maxResults: limit }), timeoutMs, signal);
+      files = await withTimeout(() => textSearch.listFiles!({ cwd, paths }), timeoutMs, signal);
     } catch (error) {
       if (signal?.aborted) throw cancelledError();
       if ((error as { code?: unknown } | null)?.code === "ENOENT") return emptyResult("unsupported");
       return emptyResult("error");
     }
     const filtered = files.filter((path) => isAllowed(path, policy));
-    const capped = cap(filtered, limit);
-    if (capped.items.length === 0) return emptyResult("empty", files.length - filtered.length);
-    return { items: capped.items, truncated: capped.truncated, dropped: files.length - filtered.length, fallback: "text-search" };
+    const dropped = files.length - filtered.length;
+    const sorted = [...filtered].sort();
+    const capped = cap(sorted, limit);
+    if (capped.items.length === 0) return emptyResult("empty", dropped);
+    return { items: capped.items, truncated: capped.truncated, dropped, fallback: "text-search" };
   };
 
   return { documentSymbols, workspaceSymbols, definitions, references, diagnostics, searchText, listFiles };
