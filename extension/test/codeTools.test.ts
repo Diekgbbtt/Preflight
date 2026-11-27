@@ -247,6 +247,28 @@ describe("searchText and listFiles tools", () => {
   });
 });
 
+describe("searchText privacy and determinism (#61)", () => {
+  /** The repro data from the ticket: 50 matches in docs/a.md, then matches in src/x.ts. */
+  const reproMatches = () => [
+    ...Array.from({ length: 50 }, (_, i) => ({ uri: uri("docs/a.md"), path: "docs/a.md", range: at(i), preview: `docs ${i}` })),
+    { uri: uri("src/x.ts"), path: "src/x.ts", range: at(7), preview: "the match in the referenced file" },
+  ];
+
+  it("yields a promptFile match even when disallowed files fill the first cap window", async () => {
+    // Faithful port contract: the search scope filters first, then the caller cap truncates in arrival order.
+    const search = vi.fn(async (_query: string, options: { cwd?: string; maxResults: number; paths?: string[] }) => {
+      const scoped = options.paths ? reproMatches().filter((m) => options.paths?.includes(m.path)) : reproMatches();
+      return scoped.slice(0, options.maxResults);
+    });
+    const result = await tools({
+      textSearch: { search },
+      policy: { includeCode: "prompt-files", promptFiles: ["src/x.ts"] },
+    }).searchText({ query: "the match in the referenced file" });
+    expect(result.omittedReason).toBeUndefined();
+    expect(result.items.some((m) => m.path === "src/x.ts")).toBe(true);
+  });
+});
+
 describe("tool failure and cancellation", () => {
   it("returns error when the protocol throws", async () => {
     const result = await tools({

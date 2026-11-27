@@ -116,7 +116,7 @@ export interface LanguageProtocol {
 
 /** The text-search port. The adapter binds the bundled rg binary. */
 export interface TextSearchPort {
-  search(query: string, options: { cwd?: string; maxResults: number }): Promise<TextSearchMatch[]>;
+  search(query: string, options: { cwd?: string; maxResults: number; paths?: string[] }): Promise<TextSearchMatch[]>;
   listFiles?(options: { cwd?: string; maxResults: number }): Promise<string[]>;
 }
 
@@ -284,6 +284,26 @@ export function createCodeTools(options: CodeToolsOptions): CodebaseTools {
   const caps = { ...CODE_TOOL_CAPS, ...options.caps };
   const cwd = options.cwd;
 
+  /**
+   * The workspace-relative paths the policy allows the search to open, deduped.
+   * An empty list means nothing may be searched; undefined means the whole tree
+   * under the workspace mode. The port receives a plain scope, never the policy.
+   */
+  const allowedPaths = (): string[] | undefined => {
+    if (policy.includeCode === "off") return [];
+    if (policy.includeCode === "prompt-files") {
+      const seen = new Set<string>();
+      const paths: string[] = [];
+      for (const path of policy.promptFiles ?? []) {
+        if (seen.has(path) || !isAllowed(path, policy, "prompt-file")) continue;
+        seen.add(path);
+        paths.push(path);
+      }
+      return paths;
+    }
+    return undefined;
+  };
+
   const call = <T>(run: (token: CancellationToken) => Promise<T>, signal?: AbortSignal): Promise<T> =>
     withTimeout(run, timeoutMs, signal);
 
@@ -293,7 +313,7 @@ export function createCodeTools(options: CodeToolsOptions): CodebaseTools {
     let matches: TextSearchMatch[];
     try {
       matches = await withTimeout(
-        () => textSearch.search(input.query, { cwd, maxResults: limit }),
+        () => textSearch.search(input.query, { cwd, maxResults: limit, paths: allowedPaths() }),
         timeoutMs,
         signal,
       );

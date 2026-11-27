@@ -2,6 +2,7 @@
 // (ticket #37). This is the only file in this layer that imports vscode.
 // It converts editor values to LSP types and delegates policy to the tools.
 import * as nodePath from "node:path";
+import { existsSync } from "node:fs";
 import * as vscode from "vscode";
 import {
   DiagnosticSeverity,
@@ -141,6 +142,25 @@ export function createVscodeCodeTools(options: VscodeCodeToolsOptions = {}): Lan
     return rgPath;
   };
 
+  /**
+   * Resolves the search scope against the search cwd. A path that does not
+   * exist cannot contain matches, so it shrinks the scope instead of failing
+   * the whole rg run (a missing path argument makes rg exit 2 with stderr set).
+   * undefined keeps the whole-tree scope; an empty list means nothing to search.
+   */
+  const resolveScope = (paths: string[] | undefined, cwd: string): string[] | undefined => {
+    if (paths === undefined) return undefined;
+    const out: string[] = [];
+    for (const relative of paths) {
+      try {
+        if (existsSync(nodePath.join(cwd, relative))) out.push(relative);
+      } catch {
+        // A path that cannot be stat'ed cannot contain matches.
+      }
+    }
+    return out;
+  };
+
   return {
     uriOf,
     pathOf,
@@ -205,10 +225,14 @@ export function createVscodeCodeTools(options: VscodeCodeToolsOptions = {}): Lan
       return files;
     },
 
-    async search(query: string, textOptions: { cwd?: string; maxResults: number }): Promise<TextSearchMatch[]> {
+    async search(query: string, textOptions: { cwd?: string; maxResults: number; paths?: string[] }): Promise<TextSearchMatch[]> {
       const cwd = textOptions.cwd ?? rootPath() ?? process.cwd();
       const max = textOptions.maxResults;
-      const result = await rg(requireRg(), ["--json", "--max-count", String(max), "--", query, "."], cwd);
+      const scope = resolveScope(textOptions.paths, cwd);
+      // An empty scope means the policy allows nothing to be opened; searching
+      // the tree here would violate the never-open rule, so there are no matches.
+      if (scope !== undefined && scope.length === 0) return [];
+      const result = await rg(requireRg(), ["--json", "--max-count", String(max), "--", query, ...(scope ?? ["."])], cwd);
       if (!result.ok) {
         if (result.code === "ENOENT") throw Object.assign(new Error("rg is not available"), { code: "ENOENT" });
         throw Object.assign(new Error(result.stderr || "rg failed"), { code: result.code });
