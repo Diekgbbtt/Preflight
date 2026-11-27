@@ -57,16 +57,16 @@ describe("parseRipgrepJson", () => {
     expect(matches.map((match) => match.path)).toEqual(["kept.ts"]);
   });
 
-  it("caps at maxResults", () => {
+  it("returns every match; the cap lives in the tool, not the parser", () => {
     const lines = Array.from({ length: 5 }, (_, i) => jsonLine({ path: { text: `f${i}.ts` }, line_number: 1, submatches: [{ start: 0, end: 1 }] })).join("");
-    expect(parseRipgrepJson(lines, "/w", 2)).toHaveLength(2);
+    expect(parseRipgrepJson(lines, "/w")).toHaveLength(5);
   });
 });
 
 describe("parseRipgrepFiles", () => {
-  it("returns unique workspace-relative paths and caps", () => {
+  it("returns unique workspace-relative paths", () => {
     expect(parseRipgrepFiles("./src/a.ts\nsrc/a.ts\n./src/b.ts\n")).toEqual(["src/a.ts", "src/b.ts"]);
-    expect(parseRipgrepFiles("a.ts\nb.ts\nc.ts\n", 2)).toEqual(["a.ts", "b.ts"]);
+    expect(parseRipgrepFiles("a.ts\nb.ts\nc.ts\n")).toEqual(["a.ts", "b.ts", "c.ts"]);
   });
 
   it("drops outside paths", () => {

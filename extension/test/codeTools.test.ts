@@ -294,8 +294,8 @@ describe("searchText privacy and determinism (#61)", () => {
 
   it("falls back to scoped text search from documentSymbols under prompt-files", async () => {
     // Every LSP fallback site routes through the shared fallback path; this
-    // locks the representative site: documentSymbols with a query under
-    // prompt-files yields the referenced file's match, scoped and ordered.
+    // locks the representative site: the port must receive the allowed path
+    // set at the site, not only from a direct searchText call.
     const search = vi.fn(async (_query: string, options: { cwd?: string; paths?: string[] }) =>
       options.paths ? reproMatches().filter((m) => options.paths?.includes(m.path)) : reproMatches(),
     );
@@ -307,29 +307,42 @@ describe("searchText privacy and determinism (#61)", () => {
     expect(result.fallback).toBe("text-search");
     expect(result.items.map((m) => m.path)).toEqual(["src/x.ts"]);
     expect(result.omittedReason).toBeUndefined();
+    expect(search).toHaveBeenCalledWith("the match in the referenced file", expect.objectContaining({ paths: ["src/x.ts"] }));
   });
 
-  it("yields a promptFile match even when disallowed files fill the first cap window", async () => {
-    // Faithful port contract: the search scope filters first, then the caller cap truncates in arrival order.
-    const search = vi.fn(async (_query: string, options: { cwd?: string; maxResults: number; paths?: string[] }) => {
-      const scoped = options.paths ? reproMatches().filter((m) => options.paths?.includes(m.path)) : reproMatches();
-      return scoped.slice(0, options.maxResults);
-    });
+  it("yields a promptFile match under prompt-files when other files hold more matches", async () => {
+    // The port scopes to the allowed paths, so the 50 disallowed matches in
+    // docs/a.md are never opened and can never crowd the referenced file out.
+    const search = vi.fn(async (_query: string, options: { cwd?: string; paths?: string[] }) =>
+      options.paths ? reproMatches().filter((m) => options.paths?.includes(m.path)) : reproMatches(),
+    );
     const result = await tools({
       textSearch: { search },
       policy: { includeCode: "prompt-files", promptFiles: ["src/x.ts"] },
     }).searchText({ query: "the match in the referenced file" });
     expect(result.omittedReason).toBeUndefined();
     expect(result.items.some((m) => m.path === "src/x.ts")).toBe(true);
+    expect(result.items.every((m) => m.path === "src/x.ts")).toBe(true);
   });
-  it("lists promptFiles beyond the fallback window and sorts them", async () => {
+
+  it("drops an excluded promptFile from the search scope", async () => {
+    const search = vi.fn(async () => [{ uri: uri("src/x.ts"), path: "src/x.ts", range: at(7), preview: "x" }]);
+    const result = await tools({
+      textSearch: { search },
+      policy: { includeCode: "prompt-files", promptFiles: ["credentials.json", "src/x.ts"] },
+    }).searchText({ query: "x" });
+    expect(result.omittedReason).toBeUndefined();
+    expect(result.items.map((m) => m.path)).toEqual(["src/x.ts"]);
+    expect(search).toHaveBeenCalledWith("x", expect.objectContaining({ paths: ["src/x.ts"] }));
+  });
+
+  it("lists an allowed promptFile among many rejected paths", async () => {
     // 200 files the policy rejects, then the one allowed path: the rg --files
     // fallback must not crowd the allowed path out.
     const all = [...Array.from({ length: 200 }, (_, i) => `docs/f${200 - i}.md`), "src/x.ts"];
-    const listFiles = vi.fn(async (options: { cwd?: string; maxResults?: number; paths?: string[] }) => {
-      const scoped = options.paths ? all.filter((f) => options.paths?.includes(f)) : all;
-      return scoped.slice(0, options.maxResults ?? scoped.length);
-    });
+    const listFiles = vi.fn(async (options: { cwd?: string; paths?: string[] }) =>
+      options.paths ? all.filter((f) => options.paths?.includes(f)) : all,
+    );
     const result = await tools({
       protocol: { workspaceFiles: undefined },
       textSearch: { listFiles },
@@ -339,7 +352,7 @@ describe("searchText privacy and determinism (#61)", () => {
     expect(result.items).toEqual(["src/x.ts"]);
   });
 
-  it("sorts the fallback file list canonically", async () => {
+  it("sorts the fallback file list alphabetically", async () => {
     const listFiles = vi.fn(async () => ["src/b.ts", "docs/a.md", "src/a.ts"]);
     const result = await tools({
       protocol: { workspaceFiles: undefined },

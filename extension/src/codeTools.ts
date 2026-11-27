@@ -14,7 +14,7 @@ import {
   type SymbolInformation,
   type WorkspaceSymbolParams,
 } from "vscode-languageserver-protocol";
-import { shouldInclude, type IncludePolicy } from "./privacy";
+import { shouldInclude, normalizePolicyPath, type IncludePolicy } from "./privacy";
 
 /** One symbol item after LSP conversion. */
 export interface ToolSymbol {
@@ -301,9 +301,10 @@ export function createCodeTools(options: CodeToolsOptions): CodebaseTools {
   const cwd = options.cwd;
 
   /**
-   * The workspace-relative paths the policy allows the search to open, deduped.
-   * An empty list means nothing may be searched; undefined means the whole tree
-   * under the workspace mode. The port receives a plain scope, never the policy.
+   * The workspace-relative paths the policy allows the search to open, deduped
+   * on the policy-normalized form. An empty list means nothing may be searched;
+   * undefined means the whole tree under the workspace mode. The port receives
+   * a plain scope, never the policy.
    */
   const allowedPaths = (): string[] | undefined => {
     if (policy.includeCode === "off") return [];
@@ -311,9 +312,10 @@ export function createCodeTools(options: CodeToolsOptions): CodebaseTools {
       const seen = new Set<string>();
       const paths: string[] = [];
       for (const path of policy.promptFiles ?? []) {
-        if (seen.has(path) || !isAllowed(path, policy, "prompt-file")) continue;
-        seen.add(path);
-        paths.push(path);
+        const normalized = normalizePolicyPath(path);
+        if (seen.has(normalized) || !isAllowed(normalized, policy, "prompt-file")) continue;
+        seen.add(normalized);
+        paths.push(normalized);
       }
       return paths;
     }
@@ -504,6 +506,7 @@ export function createCodeTools(options: CodeToolsOptions): CodebaseTools {
     }
     const filtered = files.filter((path) => isAllowed(path, policy));
     const dropped = files.length - filtered.length;
+    // Alphabetical order is the canonical order for a plain path list.
     const sorted = [...filtered].sort();
     const capped = cap(sorted, limit);
     if (capped.items.length === 0) return emptyResult("empty", dropped);

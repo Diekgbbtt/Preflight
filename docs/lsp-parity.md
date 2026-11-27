@@ -76,7 +76,7 @@ Delete a "not measured" row only when every field comes from a real run.
 
 ## Text-search privacy and determinism (ticket #61)
 
-- The code-tools seam computes the allowed path set from the policy and passes it to the text-search port as a plain search scope. Under `prompt-files`, `rg` receives exactly the referenced prompt files, so disallowed files are never opened and can never crowd out allowed matches. Under `workspace`, the scope is the whole tree and the `isAllowed` filter keeps holding at the seam.
+- The code-tools seam computes the allowed path set from the policy and passes it to the text-search port as a plain search scope. Under `prompt-files`, `rg` receives exactly the referenced prompt files, so disallowed files are never opened and can never crowd out allowed matches. Under `workspace`, the scope is the whole tree and the adapter passes policy-derived `--iglob` exclusions, so the search never opens a file the policy rejects.
 - An empty allowed scope (`off`, or `prompt-files` with no allowed paths) returns `excluded` without opening anything.
 - The port returns the complete match list, bounded by the per-file `rg` cap and the exec buffer. The tool filters, sorts canonically by path, line, and character, then caps. Two identical searches on an unchanged tree return the same set in the same order.
 - The adapter drops nonexistent path arguments before invoking `rg`, so a stale prompt file shrinks the scope instead of failing the whole run.

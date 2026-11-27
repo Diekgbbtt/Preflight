@@ -73,7 +73,7 @@ The switch to text search when an LSP-backed tool returns no data and a query ex
 _Avoid_: rg fallback (per-tool wording)
 
 **Never-open rule**:
-The rule from ticket #36 that an excluded file is never opened; policy-scoped search extends it to the search itself.
+The rule from ticket #36 that an excluded file is never opened; the search honors it in every include mode: policy-scoped paths under `prompt-files`, and policy-derived `rg` exclusions under `workspace`.
 _Avoid_: never-read rule
 
 ### Result envelope
