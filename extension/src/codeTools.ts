@@ -238,6 +238,18 @@ function isAllowed(path: string | undefined, policy: IncludePolicy, kind: "promp
   return path !== undefined && path !== "" && shouldInclude(path, kind, policy);
 }
 
+/** Canonical result order: path, then start line, then start character. */
+function byCanonicalOrder(
+  a: { path?: string; range: Range },
+  b: { path?: string; range: Range },
+): number {
+  const pa = a.path ?? "";
+  const pb = b.path ?? "";
+  if (pa !== pb) return pa < pb ? -1 : 1;
+  if (a.range.start.line !== b.range.start.line) return a.range.start.line - b.range.start.line;
+  return a.range.start.character - b.range.start.character;
+}
+
 function convertSymbol(symbol: SymbolInformation, protocol: LanguageProtocol): ToolSymbol {
   const path = protocol.pathOf(symbol.location.uri);
   return {
@@ -324,7 +336,10 @@ export function createCodeTools(options: CodeToolsOptions): CodebaseTools {
     }
     const filtered = matches.filter((match) => isAllowed(match.path, policy));
     const dropped = matches.length - filtered.length;
-    const capped = cap(filtered, limit);
+    // Determinism is a property of the result, not of rg arrival order: the
+    // canonical order makes repeated searches return the same set and order.
+    const sorted = [...filtered].sort(byCanonicalOrder);
+    const capped = cap(sorted, limit);
     if (capped.items.length === 0) return emptyResult("empty", dropped);
     return { items: capped.items, truncated: capped.truncated, dropped };
   };

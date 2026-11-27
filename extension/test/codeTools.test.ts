@@ -254,6 +254,28 @@ describe("searchText privacy and determinism (#61)", () => {
     { uri: uri("src/x.ts"), path: "src/x.ts", range: at(7), preview: "the match in the referenced file" },
   ];
 
+  it("returns the same items in canonical path and line order on repeated calls", async () => {
+    // The port returns the complete bounded list; arrival order is rg's, not canonical.
+    const arrival = [
+      { uri: uri("src/b.ts"), path: "src/b.ts", range: at(1), preview: "b1" },
+      { uri: uri("docs/a.md"), path: "docs/a.md", range: at(0), preview: "a0" },
+      { uri: uri("src/a.ts"), path: "src/a.ts", range: at(3), preview: "a3" },
+      { uri: uri("src/a.ts"), path: "src/a.ts", range: at(1), preview: "a1" },
+    ];
+    const search = vi.fn(async () => arrival);
+    const tool = tools({ textSearch: { search } });
+    const first = await tool.searchText({ query: "x" });
+    const second = await tool.searchText({ query: "x" });
+    const expected = [
+      { uri: uri("docs/a.md"), path: "docs/a.md", range: at(0), preview: "a0" },
+      { uri: uri("src/a.ts"), path: "src/a.ts", range: at(1), preview: "a1" },
+      { uri: uri("src/a.ts"), path: "src/a.ts", range: at(3), preview: "a3" },
+      { uri: uri("src/b.ts"), path: "src/b.ts", range: at(1), preview: "b1" },
+    ];
+    expect(first.items).toEqual(expected);
+    expect(second.items).toEqual(expected);
+  });
+
   it("yields a promptFile match even when disallowed files fill the first cap window", async () => {
     // Faithful port contract: the search scope filters first, then the caller cap truncates in arrival order.
     const search = vi.fn(async (_query: string, options: { cwd?: string; maxResults: number; paths?: string[] }) => {
