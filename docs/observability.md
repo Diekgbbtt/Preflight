@@ -135,6 +135,12 @@ The severity follows OpenTelemetry:
 | `storage.studyLog` | INFO | enabled, event |
 | `storage.debug` | INFO | rotate or clear, file |
 
+### Spawn cwd and the stdin payload
+
+The `llm.request` log records the user's original draft.
+The `llm.process` log records the spawn cwd, which is a fresh empty temporary directory instead of the workspace root (ADR 0002).
+The stdin span event and log record the neutralized payload, the exact bytes the CLI receives: a zero-width space follows every `@`, so the CLI mention parser reads no file (ADR 0001).
+
 ## JSONL record schema
 
 One JSON object per line.

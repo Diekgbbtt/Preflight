@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 // It reproduces the D1 schema/review import cycle: before extractJson moved into schema.ts
 // this file failed with "ReferenceError: Cannot access 'RUBRIC_TEXT' before initialization".
 import { DEEP_REPLY_SCHEMA, QUICK_REPLY_SCHEMA, RUBRIC_TEXT, hashPrompt, parseScore } from "../src/schema";
-import { LEGACY_DEEP_REPLY_SCHEMA, analyze, buildReviewRequest, extractJson, parseCliOutput, parseDeepReview, parseQuickReview, review, type ModelRunner, type ModelUsage, type ScoreMeta } from "../src";
+import { LEGACY_DEEP_REPLY_SCHEMA, analyze, buildImprovedPromptRequest, buildReviewRequest, extractJson, parseCliOutput, parseDeepReview, parseQuickReview, review, type ModelRunner, type ModelUsage, type ScoreMeta } from "../src";
 
 describe("schema module standalone import", () => {
   it("exposes the rubric, hash and parser without review.ts evaluating first", () => {
@@ -278,6 +278,29 @@ describe("buildReviewRequest", () => {
     const req = buildReviewRequest(prompt, "deep", "sonnet", { analysis: analyze(prompt), projectNotes: "Files: a.ts" });
     expect(req.user).toContain("Rule-based checks already found:");
     expect(req.user).toContain("Files: a.ts");
+  });
+
+  // Guard for the #56 privacy boundary (ADR 0001): the CLI mention parser is
+  // only neutralized on stdin, so our own system prompts must never gain a
+  // mention token. Flag values are not expanded today; this keeps it true.
+  it("keeps @ mention tokens out of the built system prompts", () => {
+    const emptyDeepReview = {
+      issues: [],
+      questions: [],
+      assumptions: [],
+      contextGaps: [],
+      usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+      latency: 0,
+      promptVersion: "v1",
+    };
+    const systems = [
+      buildReviewRequest(prompt, "quick", "sonnet").system,
+      buildReviewRequest(prompt, "deep", "sonnet").system,
+      buildImprovedPromptRequest(prompt, emptyDeepReview, [], "sonnet").system,
+    ];
+    for (const system of systems) {
+      expect(system).not.toMatch(/@[A-Za-z0-9_.~\\/-]/);
+    }
   });
 });
 

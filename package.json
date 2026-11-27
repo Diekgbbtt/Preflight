@@ -13,6 +13,7 @@
     "e2e": "npm run build && node e2e/run.mjs",
     "e2e:webview": "node e2e/webview.mjs",
     "benchmark:quick": "node scripts/run-quick-benchmark.mjs",
+    "live:privacy": "node e2e/live-privacy-check.mjs",
     "package": "npm run package -w extension"
   },
   "devDependencies": {

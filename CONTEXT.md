@@ -34,9 +34,24 @@ _Avoid_: privacy settings, filter config
 The include mode in which only files the draft referenced with `@` may be sent.
 _Avoid_: active-file (legacy value that reads as prompt-files)
 
+**Mention**:
+An `@path` token in a draft that names a file.
+Preflight resolves mentions itself through the prompt-files policy; the Claude CLI has its own mention parser that must never see an unneutralized mention.
+_Avoid_: file reference (the resolved file is a "prompt file")
+
 **Excluded file**:
 A file the exclusion list or the workspace boundary rejects; an excluded file is never opened.
 _Avoid_: forbidden file, blocked file
+
+**Neutralization**:
+Inserting a zero-width space after every `@` in the stdin payload so the CLI mention parser finds no mention.
+It applies to the payload bytes only; the draft, the request object, and the prompt hash stay unchanged.
+_Avoid_: escaping, sanitization (reserved for redaction's old name)
+
+**Spawn directory**:
+The fresh empty temporary directory the Claude CLI runs in for one model call.
+It replaces the workspace root as the CLI cwd, so relative mentions resolve to nothing and the model never learns the workspace path.
+_Avoid_: working directory (ambiguous with the workspace)
 
 **Policy-hidden result**:
 A result the include policy rejected at the code-tools seam; a policy-hidden result never falls back.
@@ -45,6 +60,10 @@ _Avoid_: filtered-out result, dropped result (reserved for the count)
 **Redaction**:
 The replacement of every secret match with `[redacted]` before text leaves the machine.
 _Avoid_: masking, sanitization
+
+**Live privacy check**:
+The manual live check (`npm run live:privacy`) that sends probe drafts to the real Claude CLI and expects `NONE`, guarding the privacy boundary against a CLI parser change.
+_Avoid_: smoke test, e2e test (the e2e tier never calls the real CLI)
 
 ### Code tools
 

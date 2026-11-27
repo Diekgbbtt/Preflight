@@ -58,6 +58,8 @@ The control-plane foundation is merged, but the current panel still uses the leg
 
 For context consumers using the policy, files named `.env`, `.env.*`, `credentials.json`, `id_rsa`, `id_ed25519`, `*.pem`, `*.key`, and anything under `node_modules`, `.git`, or the build directories (`dist`, `out`, `build`, `.venv`, `venv`, `__pycache__`, `.next`, `target`) are excluded from file context. Absolute paths and canonical targets outside the workspace are excluded too. Both a symlink reference and its target must pass exclusions before the file is read. Untitled buffers and virtual documents are not resolved as explicit `@` file references. Text pasted into the draft is still draft content.
 
+The Claude Code CLI itself never reads files and never sees the workspace as its working directory. The adapter neutralizes `@path` mentions in the prompt it hands to the CLI (a zero-width space after each `@`) and runs the CLI in a fresh empty temporary directory, so file content reaches the provider only through the context above (`docs/adr/0001`, `docs/adr/0002`). `npm run live:privacy` checks this boundary against the real CLI; run it after a Claude CLI update or before a release.
+
 Secrets are redacted with the same patterns the rule checks use (Anthropic, AWS, GitHub, Slack tokens, private-key headers, and key/password assignments). Each match is replaced with `[redacted]`. This catches single-line tokens; a secret split across lines is not matched, and the private-key pattern covers the `BEGIN ... PRIVATE KEY` header only, not the key body. Both gaps are tracked for ticket #23.
 
 ### Consent
@@ -172,6 +174,7 @@ npm test              # vitest: unit tests + corpus
 npm run typecheck
 npm run build         # extension/dist, hook/dist
 npm run package       # extension/prompt-preflight-0.1.0.vsix
+npm run live:privacy  # manual: privacy boundary against the real Claude CLI
 ```
 
 Run the extension: open this folder in VS Code, press F5 (launch config "Run Extension").
