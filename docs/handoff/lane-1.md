@@ -113,6 +113,20 @@ When this document conflicts with a per-ticket section, this section wins.
 - `consentedIncludeCode` is unchanged: no accepted consent means `off`.
 - `redact`, `EXCLUDE_GLOB`, `consentMessage`, and `SourcePrivacyFields` are unchanged.
 
+### #37 Language context - v2.1 text search
+
+These deltas supersede the matching lines in the v2 block below.
+
+- `TextSearchPort.search(query, options)` takes `{ cwd?, paths? }`; `maxResults` is removed. It returns the complete match list, bounded only by the per-file `rg` cap and the exec buffer. The tool owns the total cap.
+- `TextSearchPort.listFiles(options)` takes `{ cwd?, paths? }`; `maxResults` is removed. It returns the complete file list.
+- The tool computes the allowed path set from the policy: under `prompt-files` it is the deduped, policy-checked `promptFiles`; under `workspace` the scope is the whole tree (`paths` undefined); `off` yields an empty set. An empty set means nothing may be opened: `searchText` and the `listFiles` fallback return `emptyResult("excluded")` without calling the port.
+- `searchText` applies `isAllowed`, sorts canonically by (path, start line, start character), then caps. `dropped` counts matches the policy rejected over the complete list; `truncated` is true when allowed matches exist beyond the cap.
+- The `listFiles` fallback applies the same shape with an alphabetical sort.
+- The adapter passes the scope as `rg` path arguments after `--`, dropping nonexistent paths; `--max-count` is fixed at `CODE_TOOL_CAPS.textSearch` to bound per-file output; parsing applies no total cap.
+- All five LSP fallback sites (`documentSymbols`, `workspaceSymbols`, `definitions`, `references`, and `searchText` itself) inherit the contract through the shared fallback path.
+- `rg --sort path` was rejected: it makes the walk single-threaded, and determinism is a property of tool results, not adapter internals.
+- Decision records: `docs/adr/0001`, `docs/adr/0002`, `docs/adr/0003`.
+
 ### #37 Language context - v2
 
 - `extension/src/codeTools.ts` is the agent tool layer.
@@ -180,6 +194,25 @@ The first-enable warning is stored under `promptPreflight.debugNotice.v1`.
 The trace is not the study log and does not replace the four review/send/draft/question JSONL files.
 The current panel writes the debug trace for its review, LLM, UI, and send paths. The four repository files remain unappended until #43, #46, and #47.
 Tests are C36-C39 and E12; the suite has 551 unit tests and 12 e2e tests passing.
+
+## Ticket #61 text-search cap and privacy
+
+**Triage - Branch A (diagnosed, local, narrow).** The root cause was already diagnosed in the ticket and confirmed on this branch: `searchText` asked the text-search port for at most 50 matches and applied the privacy filter afterwards, and the adapter truncated at 50 in `rg` arrival order (`--max-count` limits matches per file, not in total; `rg` walks files in parallel). A fresh measurement on this branch shows the first match file of the same query differing between runs. Under `prompt-files`, the first 50 disallowed matches therefore crowded out allowed ones, and the kept set changed per run. The deterministic unit repro from the ticket reproduced at the `searchText` seam with a faithful fake port. The involved files (`codeTools.ts`, `vscodeCodeTools.ts`, `ripgrep.ts`, `privacy.ts`) are unchanged between `d4dc55f` (the ticket's evidence base) and the branch point. `/diagnosing-bugs` was skipped per the decision algorithm.
+
+**Decisions (grill phase).** The six grey points were resolved autonomously from the ticket text, the mission's success criteria, and the repo's documented patterns; none needed user-only knowledge.
+
+1. Fix combination: fix 1 (search only allowed paths) plus fix 3 (deterministic order). Fix 2 (filter before the cap with a larger port budget) was rejected: the kept set stays order-dependent and disallowed files stay opened. ADR 0001.
+2. The `TextSearchPort` seam carries the allowed path set as a plain `paths` scope; the adapter stays policy-free. ADR 0001.
+3. The determinism contract is the strong one: same input gives the same match set and the same order at the `searchText` seam. ADR 0003.
+4. Sort after parse at the tool seam, not `rg --sort path`: the sort keeps `rg` parallel and binds determinism to tool results, not adapter internals. ADR 0002.
+5. Semantics: `dropped` counts policy-rejected matches over the complete list; `truncated` is true when allowed matches exist beyond the cap; an empty allowed scope returns `excluded` without opening anything. ADRs 0001 and 0002.
+6. Scope: all five LSP fallback sites inherit the fix through the shared fallback path; the `listFiles` `rg --files` fallback has the same shape and was fixed with the same slice. ADR 0002.
+
+**Implementation.** The port returns the complete bounded list; the tool filters, sorts canonically, and caps. The adapter forwards the scope as `rg` path arguments and drops nonexistent paths, so a stale prompt file shrinks the scope instead of failing the run (measured: `rg` exits 2 with the error on stderr while a valid path still yields matches on stdout). An empty scope returns no matches without invoking `rg`. `--max-count` stays fixed at the tool cap to bound per-file output.
+
+**Evidence.** The repro test failed first with `omittedReason: "empty"`, exactly the ticket's symptom. The `listFiles` crowding and order tests were verified red against the pre-fix source at `2d57a16`. A throwaway probe with the real bundled `rg` binary over a temp workspace returned the 51-match complete list unscoped and exactly the referenced file's match scoped, identical across two runs. The probe is not committed (it hardcodes the darwin-arm64 binary path). The finish gate passed three consecutive times (615 tests), and `npm run e2e` ran in this environment on 2026-11-27 and passed 14/14, including E8 (rg fallback) through the changed path; the 2026-11-17 `SIGABRT` sandbox fact no longer reproduces here.
+
+**Adjacent gap filed.** The `listFiles` primary path (`vscode.workspace.findFiles`, 2000-entry cap) has the same cap-before-filter shape under `prompt-files`; fixing it needs a `LanguageProtocol` change and is out of this ticket's scope.
 
 ## Panel integration seams
 
