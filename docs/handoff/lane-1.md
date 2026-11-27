@@ -19,9 +19,10 @@ Every entry has a contract version and a change log.
 | Review fixes | merged | lane-1/control-plane | review-fixes tip | `npm run typecheck && npm test && npm run build` -> 524 passed three times; `npm run e2e` -> 9/9 passed | PASS |
 | Codex custom tool fix | merged | lane-1/control-plane | 4c7f3d3 | `npm run typecheck && npm test && npm run build` -> 527 passed three times; `npm run e2e` -> 11/11 passed | PASS |
 | Debug observability | branch | feat/debug-observability | tip | `npm run typecheck && npm test && npm run build` -> 551 passed; `npm run e2e` -> 12/12 passed | PASS |
+| #61 | ready for review | ticket/61-search-cap-privacy | e43ccd8 | `npm run typecheck && npm test && npm run build` -> 619 passed three times; `npm run e2e` -> 14/14 passed | PASS |
 
 The review fixes are merged into `lane-1/control-plane` locally.
-The current e2e gate is 12/12 on 2026-11-18; the earlier review gate was 9/9 and the Codex fix gate was 11/11.
+The current e2e gate is 14/14 on 2026-11-27 (E13 and E14 were added by lane 3); the earlier gates were 9/9 (review fixes), 11/11 (Codex fix), and 12/12 (debug observability).
 The Codex custom tool fix is merged into `lane-1/control-plane`.
 The debug observability work is on `feat/debug-observability`; see `docs/observability.md`.
 
@@ -211,7 +212,7 @@ Tests are C36-C39 and E12; the suite has 551 unit tests and 12 e2e tests passing
 
 **Implementation.** The port returns the complete bounded list; the tool filters, sorts canonically, and caps. The adapter forwards the scope as `rg` path arguments and drops nonexistent paths, so a stale prompt file shrinks the scope instead of failing the run (measured: `rg` exits 2 with the error on stderr while a valid path still yields matches on stdout). An empty scope returns no matches without invoking `rg`. `--max-count` stays a fixed adapter volume bound to bound per-file output. The code review added the workspace-mode closing of the never-open rule: the adapter passes `rg` `--iglob` exclusions derived from the same sets `shouldInclude` checks, so excluded files are never opened in any include mode; `normalizePolicyPath` is now exported and the scope is deduped on the policy-normalized form.
 
-**Evidence.** The repro test failed first with `omittedReason: "empty"`, exactly the ticket's symptom. The `listFiles` crowding and order tests were verified red against the pre-fix source at `2d57a16`. A throwaway probe with the real bundled `rg` binary over a temp workspace returned the 51-match complete list unscoped and exactly the referenced file's match scoped, identical across two runs. The probe is not committed (it hardcodes the darwin-arm64 binary path). The finish gate passed three consecutive times (615 tests), and `npm run e2e` ran in this environment on 2026-11-27 and passed 14/14, including E8 (rg fallback) through the changed path; the 2026-11-17 `SIGABRT` sandbox fact no longer reproduces here.
+**Evidence.** The repro test failed first with `omittedReason: "empty"`, exactly the ticket's symptom. The `listFiles` crowding and order tests were verified red against the pre-fix source at `2d57a16`. A throwaway probe with the real bundled `rg` binary over a temp workspace returned the 51-match complete list unscoped and exactly the referenced file's match scoped, identical across two runs. The probe is not committed (it hardcodes the darwin-arm64 binary path). The finish gate passed three consecutive times (619 tests), and `npm run e2e` ran in this environment on 2026-11-27 and passed 14/14, including E8 (rg fallback) through the changed path; the 2026-11-17 `SIGABRT` sandbox fact no longer reproduces here. The code review (standards and spec axes) was run before the PR; its findings are folded into the implementation commit `e43ccd8`, including the workspace-mode closing of the never-open rule.
 
 **Adjacent gap filed.** The `listFiles` primary path (`vscode.workspace.findFiles`, 2000-entry cap) has the same cap-before-filter shape under `prompt-files`; fixing it needs a `LanguageProtocol` change and is out of this ticket's scope.
 
