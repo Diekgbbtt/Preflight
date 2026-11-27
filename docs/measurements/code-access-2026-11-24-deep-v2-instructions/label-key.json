@@ -1,0 +1,37 @@
+[
+  {
+    "qid": "q001",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2-instructions",
+    "runId": "r02"
+  },
+  {
+    "qid": "q002",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2-instructions",
+    "runId": "r03"
+  },
+  {
+    "qid": "q003",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2-instructions",
+    "runId": "r01"
+  },
+  {
+    "qid": "q004",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2-instructions",
+    "runId": "r02"
+  },
+  {
+    "qid": "q005",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2-instructions",
+    "runId": "r01"
+  },
+  {
+    "qid": "q006",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2-instructions",
+    "runId": "r05"
+  },
+  {
+    "qid": "q007",
+    "folder": "docs/measurements/code-access-2026-11-24-deep-v2-instructions",
+    "runId": "r03"
+  }
+]
